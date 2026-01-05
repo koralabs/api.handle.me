@@ -1,8 +1,8 @@
-import { AssetNameLabel, asyncForEach, delay } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, asyncForEach, checkNameLabel, chunk, delay } from '@koralabs/kora-labs-common';
 import fs from 'fs';
 import http, { OutgoingHttpHeaders } from 'http';
 import https from 'https';
-const NETWORK = 'mainnet';
+const NETWORK = 'preview';
 
 const apiRequest = (url: string): Promise<{ statusCode?: number; body?: string; error?: string; headers?: OutgoingHttpHeaders }> => {
     const client = url.startsWith('http:') ? http : https;
@@ -45,8 +45,9 @@ const apiRequest = (url: string): Promise<{ statusCode?: number; body?: string; 
 const fetchKoios = async (path: string, method = 'GET', body?: string) => {
     const url = `https://${NETWORK.toLowerCase() === 'mainnet' ? 'api' : NETWORK.toLowerCase()}.koios.rest/api/v1/${path}`;
 
-    console.log('BODY', body, process.env.KOIOS_API_BEARER_TOKEN);
-    console.log('URL', url);
+    // get the size of the body in bytes
+    const bodySize = body ? Buffer.byteLength(body, 'utf8') : 0;
+    console.log('BODY_SIZE', bodySize);
 
     const res = await fetch(url, {
         method,
@@ -89,39 +90,46 @@ export const fetchPolicyAssets = async (policyId: string): Promise<{ asset_name:
 };
 
 const fetchAssetData = async (assets: { asset_name: string; fingerprint: string; total_supply: string }[], policyId: string) => {
-    const batchSize = 60;
-    let allResults: Map<string, { asset_name: string; address: string; utxo: string; stake_address: string | null; policyId: string }> = new Map();
+    const batchSize = 40;
+    let allResults: Map<string, { asset_name: string; name: string; address: string; utxo: string; stake_address: string | null; policyId: string }> = new Map();
 
-    for (let i = 0; i < assets.length; i += batchSize) {
-        const batch = assets.slice(i, i + batchSize);
+    const filteredAssets = assets.filter((a) => {
+        const result = checkNameLabel(a.asset_name);
+        return (!result.isCip67 || result.assetLabel === AssetNameLabel.LBL_222 || result.assetLabel === AssetNameLabel.LBL_000);
+    });
+
+    console.log(`Filtered assets from ${assets.length} to ${filteredAssets.length} for policy ${policyId}`);
+
+    const filteredAssetChunks = chunk(filteredAssets, batchSize);
+
+    await asyncForEach(filteredAssetChunks, async (batch, i) => {
         const assetNames = batch.map((asset) => [policyId, asset.asset_name]);
 
-        const result = await fetchKoios(`asset_utxos`, 'POST', JSON.stringify({ _asset_list: assetNames })).catch((error) => {
+        const result = await fetchKoios(`asset_utxos`, 'POST', JSON.stringify({ _asset_list: assetNames, _extended: true })).catch((error) => {
             console.log(`Error fetching batch ${Math.floor(i / batchSize) + 1}: ${error}`);
             return null;
         });
 
         if (result !== null) {
             // go through each asset and grab the data we need to test, tx_hash, tx_index, address
-            for (const assetInfo of result) {
-                for (const utxo of assetInfo.utxos) {
-                    for (const asset of utxo.asset_list) {
-                        if ((asset.asset_name.startsWith(AssetNameLabel.LBL_222) || asset.asset_name.startsWith(AssetNameLabel.LBL_000)) && Number(asset.total_supply) > 0) {
-                            allResults.set(asset.asset_name, {
-                                asset_name: asset.asset_name,
-                                address: utxo.address,
-                                utxo: `${utxo.tx_hash}#${utxo.tx_index}`,
-                                stake_address: utxo.stake_address,
-                                policyId
-                            });
-                        }
+            for (const utxo of result) {
+                for (const asset of utxo.asset_list) {
+                    const result = checkNameLabel(asset.asset_name);
+                    if (Number(asset.quantity) > 0) {
+                        allResults.set(result.name, {
+                            asset_name: asset.asset_name,
+                            name: result.name,
+                            address: utxo.address,
+                            utxo: `${utxo.tx_hash}#${utxo.tx_index}`,
+                            stake_address: utxo.stake_address,
+                            policyId
+                        });
                     }
                 }
             }
         }
-        console.log(`Fetched batch ${Math.floor(i / batchSize) + 1} with ${allResults.size} total results`);
-        await delay(100);
-    }
+        console.log(`Fetched batch ${Math.floor(i / batchSize) + 1} with ${allResults.size} total results out of ${assets.length}`);
+    }, 500);
 
     return allResults;
 };
@@ -139,7 +147,7 @@ const getPolicyAssets = async () => {
 (async () => {
     let localHandles: Map<string, any> = new Map<string, any>();
     let liveHandles: Map<string, any> = new Map<string, any>();
-    if (fs.existsSync('localHandles.json')) {
+    if (!fs.existsSync('localHandles.json')) {
         localHandles = new Map<string, any>(JSON.parse(fs.readFileSync('localHandles.json').toString()));
         liveHandles = new Map<string, any>(JSON.parse(fs.readFileSync('liveHandles.json').toString()));
     } else {
