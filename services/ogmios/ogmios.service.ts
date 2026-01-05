@@ -194,7 +194,7 @@ class OgmiosService {
                 this.client = this._createWebSocketClient();
             }
             if (this.client.readyState === WebSocket.OPEN) break;
-            await delay(250);
+            await delay(30000);
         }
         Logger.log(`Resuming index at slot ${startingPoint.slot} and hash ${startingPoint.id} (${getDateStringFromSlot(startingPoint.slot)})`);
         this.scanningRepo.setMetrics({ firstSlot: handleEraBoundaries[NETWORK].slot, currentSlot: startingPoint.slot, currentBlockHash: startingPoint.id });

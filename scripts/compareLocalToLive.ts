@@ -44,11 +44,6 @@ const apiRequest = (url: string): Promise<{ statusCode?: number; body?: string; 
 
 const fetchKoios = async (path: string, method = 'GET', body?: string) => {
     const url = `https://${NETWORK.toLowerCase() === 'mainnet' ? 'api' : NETWORK.toLowerCase()}.koios.rest/api/v1/${path}`;
-
-    // get the size of the body in bytes
-    const bodySize = body ? Buffer.byteLength(body, 'utf8') : 0;
-    console.log('BODY_SIZE', bodySize);
-
     const res = await fetch(url, {
         method,
         headers: {
