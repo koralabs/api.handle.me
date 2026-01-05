@@ -112,7 +112,7 @@ exec ./tmp/cardano-node/bin/cardano-node run \
     --database-path ${NODE_DB} \
     --port 3000 \
     --host-addr 0.0.0.0 \
-    --socket-path ${SOCKET_PATH} 2>&1 | stdbuf -oL -eL egrep --line-buffered '\b(startup:Info:|local socket:|ChainDB:Notice:|:Critical:)\b' &
+    --socket-path ${SOCKET_PATH} 2>&1 | stdbuf -oL -eL egrep --line-buffered '\b(startup:Info:|local socket:|ChainDB:Notice:|:Critical:|Validating chunk)\b' &
 
 ###############################################
 #                  OGMIOS                     #

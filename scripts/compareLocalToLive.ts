@@ -44,10 +44,6 @@ const apiRequest = (url: string): Promise<{ statusCode?: number; body?: string; 
 
 const fetchKoios = async (path: string, method = 'GET', body?: string) => {
     const url = `https://${NETWORK.toLowerCase() === 'mainnet' ? 'api' : NETWORK.toLowerCase()}.koios.rest/api/v1/${path}`;
-
-    console.log('BODY', body, process.env.KOIOS_API_BEARER_TOKEN);
-    console.log('URL', url);
-
     const res = await fetch(url, {
         method,
         headers: {
