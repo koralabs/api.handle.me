@@ -1,4 +1,4 @@
-import { asyncForEach, delay } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, asyncForEach, delay } from '@koralabs/kora-labs-common';
 import fs from 'fs';
 import http, { OutgoingHttpHeaders } from 'http';
 import https from 'https';
@@ -102,13 +102,15 @@ const fetchAssetData = async (assets: { asset_name: string; fingerprint: string;
             for (const assetInfo of result) {
                 for (const utxo of assetInfo.utxos) {
                     for (const asset of utxo.asset_list) {
-                        allResults.set(asset.asset_name, {
-                            asset_name: asset.asset_name,
-                            address: utxo.address,
-                            utxo: `${utxo.tx_hash}#${utxo.tx_index}`,
-                            stake_address: utxo.stake_address,
-                            policyId
-                        });
+                        if ((asset.asset_name.startsWith(AssetNameLabel.LBL_222) || asset.asset_name.startsWith(AssetNameLabel.LBL_000)) && Number(asset.total_supply) > 0) {
+                            allResults.set(asset.asset_name, {
+                                asset_name: asset.asset_name,
+                                address: utxo.address,
+                                utxo: `${utxo.tx_hash}#${utxo.tx_index}`,
+                                stake_address: utxo.stake_address,
+                                policyId
+                            });
+                        }
                     }
                 }
             }
