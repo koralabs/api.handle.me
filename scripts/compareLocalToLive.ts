@@ -1,10 +1,8 @@
-import { AssetNameLabel, asyncForEach, checkNameLabel, chunk, delay } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, asyncForEach, bech32FromHex, buildHolderInfo, checkNameLabel, chunk, decodeCborToJson, delay } from '@koralabs/kora-labs-common';
 import fs from 'fs';
 import http, { OutgoingHttpHeaders } from 'http';
 import https from 'https';
 const NETWORK = 'preview';
-const networkDelay = {preview: 101, preprod: 101, mainnet: 50}
-const POLICIES = ['f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a', '6c32db33a422e0bc2cb535bb850b5a6e9a9572222056d6ddc9cbc26e']
 
 const apiRequest = (url: string): Promise<{ statusCode?: number; body?: string; error?: string; headers?: OutgoingHttpHeaders }> => {
     const client = url.startsWith('http:') ? http : https;
@@ -46,6 +44,7 @@ const apiRequest = (url: string): Promise<{ statusCode?: number; body?: string; 
 
 const fetchKoios = async (path: string, method = 'GET', body?: string) => {
     const url = `https://${NETWORK.toLowerCase() === 'mainnet' ? 'api' : NETWORK.toLowerCase()}.koios.rest/api/v1/${path}`;
+
     const res = await fetch(url, {
         method,
         headers: {
@@ -112,47 +111,54 @@ const fetchAssetData = async (assets: { asset_name: string; fingerprint: string;
             for (const utxo of result) {
                 for (const asset of utxo.asset_list) {
                     const result = checkNameLabel(asset.asset_name);
-                    if (Number(asset.quantity) > 0) {
+                    if (asset.policy_id === policyId && Number(asset.quantity) > 0) {
+                        // for virtual subHandles, use the datum to get the address.
+                        let address = utxo.address;
+                        let stake_address = buildHolderInfo(utxo.address).address;
+                        if (result.assetLabel == AssetNameLabel.LBL_000) {
+                            const datum = utxo.inline_datum.bytes;
+                            const d = await decodeCborToJson({ cborString: datum });
+                            address = bech32FromHex(d.constructor_0[2].resolved_addresses.ada.replace('0x', ''));
+
+                            stake_address = buildHolderInfo(address).address;
+                        }
                         allResults.set(result.name, {
                             asset_name: asset.asset_name,
                             name: result.name,
-                            address: utxo.address,
+                            address,
                             utxo: `${utxo.tx_hash}#${utxo.tx_index}`,
-                            stake_address: utxo.stake_address,
+                            stake_address,
                             policyId
                         });
                     }
                 }
             }
         }
-        console.log(`Fetched batch ${Math.floor(i / batchSize) + 1} with ${allResults.size} total results out of ${assets.length}`);
-    }, networkDelay[NETWORK]);
+        console.log(`Fetched batch with ${allResults.size} total results out of ${assets.length}`);
+    }, 500);
 
     return allResults;
 };
 
 const getPolicyAssets = async () => {
-    let resp = new Map<string, {asset_name: string; name: string; address: string; utxo: string; stake_address: string | null; policyId: string;}>();
-    for (const policy in POLICIES) {
-        const legacyAssets = await fetchPolicyAssets(policy);
-        const demiAssets = await fetchPolicyAssets(policy);
+    const legacyAssets = await fetchPolicyAssets('f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a');
+    const legacyAssetsWithData = await fetchAssetData(legacyAssets, 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a');
 
-        const legacyAssetsWithData = await fetchAssetData(legacyAssets, policy);
-        const demiAssetsWithData = await fetchAssetData(demiAssets, policy);
-        resp = new Map<string, any>([...legacyAssetsWithData, ...demiAssetsWithData]);
-    }
-    return resp;
+    const demiAssets = await fetchPolicyAssets('6c32db33a422e0bc2cb535bb850b5a6e9a9572222056d6ddc9cbc26e');
+    const demiAssetsWithData = await fetchAssetData(demiAssets, '6c32db33a422e0bc2cb535bb850b5a6e9a9572222056d6ddc9cbc26e');
+
+    return new Map<string, any>([...legacyAssetsWithData, ...demiAssetsWithData]);
 };
 
 (async () => {
     let localHandles: Map<string, any> = new Map<string, any>();
     let liveHandles: Map<string, any> = new Map<string, any>();
-    if (!fs.existsSync('localHandles.json')) {
+    if (fs.existsSync('localHandles.json')) {
         localHandles = new Map<string, any>(JSON.parse(fs.readFileSync('localHandles.json').toString()));
         liveHandles = new Map<string, any>(JSON.parse(fs.readFileSync('liveHandles.json').toString()));
     } else {
-        const koiosHandles = await getPolicyAssets();
-        fs.writeFileSync('liveHandles.json', JSON.stringify(Array.from(koiosHandles.entries())));
+        liveHandles = await getPolicyAssets();
+        fs.writeFileSync('liveHandles.json', JSON.stringify(Array.from(liveHandles.entries())));
 
         const pageSize = 1000;
         const totalPages = Math.ceil(parseInt((await apiRequest(`http://localhost:3141/handles?records_per_page=${pageSize}&page=1`)).headers!['x-handles-search-total']!.toString()) / pageSize);
@@ -168,7 +174,7 @@ const getPolicyAssets = async () => {
 
                 localHandles = new Map([...localHandles, ...new Map<string, any>(JSON.parse(local.body!).map((h: any) => [h.name, h]))]);
             },
-            networkDelay[NETWORK]
+            1000
         );
         fs.writeFileSync('localHandles.json', JSON.stringify(Array.from(localHandles.entries())));
     }
@@ -184,6 +190,9 @@ const getPolicyAssets = async () => {
     const utxoMismatches: Record<string, any> = {};
     const holderMismatches: Record<string, any> = {};
     const defaultMismatches: Record<string, any> = {};
+
+    console.log(`Comparing ${bothKeys.size} handles present in both local and live data`);
+
     bothKeys.forEach((key) => {
         const localHandle = localHandles.get(key);
         const liveHandle = liveHandles.get(key);
@@ -191,11 +200,11 @@ const getPolicyAssets = async () => {
         if (localHandle.utxo !== liveHandle.utxo) {
             utxoMismatches[key] = { utxo: { live: liveHandle.utxo, local: localHandle.utxo } };
         }
-        if (localHandle.resolved_addresses.ada !== liveHandle.resolved_addresses.ada) {
-            addressMismatches[key] = { resolved_address: { live: liveHandle.resolved_addresses.ada, local: localHandle.resolved_addresses.ada } };
+        if (localHandle.resolved_addresses.ada !== liveHandle.address) {
+            addressMismatches[key] = { resolved_address: { live: liveHandle.address, local: localHandle.resolved_addresses.ada } };
         }
-        if (localHandle.holder !== liveHandle.holder) {
-            holderMismatches[key] = { holder: { live: liveHandle.holder, local: localHandle.holder } };
+        if (localHandle.holder !== liveHandle.stake_address) {
+            holderMismatches[key] = { holder: { live: liveHandle.stake_address, local: localHandle.holder } };
         }
         if (localHandle.default_in_wallet !== liveHandle.default_in_wallet) {
             defaultMismatches[key] = { default_in_wallet: { live: liveHandle.default_in_wallet, local: localHandle.default_in_wallet } };
