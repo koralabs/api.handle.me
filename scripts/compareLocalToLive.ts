@@ -3,6 +3,8 @@ import fs from 'fs';
 import http, { OutgoingHttpHeaders } from 'http';
 import https from 'https';
 const NETWORK = 'preview';
+const networkDelay = {preview: 101, preprod: 101, mainnet: 50}
+const POLICIES = ['f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a', '6c32db33a422e0bc2cb535bb850b5a6e9a9572222056d6ddc9cbc26e']
 
 const apiRequest = (url: string): Promise<{ statusCode?: number; body?: string; error?: string; headers?: OutgoingHttpHeaders }> => {
     const client = url.startsWith('http:') ? http : https;
@@ -124,19 +126,22 @@ const fetchAssetData = async (assets: { asset_name: string; fingerprint: string;
             }
         }
         console.log(`Fetched batch ${Math.floor(i / batchSize) + 1} with ${allResults.size} total results out of ${assets.length}`);
-    }, 500);
+    }, networkDelay[NETWORK]);
 
     return allResults;
 };
 
 const getPolicyAssets = async () => {
-    const legacyAssets = await fetchPolicyAssets('f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a');
-    const legacyAssetsWithData = await fetchAssetData(legacyAssets, 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a');
+    let resp = new Map<string, {asset_name: string; name: string; address: string; utxo: string; stake_address: string | null; policyId: string;}>();
+    for (const policy in POLICIES) {
+        const legacyAssets = await fetchPolicyAssets(policy);
+        const demiAssets = await fetchPolicyAssets(policy);
 
-    const demiAssets = await fetchPolicyAssets('6c32db33a422e0bc2cb535bb850b5a6e9a9572222056d6ddc9cbc26e');
-    const demiAssetsWithData = await fetchAssetData(demiAssets, '6c32db33a422e0bc2cb535bb850b5a6e9a9572222056d6ddc9cbc26e');
-
-    return new Map<string, any>([...legacyAssetsWithData, ...demiAssetsWithData]);
+        const legacyAssetsWithData = await fetchAssetData(legacyAssets, policy);
+        const demiAssetsWithData = await fetchAssetData(demiAssets, policy);
+        resp = new Map<string, any>([...legacyAssetsWithData, ...demiAssetsWithData]);
+    }
+    return resp;
 };
 
 (async () => {
@@ -163,7 +168,7 @@ const getPolicyAssets = async () => {
 
                 localHandles = new Map([...localHandles, ...new Map<string, any>(JSON.parse(local.body!).map((h: any) => [h.name, h]))]);
             },
-            1000
+            networkDelay[NETWORK]
         );
         fs.writeFileSync('localHandles.json', JSON.stringify(Array.from(localHandles.entries())));
     }
