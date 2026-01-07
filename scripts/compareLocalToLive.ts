@@ -17,6 +17,7 @@ const POLICIES: any[] = [
     { id: "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a", supply: 0},
     { id: "6c32db33a422e0bc2cb535bb850b5a6e9a9572222056d6ddc9cbc26e", supply: 0}
 ]
+interface KoiosAsset { asset_name: string; }
 
 console.sameLine = function(message) {
     stdOut.clearLine(process.stdout, 0); // Clear the current line from the cursor to the right
@@ -130,43 +131,46 @@ const fetchKoios = async (path: string, method = 'GET', body?: string) => {
     .then((res) => {
         if (res?.ok)
             return res?.json()
-        else
+        else {
             console.log(); // Needed to break the same line above
             console.log(`Error fetching ${path} with body length ${body?.length ?? 0}: ${res?.status}: ${res?.statusText} \n ${res?.body}`);
+        }
         process.exit();
     });
 
     return res;
 };
 
-export const fetchPolicyAssets = async (policyId: string, policySupply: number): Promise<{ asset_name: string; fingerprint: string; total_supply: string }[]> => {
+export const fetchPolicyAssets = async (policyId: string, policySupply: number): Promise<string[]> => {
     const limit = 1000;
-    let results: { asset_name: string; fingerprint: string; total_supply: string }[] = [];
+    let results: Set<string> = new Set();
     try {
         const offsets = Array.from({ length: Math.ceil(policySupply / limit) }, (_, index) => index * limit)
+        // console.log(`OFFSETS`, offsets)
+        // process.exit()
         await asyncForEach(offsets, async (offset) => {
             console.sameLine(`Requesting policy assets page ${(offset/limit) + 1} of ${offsets.length}`);
-            const items: any[] = await fetchKoios(`policy_asset_list?_asset_policy=${policyId}&limit=${limit}&offset=${offset}`);
-            if (items.length) {
-                results = results.concat(items);
+            const items: KoiosAsset[] = await fetchKoios(`policy_asset_list?_asset_policy=${policyId}&limit=${limit}&offset=${offset}`);
+            for (const item of items) {
+                results.add(item.asset_name);
             }
         }, networkDelay[NETWORK]);
         console.log(); // Needed to break the same line above
-        console.log(colorString(Color.FgBlue, `Finished receiving ${results.length} policy assets`))
+        console.log(colorString(Color.FgBlue, `Finished receiving ${results.size} policy assets`))
     } catch (error) {
         console.log(); // Needed to break the same line above
         console.log(`Error fetching assets for ${policyId}: ${error}`);
         process.exit();
     }
 
-    return results;
+    return Array.from(results);
 };
 
-const fetchAssetData = async (assets: { asset_name: string; fingerprint: string; total_supply: string }[], policyId: string) => {
+const fetchAssetData = async (assets: string[], policyId: string) => {
     let allResults: Map<string, { asset_name: string; name: string; address: string; utxo: string; stake_address: string | null; policyId: string }> = new Map();
 
     const handles = assets.filter((a) => {
-        const result = checkNameLabel(a.asset_name);
+        const result = checkNameLabel(a);
         return result.name != "" && (!result.isCip67 || result.assetLabel == AssetNameLabel.LBL_222 || result.assetLabel == AssetNameLabel.LBL_000);
     });
 
@@ -176,7 +180,7 @@ const fetchAssetData = async (assets: { asset_name: string; fingerprint: string;
     let i=0;
     let assetNames: [string, string][] = [];
     while (i < handles.length) {
-        assetNames.push([policyId, handles[i].asset_name]);
+        assetNames.push([policyId, handles[i]]);
         if (JSON.stringify({ _asset_list: assetNames, _extended: true }).length >= 4900) { // Max possible ",[policy,handle]" length is 96
             batchedHandles.push(assetNames)
             assetNames = [];
