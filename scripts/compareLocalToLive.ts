@@ -1,8 +1,77 @@
-import { AssetNameLabel, asyncForEach, bech32FromHex, buildHolderInfo, checkNameLabel, chunk, decodeCborToJson, delay } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, asyncForEach, bech32FromHex, buildHolderInfo, checkNameLabel, decodeCborToJson } from '@koralabs/kora-labs-common';
 import fs from 'fs';
 import http, { OutgoingHttpHeaders } from 'http';
 import https from 'https';
-const NETWORK = 'preview';
+import stdOut from 'node:readline';
+import userReadLine from 'node:readline/promises';
+import { Color, colorString } from './colors';
+declare global {
+  interface Console {
+    sameLine(msg: string): void;
+  }
+}
+
+let NETWORK: string = 'preview';
+const networkDelay: any = {"preview": 101, "preprod": 101, "mainnet": 50}
+const POLICIES: any[] = [ 
+    { id: "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a", supply: 0},
+    { id: "6c32db33a422e0bc2cb535bb850b5a6e9a9572222056d6ddc9cbc26e", supply: 0}
+]
+
+console.sameLine = function(message) {
+    stdOut.clearLine(process.stdout, 0); // Clear the current line from the cursor to the right
+    stdOut.cursorTo(process.stdout, 0); // Move the cursor to the beginning of the line
+    process.stdout.write(message);
+}
+
+let useCachedData = fs.existsSync('localHandles.json');
+
+const userInput = userReadLine.createInterface({
+  input: process.stdin,
+  output: process.stdout
+});
+
+async function askUserUseCachedData(): Promise<boolean> {
+    let answer = "";
+    while(!['y', 'n', 'yes', 'no'].includes(answer.toLowerCase())){
+        answer = await userInput.question(`Would you like to use the already cached data? (yes/no): `);
+    }
+    return answer.toLowerCase().startsWith('y');
+}
+
+async function askUserForNetwork() {
+    let network = ""
+    while(!['preview', 'preprod', 'mainnet'].includes(network.toLowerCase())){
+        network = await userInput.question(`Which Cardano network? ([preview], preprod, mainnet): `);
+        if (!network) {
+            return;
+        }
+    }
+    NETWORK = network;
+}
+
+async function askUserForPolicyCounts() {
+    for (const policy of POLICIES) {
+        let supply = 0;
+        while (!supply) {
+            supply = parseInt((await userInput.question(`Enter the asset count/supply for (https://beta.cexplorer.io/policy/${policy.id}): `)).replaceAll(',', ''));
+        }
+        policy.supply = supply;
+    }
+}
+
+if (useCachedData) {
+    useCachedData = await askUserUseCachedData();
+}
+// DON'T TURN THIS INTO AN else!
+if (!useCachedData) {
+    await askUserForNetwork();
+    await askUserForPolicyCounts();
+}
+userInput.close();
+
+const startTime = new Date();
+console.log(`Start time: ${startTime.toLocaleString()}`)
 
 const apiRequest = (url: string): Promise<{ statusCode?: number; body?: string; error?: string; headers?: OutgoingHttpHeaders }> => {
     const client = url.startsWith('http:') ? http : https;
@@ -52,60 +121,76 @@ const fetchKoios = async (path: string, method = 'GET', body?: string) => {
             Authorization: `Bearer ${process.env.KOIOS_API_BEARER_TOKEN}`
         },
         body
-    }).then((res) => res.json());
+    })
+    .catch((error) => {
+        console.log(); // Needed to break the same line above
+        console.log(`Error fetching ${path} with body length ${body?.length ?? 0}: ${error}`);
+        process.exit();
+    })
+    .then((res) => {
+        if (res?.ok)
+            return res?.json()
+        else
+            console.log(); // Needed to break the same line above
+            console.log(`Error fetching ${path} with body length ${body?.length ?? 0}: ${res?.status}: ${res?.statusText} \n ${res?.body}`);
+        process.exit();
+    });
 
     return res;
 };
 
-export const fetchPolicyAssets = async (policyId: string): Promise<{ asset_name: string; fingerprint: string; total_supply: string }[]> => {
+export const fetchPolicyAssets = async (policyId: string, policySupply: number): Promise<{ asset_name: string; fingerprint: string; total_supply: string }[]> => {
     const limit = 1000;
-    let offset = 0;
-    let hasMorePages = true;
-
     let results: { asset_name: string; fingerprint: string; total_supply: string }[] = [];
     try {
-        while (hasMorePages) {
-            const items = await fetchKoios(`policy_asset_list?_asset_policy=${policyId}&limit=${limit}&offset=${offset}`);
-
-            if (!items || items.length === 0) {
-                hasMorePages = false;
-            } else {
+        const offsets = Array.from({ length: Math.ceil(policySupply / limit) }, (_, index) => index * limit)
+        await asyncForEach(offsets, async (offset) => {
+            console.sameLine(`Requesting policy assets page ${(offset/limit) + 1} of ${offsets.length}`);
+            const items: any[] = await fetchKoios(`policy_asset_list?_asset_policy=${policyId}&limit=${limit}&offset=${offset}`);
+            if (items.length) {
                 results = results.concat(items);
-                hasMorePages = items.length === limit;
-                offset += limit;
             }
-            console.log(`Done fetching offset ${offset} with ${results.length} total results`);
-            await delay(100);
-        }
+        }, networkDelay[NETWORK]);
+        console.log(); // Needed to break the same line above
+        console.log(colorString(Color.FgBlue, `Finished receiving ${results.length} policy assets`))
     } catch (error) {
+        console.log(); // Needed to break the same line above
         console.log(`Error fetching assets for ${policyId}: ${error}`);
-        return [];
+        process.exit();
     }
 
     return results;
 };
 
 const fetchAssetData = async (assets: { asset_name: string; fingerprint: string; total_supply: string }[], policyId: string) => {
-    const batchSize = 40;
     let allResults: Map<string, { asset_name: string; name: string; address: string; utxo: string; stake_address: string | null; policyId: string }> = new Map();
 
-    const filteredAssets = assets.filter((a) => {
+    const handles = assets.filter((a) => {
         const result = checkNameLabel(a.asset_name);
-        return (!result.isCip67 || result.assetLabel === AssetNameLabel.LBL_222 || result.assetLabel === AssetNameLabel.LBL_000);
+        return result.name != "" && (!result.isCip67 || result.assetLabel == AssetNameLabel.LBL_222 || result.assetLabel == AssetNameLabel.LBL_000);
     });
 
-    console.log(`Filtered assets from ${assets.length} to ${filteredAssets.length} for policy ${policyId}`);
+    console.log(colorString(Color.FgBlue,`Found ${handles.length} CIP-25/68 Handles and SubHandles for policy ${policyId}`));
 
-    const filteredAssetChunks = chunk(filteredAssets, batchSize);
+    const batchedHandles: [string, string][][] = []
+    let i=0;
+    let assetNames: [string, string][] = [];
+    while (i < handles.length) {
+        assetNames.push([policyId, handles[i].asset_name]);
+        if (JSON.stringify({ _asset_list: assetNames, _extended: true }).length >= 4900) { // Max possible ",[policy,handle]" length is 96
+            batchedHandles.push(assetNames)
+            assetNames = [];
+        }
+        i++;
+        // last check if last handle
+        if (i == handles.length && assetNames.length) {
+            batchedHandles.push(assetNames);
+        }
+    }
 
-    await asyncForEach(filteredAssetChunks, async (batch, i) => {
-        const assetNames = batch.map((asset) => [policyId, asset.asset_name]);
-
-        const result = await fetchKoios(`asset_utxos`, 'POST', JSON.stringify({ _asset_list: assetNames, _extended: true })).catch((error) => {
-            console.log(`Error fetching batch ${Math.floor(i / batchSize) + 1}: ${error}`);
-            return null;
-        });
-
+    await asyncForEach(batchedHandles, async (handleNames) => {
+        const body = JSON.stringify({ _asset_list: handleNames, _extended: true });
+        const result = await fetchKoios(`asset_utxos`, 'POST', body);
         if (result !== null) {
             // go through each asset and grab the data we need to test, tx_hash, tx_index, address
             for (const utxo of result) {
@@ -118,8 +203,7 @@ const fetchAssetData = async (assets: { asset_name: string; fingerprint: string;
                         if (result.assetLabel == AssetNameLabel.LBL_000) {
                             const datum = utxo.inline_datum.bytes;
                             const d = await decodeCborToJson({ cborString: datum });
-                            address = bech32FromHex(d.constructor_0[2].resolved_addresses.ada.replace('0x', ''));
-
+                            address = bech32FromHex(d.constructor_0[2].resolved_addresses.ada.replace('0x', ''), NETWORK != 'mainnet');
                             stake_address = buildHolderInfo(address).address;
                         }
                         allResults.set(result.name, {
@@ -134,26 +218,26 @@ const fetchAssetData = async (assets: { asset_name: string; fingerprint: string;
                 }
             }
         }
-        console.log(`Fetched batch with ${allResults.size} total results out of ${assets.length}`);
-    }, 500);
-
+        console.sameLine(`Received ${allResults.size} handle UTxOs out of ${handles.length}`);
+    }, networkDelay[NETWORK]);
+    console.log(); // Needed to break the same line above
     return allResults;
 };
 
 const getPolicyAssets = async () => {
-    const legacyAssets = await fetchPolicyAssets('f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a');
-    const legacyAssetsWithData = await fetchAssetData(legacyAssets, 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a');
-
-    const demiAssets = await fetchPolicyAssets('6c32db33a422e0bc2cb535bb850b5a6e9a9572222056d6ddc9cbc26e');
-    const demiAssetsWithData = await fetchAssetData(demiAssets, '6c32db33a422e0bc2cb535bb850b5a6e9a9572222056d6ddc9cbc26e');
-
-    return new Map<string, any>([...legacyAssetsWithData, ...demiAssetsWithData]);
+    let assetMap: Map<string, any> = new Map();
+    for (const {id, supply} of POLICIES) {
+        const policyAssets = await fetchPolicyAssets(id, supply);
+        const assetsWithData = await fetchAssetData(policyAssets, id)
+        assetMap = new Map([...assetMap, ...assetsWithData]);
+    }
+    return assetMap;
 };
 
 (async () => {
     let localHandles: Map<string, any> = new Map<string, any>();
     let liveHandles: Map<string, any> = new Map<string, any>();
-    if (fs.existsSync('localHandles.json')) {
+    if (useCachedData) {
         localHandles = new Map<string, any>(JSON.parse(fs.readFileSync('localHandles.json').toString()));
         liveHandles = new Map<string, any>(JSON.parse(fs.readFileSync('liveHandles.json').toString()));
     } else {
@@ -166,9 +250,9 @@ const getPolicyAssets = async () => {
             [...Array(totalPages).keys()],
             async (i) => {
                 const local = await apiRequest(`http://localhost:3141/handles?records_per_page=${pageSize}&page=${i + 1}`);
-                console.log(`Page ${i + 1} of ${totalPages} - Local: ${local.statusCode}`);
-                if (local.error) {
-                    console.error('ERROR', local.error);
+                console.sameLine(`Receiving local API Handles page ${i + 1} of ${totalPages}`);
+                if (local.error || !local.statusCode || local.statusCode > 299) {
+                    console.error(`ERROR: ${local.statusCode}`, local.error);
                     process.exit(1);
                 }
 
@@ -176,6 +260,7 @@ const getPolicyAssets = async () => {
             },
             1000
         );
+        console.log(); // Needed to break the same line above
         fs.writeFileSync('localHandles.json', JSON.stringify(Array.from(localHandles.entries())));
     }
 
@@ -191,7 +276,7 @@ const getPolicyAssets = async () => {
     const holderMismatches: Record<string, any> = {};
     const defaultMismatches: Record<string, any> = {};
 
-    console.log(`Comparing ${bothKeys.size} handles present in both local and live data`);
+    console.log(colorString(Color.FgBlue, `Comparing ${bothKeys.size} handles present in both local and live data`));
 
     bothKeys.forEach((key) => {
         const localHandle = localHandles.get(key);
@@ -206,9 +291,9 @@ const getPolicyAssets = async () => {
         if (localHandle.holder !== liveHandle.stake_address) {
             holderMismatches[key] = { holder: { live: liveHandle.stake_address, local: localHandle.holder } };
         }
-        if (localHandle.default_in_wallet !== liveHandle.default_in_wallet) {
-            defaultMismatches[key] = { default_in_wallet: { live: liveHandle.default_in_wallet, local: localHandle.default_in_wallet } };
-        }
+        // if (localHandle.default_in_wallet !== liveHandle.default_in_wallet) {
+        //     defaultMismatches[key] = { default_in_wallet: { live: liveHandle.default_in_wallet, local: localHandle.default_in_wallet } };
+        // }
     });
 
     const mismatches: Record<string, any> = {};
@@ -218,11 +303,17 @@ const getPolicyAssets = async () => {
         }
     }
 
-    console.log(`Missing in live: ${missingInLive.length ?? 0}\nMissing in local: ${missingInLocal.length ?? 0}`);
-    console.log(`Address mismatches: ${Object.entries(addressMismatches).length ?? 0}`);
-    console.log(`UTxO mismatches: ${Object.entries(utxoMismatches).length ?? 0}`);
-    console.log(`Holder mismatches: ${Object.entries(holderMismatches).length ?? 0}`);
-    console.log(`Default mismatches: ${Object.entries(defaultMismatches).length ?? 0}`);
+    console.log(colorString(missingInLive.length ? Color.FgRed : Color.FgGreen, `Missing in live: ${missingInLive.length ?? 0}`));
+    console.log(colorString(missingInLocal.length ? Color.FgRed : Color.FgGreen, `Missing in local: ${missingInLocal.length ?? 0}`));
+    console.log(colorString(Object.entries(addressMismatches).length ? Color.FgRed : Color.FgGreen, `Address mismatches: ${Object.entries(addressMismatches).length ?? 0}`));
+    console.log(colorString(Object.entries(utxoMismatches).length ? Color.FgRed : Color.FgGreen, `UTxO mismatches: ${Object.entries(utxoMismatches).length ?? 0}`));
+    console.log(colorString(Object.entries(holderMismatches).length ? Color.FgRed : Color.FgGreen, `Holder mismatches: ${Object.entries(holderMismatches).length ?? 0}`));
+    //console.log(colorString(Object.entries(defaultMismatches).length ? Color.FgRed : Color.FgGreen, `Default mismatches: ${Object.entries(defaultMismatches).length ?? 0}`));
 
     fs.writeFileSync('discrepancies.json', JSON.stringify({ missingInLive, missingInLocal, mismatches }, null, 2));
+    const endTime = new Date();
+    console.log(`End time: ${endTime.toLocaleString()}`)
+    const pad = (num: number) => num.toString().padStart(2, '0');
+    const seconds = (endTime.getTime() - startTime.getTime()) / 1000;
+    console.log(`Duration: ${pad(Math.floor(seconds / 3600))}:${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`)
 })();
