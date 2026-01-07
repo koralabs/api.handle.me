@@ -558,7 +558,7 @@ export class HandlesRepository {
                     // Don't process the nameless token.
                     continue;
                 }
-                const { handleHex, name, isCip67, assetLabel } = getHandleNameFromAssetName(assetName);
+                const { ownerTokenHex, name, isCip67, assetLabel } = getHandleNameFromAssetName(assetName);
                 const isMintTx = isCip67 
                     ? (assetLabel === AssetNameLabel.LBL_222 || assetLabel === AssetNameLabel.LBL_000)
                         ? utxo.mint.flatMap(([, handles]) => Object.keys(handles)).includes(assetName) 
@@ -567,9 +567,9 @@ export class HandlesRepository {
 
                 const {lovelace, datum, address, slot, script } = utxo
                 const metadata: { [handleName: string]: HandleOnChainMetadata } | undefined = ((utxo.metadata as any)[MetadataLabel.NFT] as any)?.[policy];
-                const data = metadata && (metadata[isCip67 ? handleHex : name] as unknown as IHandleMetadata);
+                const data = metadata && (metadata[isCip67 ? ownerTokenHex : name] as unknown as IHandleMetadata);
                 const existingHandle = this.prepareHandle(this.store.getValueFromIndex(IndexNames.HANDLE, name) as StoredHandle) ?? undefined;
-                let handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: handleHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot}, data);
+                let handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot}, data);
                 
                 // if (['ap@adaprotocol', 'b-263-54'].some(n => n == handle.name))
                 //     debugLog('PROCESSED SCANNED INFO START', slotNumber, {...handle, utxo})

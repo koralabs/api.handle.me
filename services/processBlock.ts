@@ -37,7 +37,7 @@ export const processBlock = async (txBlock: BlockPraos, repo: HandlesRepository)
                 const minted = Object.entries(txBody?.mint ?? {}).filter(([policyId]) => HANDLE_POLICIES.contains(NETWORK as Network, policyId));
                 const handleAssets: [string, string[]][] = values.map(([policy, handles]) => [policy, Object.keys(handles)]);
                 const handles = handleAssets.flatMap(h => h[1])
-                const mintAssets: [string, string[]][] = minted.map(([policy, mintedHandles]) => [policy, Object.keys(handles).filter(k => mintedHandles[k] > 0n)]);
+                const mintAssets: [string, string[]][] = minted.map(([policy, mintedHandles]) => [policy, handles.filter(k => mintedHandles[k] > 0n)]);
                 const metadata = Object.fromEntries(
                     Object.entries(txBody?.metadata?.labels ?? {}).filter(([label]) => label == '721') // We only need 721 label
                         .map(([label, labelObj]) => {
@@ -99,9 +99,9 @@ export const processBlock = async (txBlock: BlockPraos, repo: HandlesRepository)
                         const { isCip67, name, assetLabel } = getHandleNameFromAssetName(assetName);
                         const isMintTx = isCip67 
                             ? (assetLabel === AssetNameLabel.LBL_222 || assetLabel === AssetNameLabel.LBL_000)
-                                ? utxo.mint.flatMap(([, handles]) => Object.keys(handles)).includes(assetName) 
+                                ? utxo.mint.flatMap(([, handles]) => handles).includes(assetName) 
                                 : false 
-                            : utxo.mint.flatMap(([, handles]) => Object.keys(handles)).includes(assetName);
+                            : utxo.mint.flatMap(([, handles]) => handles).includes(assetName);
 
                         if (isMintTx) {
                             mintData.push({ handleName: name, mintingData: { created_slot: currentSlot, metadata: utxo.metadata, txHash: `${txId}` } });

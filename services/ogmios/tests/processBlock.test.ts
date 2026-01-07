@@ -176,11 +176,17 @@ describe('processBlock Tests', () => {
 
     it('Should save a new handle to the datastore and set metrics', async () => {
         const saveSpy = jest.spyOn(HandlesRepository.prototype, 'save');
+        const addMintDataSpy = jest.spyOn(HandlesRepository.prototype, 'addMintData');
         jest.spyOn(HandlesRepository.prototype, 'getMetrics').mockReturnValue({});
 
         await ogmios['processBlock'](txBlock({ policy: policyId, additionalAssets: { '74657374343536': BigInt(1) } }));
 
         expect(saveSpy).toHaveBeenCalledTimes(2);
+
+        expect(addMintDataSpy).toHaveBeenCalledWith([
+            { handleName: 'test1234', mintingData: { created_slot: 0, metadata: { '721': { f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a: { test1234: { core: { og: 1n }, image: 'ifps://some_hash_test1234' } } } }, txHash: 'some_id' } },
+            { handleName: 'test456', mintingData: { created_slot: 0, metadata: { '721': { f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a: { test1234: { core: { og: 1n }, image: 'ifps://some_hash_test1234' } } } }, txHash: 'some_id' } }
+        ]);
 
         expect(saveSpy).toHaveBeenNthCalledWith(
             1,

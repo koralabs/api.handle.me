@@ -64,22 +64,22 @@ export const buildOnChainObject = <T>(cborData: any): T | null => {
     }
 };
 
-export const getHandleNameFromAssetName = (asset: string): { name: string; handleHex: string, isCip67: boolean, assetLabel: AssetNameLabel } => {
-    let handleHex = `${asset}`;
+export const getHandleNameFromAssetName = (asset: string): { name: string; ownerTokenHex: string, isCip67: boolean, assetLabel: AssetNameLabel } => {
+    let ownerTokenHex = `${asset}`;
     
     // check if asset name has a period. If so, it includes the policyId
-    if (handleHex.includes('.')) {
-        handleHex = handleHex.split('.')[1];
+    if (ownerTokenHex.includes('.')) {
+        ownerTokenHex = ownerTokenHex.split('.')[1];
     }
-    const {isCip67, name, assetLabel} = checkNameLabel(handleHex)
+    const {isCip67, name, assetLabel} = checkNameLabel(ownerTokenHex)
     if (isCip67) {
         // We need to return the hex of the associated Handle (not the current asset being processed)
-        handleHex = `${assetLabel == AssetNameLabel.LBL_000 ? AssetNameLabel.LBL_000 : AssetNameLabel.LBL_222}${handleHex.replace(assetLabel ?? '', '')}`
+        ownerTokenHex = `${assetLabel == AssetNameLabel.LBL_000 ? AssetNameLabel.LBL_000 : AssetNameLabel.LBL_222}${ownerTokenHex.replace(assetLabel ?? '', '')}`
     }
 
     return {
         name,
-        handleHex,
+        ownerTokenHex,
         isCip67,
         assetLabel
     };

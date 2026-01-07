@@ -163,7 +163,7 @@ describe('Utils Tests', () => {
             const handle = getHandleNameFromAssetName(asset1);
             expect(handle).toEqual({
                 ...expectedHandle,
-                handleHex: asset1
+                ownerTokenHex: asset1
             });
         });
 
@@ -172,7 +172,7 @@ describe('Utils Tests', () => {
             const handle = getHandleNameFromAssetName(asset2);
             expect(handle).toEqual({
                 ...expectedHandle,
-                handleHex: '6275727269746f'
+                ownerTokenHex: '6275727269746f'
             });
         });
 
@@ -181,7 +181,7 @@ describe('Utils Tests', () => {
             const handle = getHandleNameFromAssetName(asset);
             expect(handle).toEqual({
                 assetLabel: AssetNameLabel.LBL_222,
-                handleHex: `${AssetNameLabel.LBL_222}6275727269746f`,
+                ownerTokenHex: `${AssetNameLabel.LBL_222}6275727269746f`,
                 name: 'burrito',
                 isCip67: true
             });
@@ -192,7 +192,7 @@ describe('Utils Tests', () => {
             const handle = getHandleNameFromAssetName(asset);
             expect(handle).toEqual({
                 assetLabel: AssetNameLabel.LBL_100,
-                handleHex: `${AssetNameLabel.LBL_222}6275727269746f`,
+                ownerTokenHex: `${AssetNameLabel.LBL_222}6275727269746f`,
                 name: 'burrito',
                 isCip67: true
             });
