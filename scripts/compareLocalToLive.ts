@@ -12,7 +12,7 @@ declare global {
 }
 
 let NETWORK: string = 'preview';
-const networkDelay: any = {"preview": 101, "preprod": 101, "mainnet": 50}
+const networkDelay: any = {"preview": 101, "preprod": 101, "mainnet": 100}
 const POLICIES: any[] = [ 
     { id: "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a", supply: 0},
     { id: "6c32db33a422e0bc2cb535bb850b5a6e9a9572222056d6ddc9cbc26e", supply: 0}
@@ -146,11 +146,11 @@ export const fetchPolicyAssets = async (policyId: string, policySupply: number):
     let results: Set<string> = new Set();
     try {
         const offsets = Array.from({ length: Math.ceil(policySupply / limit) }, (_, index) => index * limit)
-        // console.log(`OFFSETS`, offsets)
+        // console.log(`OFFSETS`, JSON.stringify(offsets))
         // process.exit()
         await asyncForEach(offsets, async (offset) => {
             console.sameLine(`Requesting policy assets page ${(offset/limit) + 1} of ${offsets.length}`);
-            const items: KoiosAsset[] = await fetchKoios(`policy_asset_list?_asset_policy=${policyId}&limit=${limit}&offset=${offset}`);
+            const items: KoiosAsset[] = await fetchKoios(`policy_asset_list?_asset_policy=${policyId}&limit=${limit}&offset=${offset}&order=asset_name.asc`);
             for (const item of items) {
                 results.add(item.asset_name);
             }
@@ -171,7 +171,7 @@ const fetchAssetData = async (assets: string[], policyId: string) => {
 
     const handles = assets.filter((a) => {
         const result = checkNameLabel(a);
-        return result.name != "" && (!result.isCip67 || result.assetLabel == AssetNameLabel.LBL_222 || result.assetLabel == AssetNameLabel.LBL_000);
+        return a != "" && (!result.isCip67 || result.assetLabel == AssetNameLabel.LBL_222 || result.assetLabel == AssetNameLabel.LBL_000);
     });
 
     console.log(colorString(Color.FgBlue,`Found ${handles.length} CIP-25/68 Handles and SubHandles for policy ${policyId}`));
@@ -210,6 +210,8 @@ const fetchAssetData = async (assets: string[], policyId: string) => {
                             address = bech32FromHex(d.constructor_0[2].resolved_addresses.ada.replace('0x', ''), NETWORK != 'mainnet');
                             stake_address = buildHolderInfo(address).address;
                         }
+                        if (result.name == "" || asset.asset_name == "")
+                            continue;
                         allResults.set(result.name, {
                             asset_name: asset.asset_name,
                             name: result.name,
