@@ -43,6 +43,7 @@ class App {
 
     public async listen() {
         await this.initialize();
+        this.app.set('trust proxy', 1); 
         const server = this.app.listen(this.port, () => {
             Logger.log(`🚀 ${this.env} app listening on port ${this.port}`);
         });
