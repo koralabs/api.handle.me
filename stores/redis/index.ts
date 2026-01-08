@@ -123,6 +123,7 @@ export class RedisHandlesStore implements IApiStore {
             const result = await unZipPromise(buff);
             const text = result.toString('utf8');
             Logger.log(`Found ${url}`);
+            //const text = fs.readFileSync(`handles_utxos.json`, 'utf8');
             const storedS3HandlesUTxOJson = JSON.parse(text) as IHandleFileContent;
             const { utxos, slot: s3Slot, mintingData, hash: s3Hash, utxoSchemaVersion } = storedS3HandlesUTxOJson;
 
@@ -143,14 +144,18 @@ export class RedisHandlesStore implements IApiStore {
                     });
                 }
 
+                Logger.log(`Saved ${utxos.length.toLocaleString()} UTxOs from S3 snapshot`);
+
                 const mintingDataChunks = chunk(Object.entries(mintingData), MAX_SETS_PER_PIPE);
                 for (const mintingDataChunk of mintingDataChunks) {
                     this.pipeline(() => {
                         mintingDataChunk.forEach(([handle, mintData]) => {
-                            this.setValueOnIndex(IndexNames.MINT, handle, mintData);
+                            this.addValueToIndexedSet(IndexNames.MINT, handle, JSON.stringify(mintData))
                         });
                     });
                 }
+
+                Logger.log(`Saved minting data for ${Object.keys(mintingData).length.toLocaleString()} handles from S3 snapshot`);
 
                 for (let i = 0; i < utxos.length; i++) {
                     // clone it

@@ -639,8 +639,8 @@ export class HandlesRepository {
                         if (slot >= handle.updated_slot_number) {
                             if (!existingHandle) {
                                 // There should always be an existing root handle for a subhandle
-                                Logger.log({ message: `Cannot save subhandle settings for ${name} because root handle does not exist`, event: 'this.saveSubHandleSettingsChange', category: LogCategory.NOTIFY });
-                                return;  
+                                // Logger.log({ message: `Cannot save subhandle settings for ${name} because root handle does not exist`, event: 'this.saveSubHandleSettingsChange', category: LogCategory.INFO });
+                                // return;  
                             }
                     
                             if (!datum) {
