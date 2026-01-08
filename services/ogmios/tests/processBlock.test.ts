@@ -610,7 +610,7 @@ describe('processBlock Tests', () => {
             svg_version: '1.0.0',
             updated_slot_number: 0,
             utxo: 'some_id#0',
-            version: 0
+            version: 1
         };
         expect(savePersonalizationChangeSpy).toHaveBeenNthCalledWith(2, savedHandle, {
             amount: 1,
@@ -637,7 +637,7 @@ describe('processBlock Tests', () => {
             },
             standard_image: '',
             standard_image_hash: '',
-            svg_version: numericString(0),
+            svg_version: 0,
             updated_slot_number: 0,
             utxo: 'some_id#0',
             version: 0
@@ -850,7 +850,7 @@ describe('processBlock Tests', () => {
                 svg_version: '1.0.0',
                 updated_slot_number: 0,
                 utxo: 'some_id#0',
-                version: 0,
+                version: 1,
                 virtual: {
                     expires_time: 1,
                     public_mint: false
@@ -895,7 +895,7 @@ describe('processBlock Tests', () => {
             svg_version: '1.0.0',
             updated_slot_number: 0,
             utxo: 'some_id#0',
-            version: 0,
+            version: 1,
             virtual: {
                 expires_time: 1,
                 public_mint: false

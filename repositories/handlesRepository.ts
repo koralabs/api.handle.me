@@ -280,7 +280,7 @@ export class HandlesRepository {
     public addMintData(items: { handleName: string, mintingData: MintingData }[]) {
         this.store.pipeline(() => {
             for (const item of items) {
-                this.store.addValueToIndexedSet(IndexNames.MINT, item.handleName, JSON.stringify(item.mintingData));
+                this.store.addValueToIndexedSet(IndexNames.MINT, item.handleName, JSON.stringify(item.mintingData, (_, val) => (typeof val === 'bigint' ? `${Number(val)}` : val)));
             }
         });
     }

@@ -152,6 +152,8 @@ export const handler = async (event: any) => {
 };
 
 if (process.argv[2] === 'local') {
-    const fileJson = await processSnapshot('preview');
-    fs.writeFileSync(`handles_utxos.json`, JSON.stringify(fileJson));
+    (async () => {
+        const fileJson = await processSnapshot('preview');
+        fs.writeFileSync(`handles_utxos.json`, JSON.stringify(fileJson));
+    })();
 }
