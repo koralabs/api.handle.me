@@ -110,18 +110,15 @@ const block = {
     ]
 }
 
-jest.mock("aws-sdk", () => {
+jest.mock("@aws-sdk/client-s3", () => {
   const mockedS3Instance = {
-    putObject: jest.fn(() => {
-      return {
-        promise: jest.fn(() => {
-          return Promise.resolve("success");
-        }),
-      };
+    send: jest.fn(() => {
+      return Promise.resolve("success");
     }),
   };
   return {
-    S3: jest.fn(() => mockedS3Instance),
+    S3Client: jest.fn(() => mockedS3Instance),
+    PutObjectCommand: jest.fn((params) => params),
   };
 });
 
@@ -129,34 +126,33 @@ let mockedS3Instance: any;
 
 describe("lambda tests", () => {
   beforeAll(async () => {
-    const AWS = require("aws-sdk");
-    mockedS3Instance = new AWS.S3();
+    const AWS = require("@aws-sdk/client-s3");
+    mockedS3Instance = new AWS.S3Client();
 
     // we need to process block first then we can run the snapthot
     await processBlock(block as unknown as BlockPraos, repo);
 
     repo.setMetrics({ currentSlot: block.slot + 100, currentBlockHash: block.id, utxoSchemaVersion: 7})
-
   });
 
   it("should process and create zip file", async () => {
-    const putObjectSpy = jest.spyOn(mockedS3Instance, "putObject");
+    const sendSpy = jest.spyOn(mockedS3Instance, "send");
     const result = await lambda.handler();
     expect(result).toEqual({ body: "", statusCode: 200 });
-    expect(putObjectSpy).toHaveBeenNthCalledWith(1, {
+    expect(sendSpy).toHaveBeenNthCalledWith(1, {
       Body: expect.any(Object),
       Bucket: "api.handle.me",
-      Key: "mainnet/snapshot/7/handles.gz",
+      Key: "mainnet/utxo-snapshot/7/handles_utxos.gz",
     });
-    expect(putObjectSpy).toHaveBeenNthCalledWith(2, {
+    expect(sendSpy).toHaveBeenNthCalledWith(2, {
       Body: expect.any(Object),
       Bucket: "api.handle.me",
-      Key: "preview/snapshot/7/handles.gz",
+      Key: "preview/utxo-snapshot/7/handles_utxos.gz",
     });
-    expect(putObjectSpy).toHaveBeenNthCalledWith(3, {
+    expect(sendSpy).toHaveBeenNthCalledWith(3, {
       Body: expect.any(Object),
       Bucket: "api.handle.me",
-      Key: "preprod/snapshot/7/handles.gz",
+      Key: "preprod/utxo-snapshot/7/handles_utxos.gz",
     });
   });
 });
