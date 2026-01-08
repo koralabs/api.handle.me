@@ -280,7 +280,7 @@ export class HandlesRepository {
     public addMintData(items: { handleName: string, mintingData: MintingData }[]) {
         this.store.pipeline(() => {
             for (const item of items) {
-                this.store.setValueOnIndex(IndexNames.MINT, item.handleName, item.mintingData);
+                this.store.addValueToIndexedSet(IndexNames.MINT, item.handleName, JSON.stringify(item.mintingData));
             }
         });
     }
@@ -565,11 +565,14 @@ export class HandlesRepository {
                         : false 
                     : utxo.mint.flatMap(([, handles]) => Object.keys(handles)).includes(assetName)
 
+                const mintingData = this.store.getValuesFromIndexedSet(IndexNames.MINT, name);
+                const mintingDataArray = mintingData ? Array.from(mintingData).map(md => JSON.parse(md)).sort((a, b) => a.created_slot - b.created_slot) : [];
+
                 const {lovelace, datum, address, slot, script } = utxo
                 const metadata: { [handleName: string]: HandleOnChainMetadata } | undefined = ((utxo.metadata as any)[MetadataLabel.NFT] as any)?.[policy];
                 const data = metadata && (metadata[isCip67 ? ownerTokenHex : name] as unknown as IHandleMetadata);
                 const existingHandle = this.prepareHandle(this.store.getValueFromIndex(IndexNames.HANDLE, name) as StoredHandle) ?? undefined;
-                let handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot}, data);
+                let handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingDataArray?.[0]?.created_slot}, data);
                 
                 // if (['ap@adaprotocol', 'b-263-54'].some(n => n == handle.name))
                 //     debugLog('PROCESSED SCANNED INFO START', slotNumber, {...handle, utxo})
@@ -926,6 +929,7 @@ export class HandlesRepository {
             handle.image_hash = projectAttributes?.image_hash ?? ''
             handle.standard_image_hash = projectAttributes?.standard_image_hash ?? ''
             handle.image = nftAttributes?.image ?? ''
+            handle.version = nftAttributes?.version ?? handle.version;
             handle.standard_image = projectAttributes?.standard_image ?? ''
             handle.bg_image = projectAttributes?.bg_image
             handle.bg_asset = projectAttributes?.bg_asset

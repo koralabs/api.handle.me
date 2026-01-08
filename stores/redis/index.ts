@@ -1,10 +1,10 @@
-import { ApiIndexType, Holder, IApiMetrics, IApiStore, IHandleFileContent, IndexNames, ISlotHistory, isNumeric, LogCategory, Logger, NETWORK, SortAndLimitOptions, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { ApiIndexType, chunk, Holder, IApiMetrics, IApiStore, IHandleFileContent, IndexNames, ISlotHistory, isNumeric, LogCategory, Logger, NETWORK, SortAndLimitOptions, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { GlideString, HashDataType, SortOptions } from '@valkey/valkey-glide';
 import { promisify } from 'util';
 import { MessageChannel, receiveMessageOnPort, Worker } from 'worker_threads';
 import { inflate } from 'zlib';
 import { DISABLE_HANDLES_SNAPSHOT, NODE_ENV } from '../../config';
-import { handleEraBoundaries, META_INDEXES, ORDERED_SLOTS } from '../../config/constants';
+import { handleEraBoundaries, MAX_SETS_PER_PIPE, META_INDEXES, ORDERED_SLOTS } from '../../config/constants';
 
 // const glideClient = await GlideClient.createClient({
 //       addresses: [{ host: 'https://localhost', port: 6379 }],
@@ -33,21 +33,21 @@ export class RedisHandlesStore implements IApiStore {
     }
     /**
      * Be careful with the pipeline command.
-     * Since the commands are queued and executed in a batch, 
+     * Since the commands are queued and executed in a batch,
      * you won't get results for each command until AFTER the pipeline finishes.
-     * You'll have to iterate over the batch results that come back in the 
+     * You'll have to iterate over the batch results that come back in the
      * response of pipeline() to find your desired results.
      * If it feels like your code "isn't running" or "isn't returning anything", this is probably why.
      */
     public pipeline(commands: CallableFunction) {
-        RedisHandlesStore._pipeline = []
+        RedisHandlesStore._pipeline = [];
         commands();
         //console.log('PIPELINE', RedisHandlesStore._pipeline)
         const results = this.redisClientCall('batch', RedisHandlesStore._pipeline);
-        for (let i = 0; i < results.length; i++ ) {
+        for (let i = 0; i < results.length; i++) {
             if (RedisHandlesStore._pipeline[i][0] == 'hgetall') {
                 //console.log(RedisHandlesStore._pipeline[i][1][0], results[i])
-                results[i] = this.rehydrateObject(RedisHandlesStore._pipeline[i][1][0], results[i])
+                results[i] = this.rehydrateObject(RedisHandlesStore._pipeline[i][1][0], results[i]);
             }
         }
         RedisHandlesStore._pipeline = undefined;
@@ -55,11 +55,10 @@ export class RedisHandlesStore implements IApiStore {
     }
 
     public destroy(): void {
-        this.redisClientCall('flushdb')
-        this.redisClientCall('close')
+        this.redisClientCall('flushdb');
+        this.redisClientCall('close');
         RedisHandlesStore._pipeline = undefined;
-        if (RedisHandlesStore._worker.terminate)
-            RedisHandlesStore._worker.terminate();
+        if (RedisHandlesStore._worker.terminate) RedisHandlesStore._worker.terminate();
         RedisHandlesStore._worker = undefined;
     }
 
@@ -78,7 +77,7 @@ export class RedisHandlesStore implements IApiStore {
             // Skip UTXO and MINT indexes
             if ([IndexNames.UTXO_SLOT, IndexNames.UTXO, IndexNames.MINT].includes(indexName)) continue;
             do {
-                const [nextCursor, keys] = await this.redisClientCall('scan', cursor, { match: `{root}:${indexName}:*`, count: 1000 }) as [string, string[]];
+                const [nextCursor, keys] = (await this.redisClientCall('scan', cursor, { match: `{root}:${indexName}:*`, count: 1000 })) as [string, string[]];
                 cursor = nextCursor;
 
                 if (keys && keys.length > 0) {
@@ -109,13 +108,13 @@ export class RedisHandlesStore implements IApiStore {
         }
     }
 
-    public async tryPopulateFromS3UTxOs(updateHandleIndexes: (utxo: UTxOWithTxInfo) => void): Promise<{ slot: number; id: string; }> {
+    public async tryPopulateFromS3UTxOs(updateHandleIndexes: (utxo: UTxOWithTxInfo) => void): Promise<{ slot: number; id: string }> {
         this.redisClientCall('flushdb');
         let id = handleEraBoundaries[NETWORK].id;
         let slot = handleEraBoundaries[NETWORK].slot;
         const currentUTxOSchemaVersion = this.getUTxOSchemaVersion();
         const fileName = 'handles_utxos.gz';
-        const url = `http://api.handle.me.s3-website-us-west-2.amazonaws.com/${NETWORK}/snapshot/${this.getUTxOSchemaVersion()}/${fileName}`;
+        const url = `http://api.handle.me.s3-website-us-west-2.amazonaws.com/${NETWORK}/utxo-snapshot/${this.getUTxOSchemaVersion()}/${fileName}`;
         Logger.log(`Fetching ${url}`);
         const awsResponse = await fetch(url);
         if (awsResponse.status === 200) {
@@ -130,17 +129,34 @@ export class RedisHandlesStore implements IApiStore {
             if (utxoSchemaVersion == currentUTxOSchemaVersion) {
                 // save all the individual handles to the store
                 utxos.sort((a, b) => a.slot - b.slot);
+
+                const utxoChunks = chunk(utxos, MAX_SETS_PER_PIPE);
+                for (const utxoChunk of utxoChunks) {
+                    this.pipeline(() => {
+                        utxoChunk.forEach((utxo) => {
+                            // save the UTxO id to the store with slot as the key
+                            this.addValueToOrderedSet(IndexNames.UTXO_SLOT, utxo.slot, utxo.id);
+
+                            // save the UTxO to the store
+                            this.setValueOnIndex(IndexNames.UTXO, utxo.id, utxo);
+                        });
+                    });
+                }
+
+                const mintingDataChunks = chunk(Object.entries(mintingData), MAX_SETS_PER_PIPE);
+                for (const mintingDataChunk of mintingDataChunks) {
+                    this.pipeline(() => {
+                        mintingDataChunk.forEach(([handle, mintData]) => {
+                            this.setValueOnIndex(IndexNames.MINT, handle, mintData);
+                        });
+                    });
+                }
+
                 for (let i = 0; i < utxos.length; i++) {
                     // clone it
                     const newUTxO = { ...utxos[i] };
                     updateHandleIndexes(newUTxO);
                 }
-
-                this.pipeline(() => {
-                    Object.entries(mintingData).forEach(([handle, mintData]) => {
-                        this.setValueOnIndex(IndexNames.MINT, handle, mintData)
-                    });
-                });
 
                 id = s3Hash;
                 slot = s3Slot;
@@ -154,16 +170,16 @@ export class RedisHandlesStore implements IApiStore {
         return { id, slot };
     }
 
-    public async getStartingPoint(updateHandleIndexes: (utxo: UTxOWithTxInfo) => void, failed = false): Promise<{ slot: number; id: string; } | null> {
+    public async getStartingPoint(updateHandleIndexes: (utxo: UTxOWithTxInfo) => void, failed = false): Promise<{ slot: number; id: string } | null> {
         // repo.getsUTxos();
         // if process.env.UTXO_SCHEMA_VERSION matches redis utxoSchemaVersion (should hardly change) but process.env.INDEX_SCHEMA_VERSION doesn't match redis IndexSchemaVersion
         //  we need to loop through slots to get the utxos in redis in order and call repo.updateHandleIndexes(utxo);
         // if the utxo version is wrong, we should check S3 to see if we have a utxo version snapshot.
-        //      if so, use it.  
+        //      if so, use it.
         //      if not return the origin from this function. (flushdb)
         if (!failed) {
             const { indexSchemaVersion, utxoSchemaVersion, currentSlot, currentBlockHash } = this.getMetrics();
-            
+
             const currentSchemaVersion = this.getUTxOSchemaVersion();
             if (currentSchemaVersion > (utxoSchemaVersion ?? 0) || !currentBlockHash || !currentSlot) {
                 // start at Handle genesis
@@ -180,8 +196,7 @@ export class RedisHandlesStore implements IApiStore {
             }
 
             return { id: currentBlockHash, slot: currentSlot };
-        }
-        else {
+        } else {
             if (NODE_ENV === 'local' || DISABLE_HANDLES_SNAPSHOT == 'true') {
                 return null;
             }
@@ -193,7 +208,6 @@ export class RedisHandlesStore implements IApiStore {
                 Logger.log(`Error fetching file from online with error: ${error.message}`);
                 return null;
             }
-
         }
     }
 
@@ -205,27 +219,22 @@ export class RedisHandlesStore implements IApiStore {
         if (ORDERED_SLOTS.includes(index)) {
             return this.parseOrderedSlot(this.redisClientCall('zrangeWithScores', `{root}:${index}`, { start: 0, end: -1 }));
         }
-        const command = options ? 'sort' : 'smembers'
-        if (options && options?.isAlpha == undefined)
-            options = {...options, isAlpha: true}
+        const command = options ? 'sort' : 'smembers';
+        if (options && options?.isAlpha == undefined) options = { ...options, isAlpha: true };
         const keys = this.redisClientCall(command, `{root}:${index}`, options);
         const values: Map<string | number, ApiIndexType> = new Map<string | number, ApiIndexType>();
         for (const key of keys) {
             const value = this.getValueFromIndex(index, key);
-            if (value)
-                values.set(String(key), value);
+            if (value) values.set(String(key), value);
         }
         return values;
     }
 
     public getKeysFromIndex(index: IndexNames, options?: SortAndLimitOptions): (string | number)[] {
-        if (index == IndexNames.HOLDER)
-            return this.getValuesFromOrderedSet(index, 0, options) as string[];
-        const command = options ? 'sort' : 'smembers'
-        if (options && options?.isAlpha == undefined)
-            options = {...options, isAlpha: true}
-        return [...this.redisClientCall(command, `{root}:${index}`, options)]
-            .map(v => isNumeric(v.toString()) && index != IndexNames.HANDLE ? Number(v.toString()) : v.toString())
+        if (index == IndexNames.HOLDER) return this.getValuesFromOrderedSet(index, 0, options) as string[];
+        const command = options ? 'sort' : 'smembers';
+        if (options && options?.isAlpha == undefined) options = { ...options, isAlpha: true };
+        return [...this.redisClientCall(command, `{root}:${index}`, options)].map((v) => (isNumeric(v.toString()) && index != IndexNames.HANDLE ? Number(v.toString()) : v.toString()));
     }
 
     public getValueFromIndex(index: IndexNames, key: string | number): ApiIndexType | undefined {
@@ -233,35 +242,29 @@ export class RedisHandlesStore implements IApiStore {
     }
 
     public setValueOnIndex(index: IndexNames, key: string | number, value: ApiIndexType): void {
-        this.saveObjectToCache(`{root}:${index}:${key}`, value)
-        if (META_INDEXES.includes(index))
-            this.redisClientCall('sadd', `{root}:${index}`, [key]);
-        if (index == IndexNames.HOLDER)
-            this.addValueToOrderedSet(IndexNames.HOLDER, (value as Holder).handles.length, key as string);
+        this.saveObjectToCache(`{root}:${index}:${key}`, value);
+        if (META_INDEXES.includes(index)) this.redisClientCall('sadd', `{root}:${index}`, [key]);
+        if (index == IndexNames.HOLDER) this.addValueToOrderedSet(IndexNames.HOLDER, (value as Holder).handles.length, key as string);
     }
 
     public removeKeyFromIndex(index: IndexNames, key: string | number): void {
         this.redisClientCall('del', [`{root}:${index}:${key}`]);
-        if (index == IndexNames.HOLDER)
-            this.removeValuesFromOrderedSet(IndexNames.HOLDER, key);
-        else
-            this.redisClientCall('srem', `{root}:${index}`, [key]);
+        if (index == IndexNames.HOLDER) this.removeValuesFromOrderedSet(IndexNames.HOLDER, key);
+        else this.redisClientCall('srem', `{root}:${index}`, [key]);
     }
 
     // #endregion
 
     // #region SET INDEXES ************************
     public getValuesFromIndexedSet(index: IndexNames, key: string | number, options?: SortAndLimitOptions): Set<string> | undefined {
-        const command = options ? 'sort' : 'smembers'
-        if (options && options?.isAlpha == undefined)
-            options = {...options, isAlpha: true}
-        return new Set([...this.redisClientCall(command, `{root}:${index}:${key}`, options)].map(v => v.toString()))
+        const command = options ? 'sort' : 'smembers';
+        if (options && options?.isAlpha == undefined) options = { ...options, isAlpha: true };
+        return new Set([...(this.redisClientCall(command, `{root}:${index}:${key}`, options) ?? [])].map((v) => v.toString()));
     }
 
     public addValueToIndexedSet(index: IndexNames, key: string | number, value: string): void {
         this.redisClientCall('sadd', `{root}:${index}:${key}`, [value]);
-        if (META_INDEXES.includes(index))
-            this.redisClientCall('sadd', `{root}:${index}`, [key]);
+        if (META_INDEXES.includes(index)) this.redisClientCall('sadd', `{root}:${index}`, [key]);
     }
 
     public removeValueFromIndexedSet(index: IndexNames, key: string | number, value: string): void {
@@ -269,32 +272,26 @@ export class RedisHandlesStore implements IApiStore {
             this.redisClientCall('srem', `{root}:${index}:${key}`, [value]);
             if (META_INDEXES.includes(index)) {
                 const count = this.redisClientCall('scard', `{root}:${index}:${key}`) as number;
-                if ((RedisHandlesStore._pipeline && count == 1) || !count)
-                    this.redisClientCall('srem', `{root}:${index}`, [key]);
+                if ((RedisHandlesStore._pipeline && count == 1) || !count) this.redisClientCall('srem', `{root}:${index}`, [key]);
             }
         }
     }
 
     // #endregion
-    
+
     // #region ORDERED INDEXES  ************************
 
-    public getValuesFromOrderedSet(index:IndexNames, ordinal: number, options?: SortAndLimitOptions): ApiIndexType[] | undefined {
+    public getValuesFromOrderedSet(index: IndexNames, ordinal: number, options?: SortAndLimitOptions): ApiIndexType[] | undefined {
         if (ORDERED_SLOTS.includes(index)) {
-            return this.parseOrderedSlot(
-                this.redisClientCall('zrangeWithScores', `{root}:${index}`, {type: 'byScore', start: { value: ordinal }, end: { value: ordinal }})
-            ).values().toArray();
+            return this.parseOrderedSlot(this.redisClientCall('zrangeWithScores', `{root}:${index}`, { type: 'byScore', start: { value: ordinal }, end: { value: ordinal } }))
+                .values()
+                .toArray();
         }
-        const reverse = options?.orderBy?.toUpperCase() == 'DESC'
-        return [...this.redisClientCall(
-            'zrange', 
-            `{root}:${index}`, 
-            {...options, type: 'byScore', start: { value: options?.start ?? (reverse ? Infinity : -Infinity) }, end: { value: options?.end ?? (reverse ? -Infinity : Infinity) }} as SortOptions, 
-            {reverse}
-        )].map(v => isNumeric(v.toString()) ? Number(v.toString()) : v.toString());
+        const reverse = options?.orderBy?.toUpperCase() == 'DESC';
+        return [...this.redisClientCall('zrange', `{root}:${index}`, { ...options, type: 'byScore', start: { value: options?.start ?? (reverse ? Infinity : -Infinity) }, end: { value: options?.end ?? (reverse ? -Infinity : Infinity) } } as SortOptions, { reverse })].map((v) => (isNumeric(v.toString()) ? Number(v.toString()) : v.toString()));
     }
 
-    public addValueToOrderedSet(index:IndexNames, ordinal: number, value: string | ISlotHistory) {
+    public addValueToOrderedSet(index: IndexNames, ordinal: number, value: string | ISlotHistory) {
         if (ORDERED_SLOTS.includes(index)) {
             value = `${ordinal}|${JSON.stringify(value)}`;
             this.redisClientCall('zremRangeByScore', `{root}:${index}`, { value: ordinal, isInclusive: true }, { value: ordinal, isInclusive: true });
@@ -303,7 +300,7 @@ export class RedisHandlesStore implements IApiStore {
         return;
     }
 
-    public removeValuesFromOrderedSet(index:IndexNames, keyOrOrdinal: string | number) {
+    public removeValuesFromOrderedSet(index: IndexNames, keyOrOrdinal: string | number) {
         if (ORDERED_SLOTS.includes(index)) {
             this.redisClientCall('zremRangeByScore', `{root}:${index}`, '-', { value: keyOrOrdinal, isInclusive: false });
             return;
@@ -311,12 +308,12 @@ export class RedisHandlesStore implements IApiStore {
         this.redisClientCall('zrem', `{root}:${index}`, typeof keyOrOrdinal == 'string' ? keyOrOrdinal : JSON.stringify(keyOrOrdinal));
         return;
     }
-    
+
     // #endregion
 
     // #region METRICS *****************************
     public getMetrics(): IApiMetrics {
-        const metrics = this.rehydrateObjectFromCache('metrics') || {} as IApiMetrics;
+        const metrics = this.rehydrateObjectFromCache('metrics') || ({} as IApiMetrics);
         metrics.handleCount = this.count();
         metrics.holderCount = this.holderCount();
         return metrics;
@@ -332,7 +329,7 @@ export class RedisHandlesStore implements IApiStore {
     }
 
     public holderCount(): number {
-        return this.redisClientCall('zcount', `{root}:${IndexNames.HOLDER}`, {value: -Infinity}, {value:Infinity});
+        return this.redisClientCall('zcount', `{root}:${IndexNames.HOLDER}`, { value: -Infinity }, { value: Infinity });
     }
 
     public getUTxOSchemaVersion(): number {
@@ -347,29 +344,41 @@ export class RedisHandlesStore implements IApiStore {
 
     // #region PRIVATE *******************************
 
-    private parseOrderedSlot(results: { score: number, element: GlideString }[]) {
-        return results.reduce((acc: Map<number, ISlotHistory | string>, value: { score: number, element: GlideString }) => {
+    private parseOrderedSlot(results: { score: number; element: GlideString }[]) {
+        return results.reduce((acc: Map<number, ISlotHistory | string>, value: { score: number; element: GlideString }) => {
             acc.set(value.score, JSON.parse(value.element.toString().split('|', 2)[1]) as ISlotHistory | string);
             return acc;
-        }, new Map<number, ISlotHistory | string>())
+        }, new Map<number, ISlotHistory | string>());
+    }
+
+    private _isPlainObject(value: any) {
+        return (
+            typeof value === 'object' &&
+            value !== null &&
+            !Array.isArray(value)
+        );
     }
 
     private async saveObjectToCache(key: string, obj: any) {
         const parentFields: Record<string, string> = {};
-        for (const [field, value] of Object.entries(obj)) {
-            if (value != undefined && value != null) {
-                if (typeof value === 'object') {
-                    // JSON value → add to parent hash
-                    parentFields[field] = JSON.stringify(value, (_, val) => typeof val === 'bigint' ? `${Number(val)}` : val)
-                } else {
-                    // Primitive value → add to parent hash
-                    parentFields[field] = String(value);
+        if (this._isPlainObject(obj)) {
+            for (const [field, value] of Object.entries(obj)) {
+                if (value != undefined && value != null) {
+                    if (typeof value === 'object') {
+                        // JSON value → add to parent hash
+                        parentFields[field] = JSON.stringify(value, (_, val) => (typeof val === 'bigint' ? `${Number(val)}` : val));
+                    } else {
+                        // Primitive value → add to parent hash
+                        parentFields[field] = String(value);
+                    }
                 }
             }
+            if (Object.keys(parentFields).length > 0) {
+                this.redisClientCall('hset', key, parentFields);
+            }
+            return;
         }
-        if (Object.keys(parentFields).length > 0) {
-            this.redisClientCall('hset', key, parentFields);
-        }
+        throw new Error(`saveObjectToCache only supports plain objects. Key: ${key}`);
     }
 
     private rehydrateObjectFromCache(key: string): Record<string, any> | undefined {
@@ -379,22 +388,16 @@ export class RedisHandlesStore implements IApiStore {
 
     private rehydrateObject(key: string, fields: HashDataType): Record<string, any> | undefined {
         const result: Record<string, any> = {};
-        if (!fields || fields.length == 0)
-            return undefined
+        if (!fields || fields.length == 0) return undefined;
         //                                  very annoying workaround for the difference in normal and batch variants of `hgetall()`
-        for (const {field: f, value} of fields.map((entry: any) => ({ field: entry.field ?? entry.key, value: entry.value }))) {
+        for (const { field: f, value } of fields.map((entry: any) => ({ field: entry.field ?? entry.key, value: entry.value }))) {
             const field = f.toString();
-            if (value.toString() == `${key}:${field}`)
-                result[field] = this.rehydrateObjectFromCache(`${key}:${field}`)
+            if (value.toString() == `${key}:${field}`) result[field] = this.rehydrateObjectFromCache(`${key}:${field}`);
             else {
                 try {
-                    if (['name', 'hex', 'default_in_wallet'].includes(field))
-                        result[field] = value.toString();
-                    else
-                        result[field] = JSON.parse(value.toString()); // This covers object, array, boolean, number
-                    
-                }
-                catch {
+                    if (['name', 'hex', 'default_in_wallet'].includes(field)) result[field] = value.toString();
+                    else result[field] = JSON.parse(value.toString()); // This covers object, array, boolean, number
+                } catch {
                     result[field] = value.toString();
                 }
             }
@@ -404,13 +407,14 @@ export class RedisHandlesStore implements IApiStore {
 
     public redisClientCall(cmd: string, ...args: any[]) {
         if (RedisHandlesStore._pipeline && cmd != 'batch') {
-            if (cmd != 'scard') { // scard needs to go through for removeValueFromIndexedSet to work right
+            if (cmd != 'scard') {
+                // scard needs to go through for removeValueFromIndexedSet to work right
                 RedisHandlesStore._pipeline.push([cmd, args]);
                 return;
             }
         }
-        const start = Date.now()
-        
+        const start = Date.now();
+
         const id = RedisHandlesStore._id++;
         const sab = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
         const view = new Int32Array(sab);
@@ -425,23 +429,22 @@ export class RedisHandlesStore implements IApiStore {
         }
 
         const msg = receiveMessageOnPort(port1);
-        port1.close()
-        
+        port1.close();
+
         const end = Date.now();
         redisTimings[cmd] = (redisTimings[cmd] ?? 0) + (end - start);
 
         if (!msg || msg.message.id !== id) {
-            Logger.log({message: `GlideClient ${cmd} received no/incorrect reply: ${msg}`, category: LogCategory.ERROR, event: 'redisClientCall.incorrectMessageResponse'});
+            Logger.log({ message: `GlideClient ${cmd} received no/incorrect reply: ${msg}`, category: LogCategory.ERROR, event: 'redisClientCall.incorrectMessageResponse' });
             return undefined;
         }
 
         const { ok, result, error } = msg.message;
         if (!ok) {
-            Logger.log({message: error?.message || `GlideClient ${cmd} failed`, category: LogCategory.ERROR, event: 'redisClientCall.errorFromPostMessage'})
+            Logger.log({ message: error?.message || `GlideClient ${cmd} failed`, category: LogCategory.ERROR, event: 'redisClientCall.errorFromPostMessage' });
         }
         return result;
     }
-
 
     // #endregion
 }
