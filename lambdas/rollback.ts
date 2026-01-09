@@ -1,1 +1,0 @@
-// This is meant to handle the 20 block and 2160 block double checks for rolled back data
