@@ -39,7 +39,7 @@ export const processBlock = async (txBlock: BlockPraos, repo: HandlesRepository)
                 const handles = handleAssets.flatMap(h => h[1])
                 const mintAssets: [string, string[]][] = minted.map(([policy, mintedHandles]) => [policy, handles.filter(k => mintedHandles[k] > 0n)]);
                 const metadata = Object.fromEntries(
-                    Object.entries(txBody?.metadata?.labels ?? {}).filter(([label]) => label == '721') // We only need 721 label
+                    Object.entries(txBody?.metadata?.labels ?? {}).filter(([label, labelObj]) => label == '721' && labelObj.json) // We only need 721 label
                         .map(([label, labelObj]) => {
                             const { json } = labelObj;
                             const { version, ...policies } = json as any;
