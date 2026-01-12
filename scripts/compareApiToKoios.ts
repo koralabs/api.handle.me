@@ -7,7 +7,7 @@ import userReadLine from 'node:readline/promises';
 import { Color, colorString } from './colors';
 
 let NETWORK: string = 'preview';
-const networkDelay: any = {"preview": 101, "preprod": 101, "mainnet": 250}
+const networkDelay: any = {"preview": 101, "preprod": 101, "mainnet": 50}
 const POLICIES: any[] = [ 
     { id: "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a", supply: 0},
     { id: "6c32db33a422e0bc2cb535bb850b5a6e9a9572222056d6ddc9cbc26e", supply: 0}
@@ -25,17 +25,15 @@ console.sameLine = function(message) {
     process.stdout.write(message);
 }
 
-let useCachedData = fs.existsSync('localHandles.json');
-
 const userInput = userReadLine.createInterface({
   input: process.stdin,
   output: process.stdout
 });
 
-async function askUserUseCachedData(): Promise<boolean> {
+async function askUserUseCachedData(name: string, date: Date): Promise<boolean> {
     let answer = "";
     while(!['y', 'n', 'yes', 'no'].includes(answer.toLowerCase())){
-        answer = await userInput.question(`Would you like to use the already cached data? (yes/no): `);
+        answer = await userInput.question(`Would you like to use the already cached ${name} data - dated ${date.toLocaleDateString()} ${date.toLocaleTimeString()}? (yes/no): `);
     }
     return answer.toLowerCase().startsWith('y');
 }
@@ -60,16 +58,6 @@ async function askUserForPolicyCounts() {
         policy.supply = supply;
     }
 }
-
-if (useCachedData) {
-    useCachedData = await askUserUseCachedData();
-}
-// DON'T TURN THIS INTO AN else!
-if (!useCachedData) {
-    await askUserForNetwork();
-    await askUserForPolicyCounts();
-}
-userInput.close();
 
 const startTime = new Date();
 console.log(`Start time: ${startTime.toLocaleString()}`)
@@ -142,7 +130,7 @@ const fetchKoios = async (path: string, method = 'GET', body?: string) => {
 };
 
 export const fetchPolicyAssets = async (policyId: string, policySupply: number): Promise<string[]> => {
-    const limit = 1000;
+    const limit = 100;
     let results: Set<string> = new Set();
     try {
         const offsets = Array.from({ length: Math.ceil(policySupply / limit) }, (_, index) => index * limit)
@@ -150,7 +138,7 @@ export const fetchPolicyAssets = async (policyId: string, policySupply: number):
         // process.exit()
         await asyncForEach(offsets, async (offset) => {
             console.sameLine(`Requesting policy assets page ${(offset/limit) + 1} of ${offsets.length}`);
-            const items: KoiosAsset[] = await fetchKoios(`policy_asset_list?_asset_policy=${policyId}&limit=${limit}&offset=${offset}&order=asset_name.asc`);
+            const items: KoiosAsset[] = await fetchKoios(`asset_list?policy_id=eq.${policyId}&limit=${limit}&offset=${offset}&order=fingerprint`);
             for (const item of items) {
                 results.add(item.asset_name);
             }
@@ -241,16 +229,37 @@ const getPolicyAssets = async () => {
 };
 
 (async () => {
-    let localHandles: Map<string, any> = new Map<string, any>();
+    let useLiveCachedData: boolean | Date = fs.existsSync('liveHandles.json') && fs.statSync('liveHandles.json').mtime;
+    let useLocalCachedData: boolean | Date = fs.existsSync('localHandles.json') && fs.statSync('localHandles.json').mtime;
+
+    if (useLiveCachedData) {
+        useLiveCachedData = await askUserUseCachedData('Koios', useLiveCachedData);
+    }
+    if (useLocalCachedData) {
+        useLocalCachedData = await askUserUseCachedData('local API', useLocalCachedData);
+    }
+    // DON'T TURN THIS INTO AN else!
+    if (!useLiveCachedData) {
+        await askUserForNetwork();
+        await askUserForPolicyCounts();
+    }
+    userInput.close();
+
     let liveHandles: Map<string, any> = new Map<string, any>();
-    if (useCachedData) {
-        localHandles = new Map<string, any>(JSON.parse(fs.readFileSync('localHandles.json').toString()));
+    if (useLiveCachedData) {
         liveHandles = new Map<string, any>(JSON.parse(fs.readFileSync('liveHandles.json').toString()));
     } else {
         liveHandles = await getPolicyAssets();
         fs.writeFileSync('liveHandles.json', JSON.stringify(Array.from(liveHandles.entries())));
+    }
 
-        const pageSize = 1000;
+    let localHandles: Map<string, any> = new Map<string, any>();
+    if (useLocalCachedData) {
+        localHandles = new Map<string, any>(JSON.parse(fs.readFileSync('localHandles.json').toString()));
+    }
+    else {
+
+        const pageSize = 250;
         const totalPages = Math.ceil(parseInt((await apiRequest(`http://localhost:3141/handles?records_per_page=${pageSize}&page=1`)).headers!['x-handles-search-total']!.toString()) / pageSize);
         await asyncForEach(
             [...Array(totalPages).keys()],
@@ -264,11 +273,11 @@ const getPolicyAssets = async () => {
 
                 localHandles = new Map([...localHandles, ...new Map<string, any>(JSON.parse(local.body!).map((h: any) => [h.name, h]))]);
             },
-            1000
+            75
         );
         console.log(); // Needed to break the same line above
         fs.writeFileSync('localHandles.json', JSON.stringify(Array.from(localHandles.entries())));
-    }
+    }    
 
     const localKeys = new Set(localHandles.keys());
     const liveKeys = new Set(liveHandles.keys());
