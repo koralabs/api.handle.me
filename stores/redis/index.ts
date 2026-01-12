@@ -1,22 +1,10 @@
 import { ApiIndexType, chunk, Holder, IApiMetrics, IApiStore, IHandleFileContent, IndexNames, ISlotHistory, isNumeric, LogCategory, Logger, NETWORK, SortAndLimitOptions, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { GlideString, HashDataType, SortOptions } from '@valkey/valkey-glide';
-import stdOut from 'node:readline';
 import { promisify } from 'util';
 import { MessageChannel, receiveMessageOnPort, Worker } from 'worker_threads';
 import { inflate } from 'zlib';
 import { DISABLE_HANDLES_SNAPSHOT, NODE_ENV } from '../../config';
 import { handleEraBoundaries, MAX_SETS_PER_PIPE, META_INDEXES, ORDERED_SLOTS } from '../../config/constants';
-
-declare global {
-  interface Console {
-    sameLine(msg: string): void;
-  }
-}
-console.sameLine = function(message) {
-    stdOut.clearLine(process.stdout, 0); // Clear the current line from the cursor to the right
-    stdOut.cursorTo(process.stdout, 0); // Move the cursor to the beginning of the line
-    process.stdout.write(message);
-}
 
 // const glideClient = await GlideClient.createClient({
 //       addresses: [{ host: 'https://localhost', port: 6379 }],
