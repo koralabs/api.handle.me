@@ -6,6 +6,10 @@ import stdOut from 'node:readline';
 import userReadLine from 'node:readline/promises';
 import { Color, colorString } from './colors';
 
+/* bash command to query the json files
+    jq -r '.[] | select(.[0] == "papagoose")' localHandles.json
+*/
+
 let NETWORK: string = 'preview';
 const networkDelay: any = {"preview": 101, "preprod": 101, "mainnet": 50}
 const POLICIES: any[] = [ 
@@ -289,6 +293,8 @@ const getPolicyAssets = async () => {
     const addressMismatches: Record<string, any> = {};
     const utxoMismatches: Record<string, any> = {};
     const holderMismatches: Record<string, any> = {};
+    const scriptMismatches: Record<string, any> = {};
+    const datumMismatches: Record<string, any> = {};
     const defaultMismatches: Record<string, any> = {};
 
     console.log(colorString(Color.FgBlue, `Comparing ${bothKeys.size} handles present in both local and live data`));
