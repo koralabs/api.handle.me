@@ -5,20 +5,20 @@ import https from 'https';
 import stdOut from 'node:readline';
 import userReadLine from 'node:readline/promises';
 import { Color, colorString } from './colors';
-declare global {
-  interface Console {
-    sameLine(msg: string): void;
-  }
-}
 
 let NETWORK: string = 'preview';
-const networkDelay: any = {"preview": 101, "preprod": 101, "mainnet": 100}
+const networkDelay: any = {"preview": 101, "preprod": 101, "mainnet": 250}
 const POLICIES: any[] = [ 
     { id: "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a", supply: 0},
     { id: "6c32db33a422e0bc2cb535bb850b5a6e9a9572222056d6ddc9cbc26e", supply: 0}
 ]
 interface KoiosAsset { asset_name: string; }
 
+declare global {
+  interface Console {
+    sameLine(msg: string): void;
+  }
+}
 console.sameLine = function(message) {
     stdOut.clearLine(process.stdout, 0); // Clear the current line from the cursor to the right
     stdOut.cursorTo(process.stdout, 0); // Move the cursor to the beginning of the line

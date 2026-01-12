@@ -1,9 +1,20 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { IHandleFileContent, IndexNames, MintingData, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import fs from 'fs';
+import stdOut from 'node:readline';
 import zlib from 'zlib';
-
 import { RedisHandlesStore } from '../stores/redis';
+
+declare global {
+  interface Console {
+    sameLine(msg: string): void;
+  }
+}
+console.sameLine = function(message) {
+    stdOut.clearLine(process.stdout, 0); // Clear the current line from the cursor to the right
+    stdOut.cursorTo(process.stdout, 0); // Move the cursor to the beginning of the line
+    process.stdout.write(message);
+}
 
 const getRedisItems = async () => {
     const utxos: Map<string, UTxOWithTxInfo | null> = new Map();
@@ -16,7 +27,7 @@ const getRedisItems = async () => {
     try {
         const redisHandleStore = new RedisHandlesStore();
         await redisHandleStore.initialize();
-        console.log('Connected to Valkey');
+        // console.log('Connected to Valkey');
 
         let cursor = '0';
         let totalKeys = 0;
@@ -33,9 +44,9 @@ const getRedisItems = async () => {
             if (keys && keys.length > 0) {
                 totalKeys += keys.length;
 
-                // Log progress every 100k keys
-                if (totalKeys % 100000 === 0 || totalKeys % 100000 < keys.length) {
-                    console.log(`Progress: ${totalKeys.toLocaleString()} keys scanned (cursor: ${cursor})`);
+                // Log progress every 10k keys
+                if (totalKeys % 10000 === 0 || totalKeys % 10000 < keys.length) {
+                    console.sameLine(`Progress: ${totalKeys.toLocaleString()} keys scanned (cursor: ${cursor})`);
                 }
 
                 // check if keys starts with ({root}:utxo_slot | {root}:utxo) and add to utxoKeys
@@ -60,9 +71,9 @@ const getRedisItems = async () => {
             if (keys && keys.length > 0) {
                 totalKeys += keys.length;
 
-                // Log progress every 100k keys
-                if (totalKeys % 100000 === 0 || totalKeys % 100000 < keys.length) {
-                    console.log(`Progress: ${totalKeys.toLocaleString()} keys scanned (cursor: ${cursor})`);
+                // Log progress every 10k keys
+                if (totalKeys % 10000 === 0 || totalKeys % 10000 < keys.length) {
+                    console.sameLine(`Progress: ${totalKeys.toLocaleString()} keys scanned (cursor: ${cursor})`);
                 }
 
                 // check if keys starts with ({root}:utxo_slot | {root}:utxo) and add to utxoKeys
@@ -73,7 +84,7 @@ const getRedisItems = async () => {
                         redisHandleStore.getValuesFromIndexedSet(IndexNames.MINT, mintKey);
                     }
                 });
-                console.log('PIPELINE RESULTS LENGTH', pipelineResults, pipelineResults.length);
+                // console.log('PIPELINE RESULTS LENGTH', pipelineResults, pipelineResults.length);
                 for (let i = 0; i < pipelineResults.length; i++) {
                     const item = pipelineResults[i];
                     const filteredResults: MintingData[] = item ? Array.from(item).map(md => JSON.parse(md)).filter(md => md.created_slot <= lastSlot) : [];
@@ -107,8 +118,8 @@ export const processSnapshot = async (network: string) => {
         utxos: Array.from(results.utxos)
             .map(([_, v]) => v)
             .filter((v): v is UTxOWithTxInfo => v !== null),
-        mintingData: Array.from(results.mints).reduce<Record<string, MintingData[]>>((acc, [k, v]) => {
-            if (v !== null) acc[k] = v;
+        mintingData: Array.from(results.mints).reduce<{ [handle: string]: MintingData; }>((acc, [k, v]) => {
+            if (v !== null) acc[k]  = v as unknown as MintingData;
             return acc;
         }, {})
     };
@@ -124,7 +135,7 @@ export const handler = async (event: any) => {
         const { utxoSchemaVersion = 1 } = fileJson;
         const fileName = `${networks[i]}/utxo-snapshot/${utxoSchemaVersion}/handles_utxos.gz`;
 
-        const filesData = [
+        const zippedSnapshots = [
             {
                 Key: fileName,
                 Body: zlib.deflateSync(JSON.stringify(fileJson))
@@ -132,7 +143,7 @@ export const handler = async (event: any) => {
         ];
 
         const s3Result = await Promise.all(
-            filesData.map(({ Key, Body }) => {
+            zippedSnapshots.map(({ Key, Body }) => {
                 const params = {
                     Bucket: 'api.handle.me',
                     Key,
@@ -152,8 +163,11 @@ export const handler = async (event: any) => {
 };
 
 if (process.argv[2] === 'local') {
-    (async () => {
-        const fileJson = await processSnapshot('preview');
-        fs.writeFileSync(`handles_utxos.json`, JSON.stringify(fileJson));
+    await (async () => {
+        const fileData = await processSnapshot(process.env.NETWORK ?? 'preview');
+        const fileJson = JSON.stringify(fileData);
+        fs.writeFileSync(`handles_utxos.json`, fileJson);
+        fs.writeFileSync(`handles_utxos.gz`, zlib.deflateSync(fileJson));
     })();
+    process.exit();
 }

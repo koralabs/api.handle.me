@@ -1,10 +1,22 @@
 import { ApiIndexType, chunk, Holder, IApiMetrics, IApiStore, IHandleFileContent, IndexNames, ISlotHistory, isNumeric, LogCategory, Logger, NETWORK, SortAndLimitOptions, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { GlideString, HashDataType, SortOptions } from '@valkey/valkey-glide';
+import stdOut from 'node:readline';
 import { promisify } from 'util';
 import { MessageChannel, receiveMessageOnPort, Worker } from 'worker_threads';
 import { inflate } from 'zlib';
 import { DISABLE_HANDLES_SNAPSHOT, NODE_ENV } from '../../config';
 import { handleEraBoundaries, MAX_SETS_PER_PIPE, META_INDEXES, ORDERED_SLOTS } from '../../config/constants';
+
+declare global {
+  interface Console {
+    sameLine(msg: string): void;
+  }
+}
+console.sameLine = function(message) {
+    stdOut.clearLine(process.stdout, 0); // Clear the current line from the cursor to the right
+    stdOut.cursorTo(process.stdout, 0); // Move the cursor to the beginning of the line
+    process.stdout.write(message);
+}
 
 // const glideClient = await GlideClient.createClient({
 //       addresses: [{ host: 'https://localhost', port: 6379 }],
@@ -72,6 +84,7 @@ export class RedisHandlesStore implements IApiStore {
     async repopulateIndexesFromUTxOs(updateHandleIndexes: (utxo: UTxOWithTxInfo) => void): Promise<void> {
         let cursor = '0';
         let deleted = 0;
+        let added = 0;
         const startTime = Date.now();
         for (const indexName of Object.values(IndexNames)) {
             // Skip UTXO and MINT indexes
@@ -105,10 +118,23 @@ export class RedisHandlesStore implements IApiStore {
             } else {
                 Logger.log({ message: `UTxO not found for key: ${utxoId}`, category: LogCategory.NOTIFY, event: 'repopulateIndexesFromUTxOs.missingUTxO' });
             }
+            added++;
+            // Log progress every 10k keys
+            if (added % 10000 === 0) {
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+                const rate = (added / ((Date.now() - startTime) / 1000)).toFixed(0);
+                console.log(`Added: ${added.toLocaleString()} keys (${elapsed}s, ~${rate} keys/sec)`);
+            }
         }
+        
+        const endTime = Date.now();
+        const pad = (num: number) => num.toString().padStart(2, '0');
+        const seconds = (endTime - startTime) / 1000;
+        Logger.log(`Repopulate Handle indexes from UTxOs took ${pad(Math.floor(seconds / 3600))}:${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`);
     }
 
     public async tryPopulateFromS3UTxOs(updateHandleIndexes: (utxo: UTxOWithTxInfo) => void): Promise<{ slot: number; id: string }> {
+        const startTime = Date.now();
         this.redisClientCall('flushdb');
         let id = handleEraBoundaries[NETWORK].id;
         let slot = handleEraBoundaries[NETWORK].slot;
@@ -166,6 +192,11 @@ export class RedisHandlesStore implements IApiStore {
                 id = s3Hash;
                 slot = s3Slot;
             }
+            
+            const endTime = Date.now();
+            const pad = (num: number) => num.toString().padStart(2, '0');
+            const seconds = (endTime - startTime) / 1000;
+            Logger.log(`Populate from S3 took ${pad(Math.floor(seconds / 3600))}:${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`);
         }
 
         const metrics = this.getMetrics();

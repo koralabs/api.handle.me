@@ -30,7 +30,7 @@ class App {
         this.env = NODE_ENV || 'development';
         this.port = PORT || 3141;
         this.startTimer = Date.now();
-        process.env.INDEX_SCHEMA_VERSION = '50'
+        process.env.INDEX_SCHEMA_VERSION = '51'
         process.env.UTXO_SCHEMA_VERSION = '1'
     }
 

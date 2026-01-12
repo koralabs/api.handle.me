@@ -125,3 +125,4 @@ preview-node.ip
 *liveHandles.json
 tmp
 handles_utxos.json
+handles_utxos.gz
