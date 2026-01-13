@@ -18,7 +18,6 @@ import { NextFunction, Request, Response } from 'express';
 import { isDatumEndpointEnabled } from '../config';
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandleViewModel } from '../models/view/handle.view.model';
-import { PersonalizedHandleViewModel } from '../models/view/personalizedHandle.view.model';
 import { HandlesRepository } from '../repositories/handlesRepository';
 
 class HandlesController {
@@ -168,10 +167,7 @@ class HandlesController {
             const handle = await HandlesController.getHandleFromRepo(req);
 
             if (handle.code == 200 || handle.code == 202 ) {
-                handle.handle!.personalization =  await handleRepo.getPersonalization(handle.handle)
-
-                const { personalization } = new PersonalizedHandleViewModel(handle.handle);
-            
+                const personalization =  await handleRepo.getPersonalization(handle.handle);  
                 if (!personalization) {
                     res.status(handle.code).json({});
                     return;

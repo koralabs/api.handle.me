@@ -754,13 +754,18 @@ export class HandlesRepository {
 
     public async getPersonalization(handle: StoredHandle | null | undefined): Promise<IPersonalization | undefined> {
         let personalization = handle?.personalization;
-        if (handle?.reference_token) {
-            const { projectAttributes } = this._buildPersonalizationData(handle, handle.reference_token.datum!);
+        if (handle?.reference_utxo) {
+            const refUtxo = this.getUTxO(handle?.reference_utxo)
+            console.log('REFUTXO', refUtxo)
+            const { projectAttributes } = this._buildPersonalizationData(handle, refUtxo?.datum!);
+            console.log('PROJECTATTRIBUTES', projectAttributes)
             personalization = await this._buildPersonalization({ 
                 personalizationDatum: projectAttributes!, 
                 personalization: handle.personalization ?? { validated_by: '', trial: true, nsfw: true } 
             });
         }
+        console.log('REFERENCE', handle?.reference_utxo)
+        console.log('PERSONALIZATION', personalization)
         return personalization
     }
     
