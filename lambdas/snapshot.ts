@@ -118,8 +118,8 @@ export const processSnapshot = async (network: string) => {
         utxos: Array.from(results.utxos)
             .map(([_, v]) => v)
             .filter((v): v is UTxOWithTxInfo => v !== null),
-        mintingData: Array.from(results.mints).reduce<{ [handle: string]: MintingData; }>((acc, [k, v]) => {
-            if (v !== null) acc[k]  = v as unknown as MintingData;
+        mintingData: Array.from(results.mints).reduce<{ [handle: string]: MintingData[]; }>((acc, [k, v]) => {
+            if (v !== null) acc[k]  = v as unknown as MintingData[];
             return acc;
         }, {})
     };
