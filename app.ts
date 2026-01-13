@@ -141,6 +141,15 @@ class App {
         const handlesRepo = new HandlesRepository(new this.registry.handlesStore());
         if (process.env.READ_ONLY_STORE?.toLocaleLowerCase() == 'true'|| this.env === 'test') {
             await handlesRepo.initialize();
+            
+            // If we're running local we want the scanner to replace ogmios scanning
+            if (process.argv[2] === '--with-scanner') {
+                await (async () => {
+                    const lambda = await import('./lambdas/scanner');
+                    setInterval(lambda.lambdaHandler, 60000)
+                })();
+            }
+
             return;
         }
 
