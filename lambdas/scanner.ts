@@ -104,14 +104,14 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context:AWSLambda
                         script: o.reference_script ?? undefined
                     }}),
                     signatories: [],
-                    metadata: {hash:'', labels: Object.fromEntries(Object.entries(t.metadata).map(([label, value]) => [label, { json: value as Metadatum }]))}
+                    metadata: {hash:'', labels: Object.fromEntries(Object.entries(t.metadata ?? {}).map(([label, value]) => [label, { json: value as Metadatum }]))}
                 }
                 //console.log('TX', JSON.stringify(tx, ( _, value) => typeof value == 'bigint' ? Number(value.toString()) : value, 4))
                 block.transactions.push(tx);
             }
 
             // - Call processBlock
-            processBlock(block as unknown as BlockPraos, handlesRepo) 
+            processBlock(block as unknown as BlockPraos, handlesRepo);
 
             handlesRepo.setMetrics({
                 currentSlot: block.slot,
