@@ -143,7 +143,7 @@ class App {
             await handlesRepo.initialize();
             
             // If we're running local we want the scanner to replace ogmios scanning
-            if (process.argv.includes('--with-scanner')) {
+            if (['development', 'test'].includes(NODE_ENV) && process.env.USE_LAMBDA_SCANNER == 'true') {
                 await (async () => {
                     const lambda = await import('./lambdas/scanner');
                     setInterval(lambda.lambdaHandler, 60000)
