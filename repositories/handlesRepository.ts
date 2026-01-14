@@ -4,7 +4,7 @@ import { designerSchema, handleDatumSchema, portalSchema, socialsSchema, subHand
 import * as crypto from 'crypto';
 import { isDatumEndpointEnabled } from '../config';
 import { HASHES, MAX_HASHES_PER_PIPE, MAX_SETS_PER_PIPE, MAX_ZSETS_PER_PIPE, SETS, ZSETS } from '../config/constants';
-import { BuildPersonalizationInput, HandleOnChainMetadata, MetadataLabel } from '../interfaces/ogmios.interfaces';
+import { BuildPersonalizationInput } from '../interfaces/ogmios.interfaces';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { decodeCborFromIPFSFile } from '../utils/ipfs';
 const blackListedIpfsCids: string[] = [];
@@ -564,15 +564,12 @@ export class HandlesRepository {
                         ? utxo.mint.flatMap(([, handles]) => Object.keys(handles)).includes(assetName) 
                         : false 
                     : utxo.mint.flatMap(([, handles]) => Object.keys(handles)).includes(assetName)
-
-                const mintingData = this.store.getValuesFromIndexedSet(IndexNames.MINT, name);
-                const mintingDataArray = mintingData ? Array.from(mintingData).map(md => JSON.parse(md)).sort((a, b) => a.created_slot - b.created_slot) : [];
-
+                const mintIndexValue = this.store.getValuesFromIndexedSet(IndexNames.MINT, name);
+                const mintingData: MintingData = mintIndexValue ? Array.from(mintIndexValue).map(md => JSON.parse(md)).sort((a, b) => a.created_slot - b.created_slot)[0] : undefined;
                 const {lovelace, datum, address, slot, script } = utxo
-                const metadata: { [handleName: string]: HandleOnChainMetadata } | undefined = ((utxo.metadata as any)[MetadataLabel.NFT] as any)?.[policy];
-                const data = metadata && (metadata[isCip67 ? ownerTokenHex : name] as unknown as IHandleMetadata);
+                const data = mintingData?.metadata;
                 const existingHandle = this.prepareHandle(this.store.getValueFromIndex(IndexNames.HANDLE, name) as StoredHandle) ?? undefined;
-                let handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingDataArray?.[0]?.created_slot}, data);
+                let handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData.created_slot}, data);
                 
                 // if (['ap@adaprotocol', 'b-263-54'].some(n => n == handle.name))
                 //     debugLog('PROCESSED SCANNED INFO START', slotNumber, {...handle, utxo})
