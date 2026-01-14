@@ -65,7 +65,6 @@ const fetchKoios = async(path: string, method = 'GET', body?: string) => {
 }
 
 export const lambdaHandler = async (event: AWSLambda.ALBEvent, context:AWSLambda.Context) => {
-    
     // Get last block from Valkey
     const handlesRepo = new HandlesRepository(new RedisHandlesStore());
     const { lastSlot = Infinity, currentSlot = 0, currentBlockHash } = handlesRepo.getMetrics();
