@@ -1,5 +1,5 @@
 import { BlockPraos, Metadatum, Transaction } from '@cardano-ogmios/schema';
-import { delay, Logger, NETWORK } from '@koralabs/kora-labs-common';
+import { delay, LogCategory, Logger, NETWORK } from '@koralabs/kora-labs-common';
 import { fetch } from 'cross-fetch';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { processBlock } from '../services/processBlock';
@@ -39,11 +39,10 @@ export const fetchPaginatedResults = async <T>(endpointSegment: string): Promise
                 hasMorePages = items.length == maxCount;
             }
             page += 1;
-            Logger.log(`Done fetching page ${page} with ${results.length} results`);
             await delay(100);
         }
     } catch (error) {
-        Logger.log({ message: `Error fetching ${endpointSegment}: ${error}`, event: 'fetchPaginatedResults' });
+        Logger.log({ message: `Error fetching ${endpointSegment}: ${error}`, category: LogCategory.NOTIFY, event: 'fetchPaginatedResults' });
         return [];
     }
 
