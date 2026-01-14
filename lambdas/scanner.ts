@@ -1,5 +1,5 @@
 import { BlockPraos, Metadatum, Transaction } from '@cardano-ogmios/schema';
-import { NETWORK } from '@koralabs/kora-labs-common';
+import { delay, Logger, NETWORK } from '@koralabs/kora-labs-common';
 import { fetch } from 'cross-fetch';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { processBlock } from '../services/processBlock';
@@ -16,6 +16,38 @@ const blockfrostApiCall = async (endpointSegment: string) => {
 
     const url = `https://cardano-${NETWORK.toLowerCase()}.blockfrost.io/api/v0/${endpointSegment}`;
     return await fetch(url, {headers})
+};
+
+export const fetchPaginatedResults = async <T>(endpointSegment: string): Promise<T[]> => {
+    const maxCount = 100;
+    let page = 1;
+    let hasMorePages = true;
+
+    let results: T[] = [];
+    try {
+        while (hasMorePages) {
+            const response = await blockfrostApiCall(`${endpointSegment}?order=asc&count=${maxCount}&page=${page}`);
+
+            if (response.status == 404) {
+                return [];
+            }
+            if (response.status >= 300) {
+                hasMorePages = false;
+            } else {
+                const items = await response.json();
+                results = results.concat(items);
+                hasMorePages = items.length == maxCount;
+            }
+            page += 1;
+            Logger.log(`Done fetching page ${page} with ${results.length} results`);
+            await delay(100);
+        }
+    } catch (error) {
+        Logger.log({ message: `Error fetching ${endpointSegment}: ${error}`, event: 'fetchPaginatedResults' });
+        return [];
+    }
+
+    return results;
 };
 
 const fetchKoios = async(path: string, method = 'GET', body?: string) => {
@@ -39,20 +71,16 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context:AWSLambda
     const { lastSlot = Infinity, currentSlot = 0, currentBlockHash } = handlesRepo.getMetrics();
     
     if (lastSlot - currentSlot <= MAX_TIP_SCAN_SLOTS) {
-        // - Get blocks fom Blockfrost
-
-        // TODO: At MAX_TIP_SCAN_SLOTS of 30 mins, that should be ~90 blocks. But could exceed Blockfrost page limit of 100 
-        const bResp: {hash: string, slot: number, confirmations: number}[] = await (await blockfrostApiCall(`blocks/${currentBlockHash}/next`)).json()
+        const bResp: {hash: string, slot: number, confirmations: number}[] = await fetchPaginatedResults(`blocks/${currentBlockHash}/next`);
         bResp.sort((a, b) => b.confirmations - a.confirmations);
         for (const b of bResp) {
             const block = {id: b.hash, slot: b.slot, confirmations: b.confirmations, transactions: [] as Transaction[]}
             
             if (block.confirmations < 20) break;
 
-            // TODO: This could theoretically be >100 (Blockfrost page limit). But eutxo says 100 is the current all time high
-            const _tx_hashes = await (await blockfrostApiCall(`blocks/${b.hash}/txs`)).json()
+            const _tx_hashes = await fetchPaginatedResults(`blocks/${b.hash}/txs`);
 
-            const txList: any[] = await (await fetchKoios(`tx_info`, 'POST', JSON.stringify({_tx_hashes, ...koiosSettings}))).json()
+            const txList: any[] = await fetchKoios(`tx_info`, 'POST', JSON.stringify({_tx_hashes, ...koiosSettings}));
             
             for (const t of txList) {
                 // - Convert to format that processBlock expects
