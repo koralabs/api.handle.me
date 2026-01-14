@@ -735,7 +735,6 @@ export class HandlesRepository {
     }
 
     public getDefaultHandle(handles: DefaultHandleInfo[]): DefaultHandleInfo {
-
         // OG if no default set
         const ogHandle = this._sortOGHandle(handles);
         if (ogHandle) return ogHandle;
@@ -945,7 +944,7 @@ export class HandlesRepository {
             handle.last_update_address = projectAttributes?.last_update_address
             handle.original_address = projectAttributes?.original_address
             handle.id_hash = projectAttributes?.id_hash
-            handle.pz_enabled = projectAttributes?.pz_enabled == true
+            handle.pz_enabled = projectAttributes?.pz_enabled
             handle.last_edited_time = projectAttributes?.last_edited_time
 
             return {
