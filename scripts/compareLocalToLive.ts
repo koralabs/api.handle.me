@@ -4,6 +4,7 @@ import http, { OutgoingHttpHeaders } from 'http';
 import https from 'https';
 import stdOut from 'node:readline';
 import userReadLine from 'node:readline/promises';
+import { HandleViewModel } from '../models/view/handle.view.model';
 import { Color, colorString } from './colors';
 
 /* bash command to query the json files
@@ -37,16 +38,11 @@ async function askUserUseCachedData(name: string, date: Date): Promise<boolean> 
 async function askUserForNetwork() {
     let network = ""
     while(!['preview', 'preprod', 'mainnet'].includes(network.toLowerCase())){
-        network = await userInput.question(`Which Cardano network? ([preview], preprod, mainnet): `);
-        if (!network) {
-            return;
-        }
+        network = await userInput.question(`Which Cardano network? (preview, preprod, mainnet): `);
     }
     NETWORK = network;
 }
 
-const startTime = new Date();
-console.log(`Start time: ${startTime.toLocaleString()}`)
 
 const apiRequest = (url: string): Promise<{ statusCode?: number; body?: string; error?: string; headers?: OutgoingHttpHeaders }> => {
     const client = url.startsWith('http:') ? http : https;
@@ -121,6 +117,9 @@ const getApiHandles = async (host: string) => {
 }
 
 (async () => {
+    const startTime = new Date();
+    console.log(`Start time: ${startTime.toLocaleString()}`);
+
     let useLiveCachedData: boolean | Date = fs.existsSync('liveHandles.json') && fs.statSync('liveHandles.json').mtime;
     let useLocalCachedData: boolean | Date = fs.existsSync('localHandles.json') && fs.statSync('localHandles.json').mtime;
 
@@ -135,17 +134,17 @@ const getApiHandles = async (host: string) => {
         await askUserForNetwork();
     }
     userInput.close();
-
-    let liveHandles: Map<string, any> | Promise<Map<string, any>> = new Map<string, any>();
+    
+    let liveHandles: Map<string, HandleViewModel> | Promise<Map<string, HandleViewModel>> = new Map<string, HandleViewModel>();
     if (useLiveCachedData) {
-        liveHandles = new Map<string, any>(JSON.parse(fs.readFileSync('liveHandles.json').toString()));
+        liveHandles = new Map<string, HandleViewModel>(JSON.parse(fs.readFileSync('liveHandles.json').toString()));
     } else {
         liveHandles = getApiHandles(`https://${NETWORK == 'mainnet' ? '' : NETWORK + '.'}api.handle.me`);
     }
 
-    let localHandles: Map<string, any> | Promise<Map<string, any>> = new Map<string, any>();
+    let localHandles: Map<string, HandleViewModel> | Promise<Map<string, HandleViewModel>> = new Map<string, HandleViewModel>();
     if (useLocalCachedData) {
-        localHandles = new Map<string, any>(JSON.parse(fs.readFileSync('localHandles.json').toString()));
+        localHandles = new Map<string, HandleViewModel>(JSON.parse(fs.readFileSync('localHandles.json').toString()));
     }
     else {
         localHandles = getApiHandles('http://localhost:3141');
@@ -153,9 +152,13 @@ const getApiHandles = async (host: string) => {
 
     liveHandles = await liveHandles;
     localHandles = await localHandles;
-    
+
     fs.writeFileSync('liveHandles.json', JSON.stringify(Array.from(liveHandles.entries())));
     fs.writeFileSync('localHandles.json', JSON.stringify(Array.from(localHandles.entries())));
+
+    const lastLiveSlot = Array.from(liveHandles.values()).reduce((max, h) => (h.updated_slot_number > max ? h.updated_slot_number : max), -Infinity);
+    const lastLocalSlot = Array.from(localHandles.values()).reduce((max, h) => (h.updated_slot_number > max ? h.updated_slot_number : max), -Infinity);
+    const startingSlot = Math.min(lastLocalSlot, lastLiveSlot);
 
     const localKeys = new Set(localHandles.keys());
     const liveKeys = new Set(liveHandles.keys());
@@ -163,7 +166,8 @@ const getApiHandles = async (host: string) => {
 
     const missingInLive = [...localKeys].filter((key) => !liveKeys.has(key));
     const missingInLocal = [...liveKeys].filter((key) => !localKeys.has(key));
-
+    const updatedAfter: string[] = [];
+    
     const addressMismatches: Record<string, any> = {};
     const utxoMismatches: Record<string, any> = {};
     const holderMismatches: Record<string, any> = {};
@@ -171,20 +175,26 @@ const getApiHandles = async (host: string) => {
 
     console.log(colorString(Color.FgBlue, `Comparing ${bothKeys.size} handles present in both local and live data`));
 
+    let updatedAfterLastSlot = 0;
     bothKeys.forEach((key) => {
-        const localHandle = localHandles.get(key);
-        const liveHandle = liveHandles.get(key);
+        const localHandle = localHandles.get(key)!;
+        const liveHandle = liveHandles.get(key)!;
 
-        if (localHandle.utxo !== liveHandle.utxo) {
+        if (localHandle.updated_slot_number != liveHandle.updated_slot_number) {
+            updatedAfter.push(localHandle.name);
+            updatedAfterLastSlot++;
+            return;
+        };
+        if (localHandle.utxo != liveHandle.utxo) {
             utxoMismatches[key] = { utxo: { live: liveHandle.utxo, local: localHandle.utxo } };
         }
-        if (localHandle.resolved_addresses.ada !== liveHandle.address) {
-            addressMismatches[key] = { resolved_address: { live: liveHandle.address, local: localHandle.resolved_addresses.ada } };
+        if (localHandle.resolved_addresses.ada != liveHandle.resolved_addresses.ada) {
+            addressMismatches[key] = { resolved_address: { live: liveHandle.resolved_addresses.ada, local: localHandle.resolved_addresses.ada } };
         }
-        if (localHandle.holder !== liveHandle.stake_address) {
-            holderMismatches[key] = { holder: { live: liveHandle.stake_address, local: localHandle.holder } };
+        if (localHandle.holder != liveHandle.holder) {
+            holderMismatches[key] = { holder: { live: liveHandle.holder, local: localHandle.holder } };
         }
-        if (localHandle.default_in_wallet !== liveHandle.default_in_wallet) {
+        if (localHandle.default_in_wallet != liveHandle.default_in_wallet) {
             defaultMismatches[key] = { default_in_wallet: { live: liveHandle.default_in_wallet, local: localHandle.default_in_wallet } };
         }
     });
@@ -196,6 +206,7 @@ const getApiHandles = async (host: string) => {
         }
     }
 
+    console.log(colorString(updatedAfterLastSlot ? Color.FgYellow : Color.FgGreen, `Updated after last slot: ${updatedAfterLastSlot}`));
     console.log(colorString(missingInLive.length ? Color.FgRed : Color.FgGreen, `Missing in live: ${missingInLive.length ?? 0}`));
     console.log(colorString(missingInLocal.length ? Color.FgRed : Color.FgGreen, `Missing in local: ${missingInLocal.length ?? 0}`));
     console.log(colorString(Object.entries(addressMismatches).length ? Color.FgRed : Color.FgGreen, `Address mismatches: ${Object.entries(addressMismatches).length ?? 0}`));
@@ -203,7 +214,7 @@ const getApiHandles = async (host: string) => {
     console.log(colorString(Object.entries(holderMismatches).length ? Color.FgRed : Color.FgGreen, `Holder mismatches: ${Object.entries(holderMismatches).length ?? 0}`));
     console.log(colorString(Object.entries(defaultMismatches).length ? Color.FgRed : Color.FgGreen, `Default mismatches: ${Object.entries(defaultMismatches).length ?? 0}`));
 
-    fs.writeFileSync('discrepancies.json', JSON.stringify({ missingInLive, missingInLocal, mismatches }, null, 2));
+    fs.writeFileSync('discrepancies.json', JSON.stringify({ updatedAfter, missingInLive, missingInLocal, mismatches }, null, 2));
     const endTime = new Date();
     console.log(`End time: ${endTime.toLocaleString()}`)
     const pad = (num: number) => num.toString().padStart(2, '0');

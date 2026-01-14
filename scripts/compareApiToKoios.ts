@@ -45,10 +45,7 @@ async function askUserUseCachedData(name: string, date: Date): Promise<boolean> 
 async function askUserForNetwork() {
     let network = ""
     while(!['preview', 'preprod', 'mainnet'].includes(network.toLowerCase())){
-        network = await userInput.question(`Which Cardano network? ([preview], preprod, mainnet): `);
-        if (!network) {
-            return;
-        }
+        network = await userInput.question(`Which Cardano network? (preview, preprod, mainnet): `);
     }
     NETWORK = network;
 }
@@ -62,9 +59,6 @@ async function askUserForPolicyCounts() {
         policy.supply = supply;
     }
 }
-
-const startTime = new Date();
-console.log(`Start time: ${startTime.toLocaleString()}`)
 
 const apiRequest = (url: string): Promise<{ statusCode?: number; body?: string; error?: string; headers?: OutgoingHttpHeaders }> => {
     const client = url.startsWith('http:') ? http : https;
@@ -232,7 +226,11 @@ const getPolicyAssets = async () => {
     return assetMap;
 };
 
-(async () => {
+await (async () => {
+    const startTime = new Date();
+    console.log(`Start time: ${startTime.toLocaleString()}`)
+    const counts: Record<string, {page:number, total:number}> = {};
+    
     let useLiveCachedData: boolean | Date = fs.existsSync('liveHandles.json') && fs.statSync('liveHandles.json').mtime;
     let useLocalCachedData: boolean | Date = fs.existsSync('localHandles.json') && fs.statSync('localHandles.json').mtime;
 
@@ -249,27 +247,28 @@ const getPolicyAssets = async () => {
     }
     userInput.close();
 
-    let liveHandles: Map<string, any> = new Map<string, any>();
+    let liveHandles: Map<string, any> | Promise<Map<string, any>> = new Map<string, any>();
     if (useLiveCachedData) {
         liveHandles = new Map<string, any>(JSON.parse(fs.readFileSync('liveHandles.json').toString()));
     } else {
-        liveHandles = await getPolicyAssets();
-        fs.writeFileSync('liveHandles.json', JSON.stringify(Array.from(liveHandles.entries())));
+        liveHandles = getPolicyAssets();
     }
+
+    liveHandles = await liveHandles;
+    fs.writeFileSync('liveHandles.json', JSON.stringify(Array.from(liveHandles.entries())));
 
     let localHandles: Map<string, any> = new Map<string, any>();
     if (useLocalCachedData) {
         localHandles = new Map<string, any>(JSON.parse(fs.readFileSync('localHandles.json').toString()));
     }
     else {
-
         const pageSize = 250;
         const totalPages = Math.ceil(parseInt((await apiRequest(`http://localhost:3141/handles?records_per_page=${pageSize}&page=1`)).headers!['x-handles-search-total']!.toString()) / pageSize);
         await asyncForEach(
             [...Array(totalPages).keys()],
             async (i) => {
                 const local = await apiRequest(`http://localhost:3141/handles?records_per_page=${pageSize}&page=${i + 1}`);
-                console.sameLine(`Receiving local API Handles page ${i + 1} of ${totalPages}`);
+                console.sameLine(Object.entries(counts).map(([key, { page, total }]) => `${key} is on ${page} of ${total}`).join(' | '));
                 if (local.error || !local.statusCode || local.statusCode > 299) {
                     console.error(`ERROR: ${local.statusCode}`, local.error);
                     process.exit(1);
@@ -283,12 +282,17 @@ const getPolicyAssets = async () => {
         fs.writeFileSync('localHandles.json', JSON.stringify(Array.from(localHandles.entries())));
     }    
 
+    const lastLiveSlot = Array.from(liveHandles.values()).reduce((max, h) => (h.updated_slot_number > max ? h.updated_slot_number : max), -Infinity);
+    const lastLocalSlot = Array.from(localHandles.values()).reduce((max, h) => (h.updated_slot_number > max ? h.updated_slot_number : max), -Infinity);
+    const startingSlot = Math.min(lastLocalSlot, lastLiveSlot);
+
     const localKeys = new Set(localHandles.keys());
     const liveKeys = new Set(liveHandles.keys());
     const bothKeys = new Set([...localKeys].filter((k) => liveKeys.has(k)));
 
     const missingInLive = [...localKeys].filter((key) => !liveKeys.has(key));
     const missingInLocal = [...liveKeys].filter((key) => !localKeys.has(key));
+    const updatedAfter: string[] = [];
 
     const addressMismatches: Record<string, any> = {};
     const utxoMismatches: Record<string, any> = {};
@@ -299,10 +303,16 @@ const getPolicyAssets = async () => {
 
     console.log(colorString(Color.FgBlue, `Comparing ${bothKeys.size} handles present in both local and live data`));
 
+    let updatedAfterLastSlot = 0;
     bothKeys.forEach((key) => {
         const localHandle = localHandles.get(key);
         const liveHandle = liveHandles.get(key);
 
+        if (localHandle.updated_slot_number != liveHandle.updated_slot_number) {
+            updatedAfter.push(localHandle.name);
+            updatedAfterLastSlot++;
+            return;
+        };
         if (localHandle.utxo !== liveHandle.utxo) {
             utxoMismatches[key] = { utxo: { live: liveHandle.utxo, local: localHandle.utxo } };
         }
@@ -324,6 +334,7 @@ const getPolicyAssets = async () => {
         }
     }
 
+    console.log(colorString(updatedAfterLastSlot ? Color.FgYellow : Color.FgGreen, `Updated after last slot: ${updatedAfterLastSlot}`));
     console.log(colorString(missingInLive.length ? Color.FgRed : Color.FgGreen, `Missing in live: ${missingInLive.length ?? 0}`));
     console.log(colorString(missingInLocal.length ? Color.FgRed : Color.FgGreen, `Missing in local: ${missingInLocal.length ?? 0}`));
     console.log(colorString(Object.entries(addressMismatches).length ? Color.FgRed : Color.FgGreen, `Address mismatches: ${Object.entries(addressMismatches).length ?? 0}`));
@@ -331,7 +342,7 @@ const getPolicyAssets = async () => {
     console.log(colorString(Object.entries(holderMismatches).length ? Color.FgRed : Color.FgGreen, `Holder mismatches: ${Object.entries(holderMismatches).length ?? 0}`));
     //console.log(colorString(Object.entries(defaultMismatches).length ? Color.FgRed : Color.FgGreen, `Default mismatches: ${Object.entries(defaultMismatches).length ?? 0}`));
 
-    fs.writeFileSync('discrepancies.json', JSON.stringify({ missingInLive, missingInLocal, mismatches }, null, 2));
+    fs.writeFileSync('discrepancies.json', JSON.stringify({ updatedAfter, missingInLive, missingInLocal, mismatches }, null, 2));
     const endTime = new Date();
     console.log(`End time: ${endTime.toLocaleString()}`)
     const pad = (num: number) => num.toString().padStart(2, '0');
