@@ -91,7 +91,6 @@ describe('Store Tests - RedisHandlesStore', () => {
                 {
                     address: 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70',
                     default_handle: 'taco',
-                    known_owner_name: '',
                     manually_set: false,
                     total_handles: 4,
                     type: 'wallet'
@@ -276,7 +275,6 @@ describe('Store Tests - RedisHandlesStore', () => {
             const result = repo.getHolder('stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70');
             expect(result).toEqual({
                 defaultHandle: 'taco',
-                knownOwnerName: '',
                 manuallySet: false,
                 handles: [
                     { name: 'barbacoa', og_number: 0, created_slot_number: expect.any(Number) },

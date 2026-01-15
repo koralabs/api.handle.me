@@ -34,4 +34,10 @@ describe('getDefaultHandle', () => {
         const handle = repo.getDefaultHandle(handles);
         expect(handle).toEqual(handles[1]);
     });
+
+    it('should sort alphabetically', () => {
+        // @ts-ignore
+        const handle = repo.getDefaultHandle(handles, 'addr1');
+        expect(handle).toEqual(handles[1]);
+    });
 });

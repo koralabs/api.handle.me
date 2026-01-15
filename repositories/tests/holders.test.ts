@@ -22,7 +22,6 @@ describe('holder index integrity', () => {
                 testHolderIndex.set(handle.holder, {
                     defaultHandle: handle.default_in_wallet,
                     handles: [{ name: handle.name, og_number: handle.og_number, created_slot_number: handle.created_slot_number }],
-                    knownOwnerName: '',
                     manuallySet: false,
                     type: 'wallet'
                 } as unknown as any);
@@ -32,7 +31,7 @@ describe('holder index integrity', () => {
             }
         }
         const holdersList = storeInstance.getKeysFromIndex(IndexNames.HOLDER) as string[];
-        const allHolders = new Map();
+        const allHolders = new Map<string, Holder>();
         holdersList.forEach((h) => {
             const holder = storeInstance.getValueFromIndex(IndexNames.HOLDER, h) as Holder;
             holder.defaultHandle = `${holder.defaultHandle}`;

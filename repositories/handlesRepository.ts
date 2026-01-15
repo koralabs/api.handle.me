@@ -410,7 +410,7 @@ export class HandlesRepository {
                         
                     } else {
                         oldHolder.manuallySet = oldHolder.manuallySet && oldHolder.defaultHandle != oldHandle.name;
-                        oldHolder.defaultHandle = oldHolder.manuallySet ? oldHolder.defaultHandle : this.getDefaultHandle(oldHolder.handles)?.name ?? '';
+                        oldHolder.defaultHandle = oldHolder.manuallySet ? oldHolder.defaultHandle : this.getDefaultHandle(oldHolder.handles, !!oldHolderInfo.knownOwnerName)?.name ?? '';
                         this.store.setValueOnIndex(IndexNames.HOLDER, oldHolderInfo.address, oldHolder);
                     }
                 });
@@ -481,7 +481,7 @@ export class HandlesRepository {
             if (handle.default) {return handle.name}
             else {
                 if (holder.manuallySet) return holder.defaultHandle;
-                else return this.getDefaultHandle([holderHandle, ...holder.handles.filter(Boolean)])?.name ?? ''}
+                else return this.getDefaultHandle([holderHandle, ...holder.handles.filter(Boolean)], !!knownOwnerName)?.name ?? ''}
         })();
 
         newDefault = handle.default;
@@ -564,10 +564,10 @@ export class HandlesRepository {
                         ? utxo.mint.flatMap(([, handles]) => Object.keys(handles)).includes(assetName) 
                         : false 
                     : utxo.mint.flatMap(([, handles]) => Object.keys(handles)).includes(assetName)
-                const mintIndexValue = this.store.getValuesFromIndexedSet(IndexNames.MINT, name);
-                const mintingData: MintingData = mintIndexValue ? Array.from(mintIndexValue).map(md => JSON.parse(md)).sort((a, b) => a.created_slot - b.created_slot)[0] : undefined;
+                const mintIndexValue = this.store.getValuesFromIndexedSet(IndexNames.MINT, name) as Set<string>;
+                const mintingData: MintingData= Array.from(mintIndexValue).map(md => JSON.parse(md)).sort((a, b) => a.created_slot - b.created_slot)[0];
                 const {lovelace, datum, address, slot, script } = utxo
-                const data = mintingData?.metadata;
+                const data = mintingData.metadata;
                 const existingHandle = this.prepareHandle(this.store.getValueFromIndex(IndexNames.HANDLE, name) as StoredHandle) ?? undefined;
                 let handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData.created_slot}, data);
                 
@@ -731,7 +731,11 @@ export class HandlesRepository {
         });
     }
 
-    public getDefaultHandle(handles: DefaultHandleInfo[]): DefaultHandleInfo {
+    public getDefaultHandle(handles: DefaultHandleInfo[], isKnownOwnerName?: boolean): DefaultHandleInfo {
+        // If we know that the address is from a known owner, e.g. jpg.store, then just return the first handle
+        // This is to avoid thousands of handles being iterated through for known owners with massive amounts of handles
+        if (isKnownOwnerName && handles.length > 100) return handles[0];
+
         // OG if no default set
         const ogHandle = this._sortOGHandle(handles);
         if (ogHandle) return ogHandle;

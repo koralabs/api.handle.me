@@ -760,7 +760,6 @@ describe('Storage tests - ' + RedisHandlesStore.constructor.name, () => {
             expect(holderAddress).toEqual(
                 expect.objectContaining({
                     defaultHandle: 'tortilla-soup',
-                    knownOwnerName: '',
                     manuallySet: true,
                     type: 'wallet'
                 })
@@ -1475,7 +1474,6 @@ describe('Storage tests - ' + RedisHandlesStore.constructor.name, () => {
                     { name: 'barbacoa', og_number: 0, created_slot_number: expect.any(Number) },
                     { name: 'burrito', og_number: 0, created_slot_number: expect.any(Number) }
                 ],
-                knownOwnerName: '',
                 manuallySet: false,
                 type: 'wallet'
             });
