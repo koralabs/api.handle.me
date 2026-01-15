@@ -166,8 +166,8 @@ if (process.argv[2] === 'local') {
     await (async () => {
         const fileData = await processSnapshot(process.env.NETWORK ?? 'preview');
         const fileJson = JSON.stringify(fileData);
-        fs.writeFileSync(`handles_utxos.json`, fileJson);
-        fs.writeFileSync(`handles_utxos.gz`, zlib.deflateSync(fileJson));
+        fs.writeFileSync(`tmp/handles_utxos.json`, fileJson);
+        fs.writeFileSync(`tmp/handles_utxos.gz`, zlib.deflateSync(fileJson));
     })();
     process.exit();
 }

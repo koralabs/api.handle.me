@@ -9,15 +9,15 @@
   "type": "module",
   "module": "esnext",
   "scripts": {
-    "stop:forever"   : "forever stop express.js",
-    "start:forever"  : "mkdir -p forever && NODE_OPTIONS='--max-old-space-size=12288' forever -p ./forever --minUptime 1 start express.js",
+    "stop:forever": "forever stop express.js",
+    "start:forever": "mkdir -p forever && NODE_OPTIONS='--max-old-space-size=12288' forever -p ./forever --minUptime 1 start express.js",
     "copy-dist-files": "mkdir -p dist && cp rollup.package.json dist/package.json && cp docs/swagger.yml dist/swagger.yml && cp ./shell/setup_env.sh dist/setup_env.sh",
-    "build:lambda"   : "npm run copy-dist-files && (cd dist && npm install && chmod +x ./setup_env.sh && ./setup_env.sh) && npm exec -c 'rollup -c rollup.lambda.config.js'",
-    "build:docker"   : "npm run build:production && docker build -t koralabs/handles-api .",
-    "ogmios"         : "chmod +x ./shell/start_local.sh && ./shell/start_local.sh",
-    "api"            : "nodemon",
-    "test"           : "chmod +x ./shell/local_valkey.sh && ./shell/local_valkey.sh && (export NETWORK=preview; jest --forceExit --coverage --runInBand)",
-    "lint"           : "ESLINT_USE_FLAT_CONFIG=false eslint --ext=.js,.ts --fix --max-warnings=0 ."
+    "build:lambda": "npm run copy-dist-files && (cd dist && npm install && chmod +x ./setup_env.sh && ./setup_env.sh) && npm exec -c 'rollup -c rollup.lambda.config.js'",
+    "build:docker": "npm run build:production && docker build -t koralabs/handles-api .",
+    "ogmios": "chmod +x ./shell/start_local.sh && ./shell/start_local.sh",
+    "api": "nodemon",
+    "test": "chmod +x ./shell/local_valkey.sh && ./shell/local_valkey.sh && (export NETWORK=preview; jest --forceExit --coverage --runInBand)",
+    "lint": "ESLINT_USE_FLAT_CONFIG=false eslint --ext=.js,.ts --fix --max-warnings=0 ."
   },
   "dependencies": {
     "@cardano-ogmios/client": "^6.11.0",
@@ -30,6 +30,7 @@
     "cors": "^2.8.5",
     "cross-fetch": "^3.1.5",
     "express": "^4.18.1",
+    "express-rate-limit": "^8.2.1",
     "fastq": "^1.19.1",
     "ioredis": "^5.4.2",
     "proper-lockfile": "^4.1.2",
