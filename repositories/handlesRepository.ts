@@ -4,7 +4,7 @@ import { designerSchema, handleDatumSchema, portalSchema, socialsSchema, subHand
 import * as crypto from 'crypto';
 import { isDatumEndpointEnabled } from '../config';
 import { HASHES, MAX_HASHES_PER_PIPE, MAX_SETS_PER_PIPE, MAX_ZSETS_PER_PIPE, SETS, ZSETS } from '../config/constants';
-import { BuildPersonalizationInput } from '../interfaces/ogmios.interfaces';
+import { BuildPersonalizationInput, HandleOnChainMetadata, MetadataLabel } from '../interfaces/ogmios.interfaces';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { decodeCborFromIPFSFile } from '../utils/ipfs';
 const blackListedIpfsCids: string[] = [];
@@ -567,7 +567,10 @@ export class HandlesRepository {
                 const mintIndexValue = this.store.getValuesFromIndexedSet(IndexNames.MINT, name) as Set<string>;
                 const mintingData: MintingData= Array.from(mintIndexValue).map(md => JSON.parse(md)).sort((a, b) => a.created_slot - b.created_slot)[0];
                 const {lovelace, datum, address, slot, script } = utxo
-                const data = mintingData.metadata;
+
+                const metadata: { [handleName: string]: HandleOnChainMetadata } = ((mintingData.metadata as any)[MetadataLabel.NFT] as any)?.[policy];
+                const data = (metadata[isCip67 ? ownerTokenHex : name] as unknown as IHandleMetadata);
+
                 const existingHandle = this.prepareHandle(this.store.getValueFromIndex(IndexNames.HANDLE, name) as StoredHandle) ?? undefined;
                 let handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData.created_slot}, data);
                 

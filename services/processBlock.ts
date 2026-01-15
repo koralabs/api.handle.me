@@ -101,6 +101,7 @@ export const processBlock = async (txBlock: BlockPraos, repo: HandlesRepository)
                             : utxo.mint.flatMap(([, handles]) => handles).includes(assetName);
 
                         if (isMintTx) {
+                            // TODO: Change metadata to only include handle metadata
                             mintData.push({ handleName: name, mintingData: { created_slot: currentSlot, metadata: utxo.metadata, txHash: `${txId}` } });
                         }
                     }
