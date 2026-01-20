@@ -1,5 +1,5 @@
 import { Point } from '@cardano-ogmios/schema';
-import { IndexNames } from '@koralabs/kora-labs-common';
+import { IndexNames, NETWORK } from '@koralabs/kora-labs-common';
 
 export interface EraBoundaries {
     [network: string]: Point;
@@ -51,3 +51,8 @@ export const enum ScanningMode {
     BACKFILL,
     TIP
 }
+
+export const TWELVE_HOURS_SLOT_TIME = 43200; // value comes from the securityParam here: https://cips.cardano.org/cips/cip9/#nonupdatableparameters then converted to slots
+
+export const NETWORK_HOST = NETWORK.toLocaleLowerCase() == 'mainnet' ? '' : `${NETWORK.toLowerCase()}.`;
+export const MINTING_SERVICE_URL = `https://${NETWORK_HOST}minting.handle.me`;

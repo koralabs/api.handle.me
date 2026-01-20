@@ -255,7 +255,7 @@ await (async () => {
     }
 
     liveHandles = await liveHandles;
-    fs.writeFileSync('liveHandles.json', JSON.stringify(Array.from(liveHandles.entries())));
+    fs.writeFileSync('tmp/liveHandles.json', JSON.stringify(Array.from(liveHandles.entries())));
 
     let localHandles: Map<string, any> = new Map<string, any>();
     if (useLocalCachedData) {
@@ -279,7 +279,7 @@ await (async () => {
             75
         );
         console.log(); // Needed to break the same line above
-        fs.writeFileSync('localHandles.json', JSON.stringify(Array.from(localHandles.entries())));
+        fs.writeFileSync('tmp/localHandles.json', JSON.stringify(Array.from(localHandles.entries())));
     }    
 
     const lastLiveSlot = Array.from(liveHandles.values()).reduce((max, h) => (h.updated_slot_number > max ? h.updated_slot_number : max), -Infinity);
@@ -342,7 +342,7 @@ await (async () => {
     console.log(colorString(Object.entries(holderMismatches).length ? Color.FgRed : Color.FgGreen, `Holder mismatches: ${Object.entries(holderMismatches).length ?? 0}`));
     //console.log(colorString(Object.entries(defaultMismatches).length ? Color.FgRed : Color.FgGreen, `Default mismatches: ${Object.entries(defaultMismatches).length ?? 0}`));
 
-    fs.writeFileSync('discrepancies.json', JSON.stringify({ updatedAfter, missingInLive, missingInLocal, mismatches }, null, 2));
+    fs.writeFileSync('tmp/discrepancies.json', JSON.stringify({ updatedAfter, missingInLive, missingInLocal, mismatches }, null, 2));
     const endTime = new Date();
     console.log(`End time: ${endTime.toLocaleString()}`)
     const pad = (num: number) => num.toString().padStart(2, '0');
