@@ -1,7 +1,6 @@
+import { ScriptDetails, ScriptType } from '@koralabs/kora-labs-common';
 import { NextFunction, Request, Response } from 'express';
 import { scripts } from '../config/scripts';
-import { ScriptDetails, ScriptType } from '@koralabs/kora-labs-common';
-import { LatestScriptResult } from '../interfaces';
 
 class ScriptsController {
     public index = async (req: Request<Request>, res: Response, next: NextFunction): Promise<void> => {
@@ -25,7 +24,7 @@ class ScriptsController {
                 }
 
                 const [scriptAddress, scriptData] = latestScript;
-                const result: LatestScriptResult = {
+                const result = {
                     ...scriptData,
                     scriptAddress
                 };
