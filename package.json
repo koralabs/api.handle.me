@@ -12,6 +12,7 @@
     "stop:forever"   : "forever stop express.js",
     "start:forever"  : "mkdir -p forever && NODE_OPTIONS='--max-old-space-size=12288' forever -p ./forever --minUptime 1 start express.js",
     "copy-dist-files": "mkdir -p dist && cp rollup.package.json dist/package.json && cp docs/swagger.yml dist/swagger.yml && cp ./shell/setup_env.sh dist/setup_env.sh",
+    "build:noEmit"   : "tsc --noEmit", 
     "build:lambda"   : "npm run copy-dist-files && (cd dist && npm install && chmod +x ./setup_env.sh && ./setup_env.sh) && npm exec -c 'rollup -c rollup.lambda.config.js'",
     "build:docker"   : "npm run build:production && docker build -t koralabs/handles-api .",
     "ogmios"         : "chmod +x ./shell/start_local.sh && ./shell/start_local.sh",
