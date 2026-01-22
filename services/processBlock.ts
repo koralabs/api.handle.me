@@ -21,7 +21,7 @@ export const processBlock = async (txBlock: BlockPraos, repo: HandlesRepository)
                         if (!isCip67 || assetName.startsWith(AssetNameLabel.LBL_222) || assetName.startsWith(AssetNameLabel.LBL_000)) {
                             const handle = repo.getHandle(name);
                             if (!handle) continue;
-                            repo.removeHandle(handle, currentSlot);
+                            repo.removeHandle(handle);
                         }
                     }
                 }
