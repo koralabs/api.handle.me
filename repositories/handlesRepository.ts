@@ -77,7 +77,8 @@ export class HandlesRepository {
         // Attach the default Handle
         const holder = this.store.getValueFromIndex(IndexNames.HOLDER, handle.holder) as Holder | undefined;
         if (holder) {
-            handle.default_in_wallet = `${holder.defaultHandle}`; // Converts numeric handles to a string
+            // Converts numeric handles to a string
+            handle.default_in_wallet = `${holder.defaultHandle}` || `${this.getDefaultHandle(holder).name}`; 
         }
 
         // Workaround for numeric handles names
@@ -242,7 +243,7 @@ export class HandlesRepository {
                 const handle = structuredClone(h) as StoredHandle;
                 handle.name = `${handle.name}`
                 handle.hex = `${handle.hex}`
-                handle.default_in_wallet = `${holders[i]?.defaultHandle ?? handle.default_in_wallet ?? ''}`;
+                handle.default_in_wallet = `${holders[i].defaultHandle}` || `${this.getDefaultHandle(holders[i]).name}`;
                 return handle;
             }
         }).filter(h => !!h)
@@ -324,7 +325,7 @@ export class HandlesRepository {
                 const { handles, defaultHandle, manuallySet, type, knownOwnerName } = holder;
                 holders.push({
                     total_handles: handles?.length ?? 0,
-                    default_handle: `${defaultHandle}`,
+                    default_handle: `${defaultHandle}` || `${this.getDefaultHandle(holder).name}`,
                     manually_set: manuallySet,
                     address: holderAddresses[key],
                     known_owner_name: knownOwnerName,
@@ -410,7 +411,7 @@ export class HandlesRepository {
                         
                     } else {
                         oldHolder.manuallySet = oldHolder.manuallySet && oldHolder.defaultHandle != oldHandle.name;
-                        oldHolder.defaultHandle = oldHolder.manuallySet ? oldHolder.defaultHandle : this.getDefaultHandle(oldHolder.handles, !!oldHolderInfo.knownOwnerName)?.name ?? '';
+                        oldHolder.defaultHandle = oldHolder.manuallySet ? oldHolder.defaultHandle : this.getDefaultHandle(oldHolder)?.name ?? '';
                         this.store.setValueOnIndex(IndexNames.HOLDER, oldHolderInfo.address, oldHolder);
                     }
                 });
@@ -432,6 +433,7 @@ export class HandlesRepository {
 
         const holderHandle = {name: handle.name, created_slot_number: handle.created_slot_number, og_number: handle.og_number};
         // add the new name if provided and does not already exist
+        // it's possible it exists, but the current incoming handle has changed (specifically og_number for getDefaultHandle below)
         if (!holder.handles.some(h => h.name == handle.name)) {
             holder.handles.push(holderHandle);
         }
@@ -445,7 +447,7 @@ export class HandlesRepository {
             return {newDefault, oldDefault};
         }
 
-        const wasPreviouslyManuallySetToDefault = holder.manuallySet && holder.defaultHandle == handle.name;
+        const wasPreviouslyManuallySetToDefault = holder.manuallySet && this.getDefaultHandle(holder).name == handle.name;
         if (!(handle instanceof UpdatedOwnerHandle)) {    
             // handle.default can only be set when it is the Reference Token (or virtual), not UpdatedOwnerHandle
             
@@ -481,7 +483,8 @@ export class HandlesRepository {
             if (handle.default) {return handle.name}
             else {
                 if (holder.manuallySet) return holder.defaultHandle;
-                else return this.getDefaultHandle([holderHandle, ...holder.handles.filter(Boolean)], !!knownOwnerName)?.name ?? ''}
+                //                                 this is here because of og_number possibly changing
+                else return this.getDefaultHandle(holder, holderHandle)?.name ?? ''}
         })();
 
         newDefault = handle.default;
@@ -736,10 +739,13 @@ export class HandlesRepository {
         });
     }
 
-    public getDefaultHandle(handles: DefaultHandleInfo[], isKnownOwnerName?: boolean): DefaultHandleInfo {
+    public getDefaultHandle(holder: Holder, newHandle?: DefaultHandleInfo): DefaultHandleInfo {
         // If we know that the address is from a known owner, e.g. jpg.store, then just return the first handle
         // This is to avoid thousands of handles being iterated through for known owners with massive amounts of handles
-        if (isKnownOwnerName && handles.length > 100) return handles[0];
+        let handles = [...holder.handles];
+        if (newHandle) handles.push(newHandle);
+
+        if (!!holder.knownOwnerName && handles.length > 100) return handles[0];
 
         // OG if no default set
         const ogHandle = this._sortOGHandle(handles);

@@ -14,7 +14,9 @@ describe('holder index integrity', () => {
         await createRandomHandles(storeInstance, 1000, true);
         await performRandomHandleUpdates(storeInstance, 1000, 1001);
         const testHolderIndex = new Map<string, Holder>();
+        console.time("repo-search")
         const handles = (repo.search({ handlesPerPage: 1000 } as HandlePaginationModel).handles as StoredHandle[]).sort((a, b) => a.updated_slot_number - b.updated_slot_number);
+        console.timeEnd("repo-search")
         for (let i = 0; i < handles.length; i++) {
             const handle = handles[i];
             const holder = testHolderIndex.get(handle.holder);
