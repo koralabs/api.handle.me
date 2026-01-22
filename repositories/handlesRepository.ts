@@ -1,9 +1,8 @@
 import { Point } from '@cardano-ogmios/schema';
-import { ApiIndexType, AssetNameLabel, bech32FromHex, buildCharacters, buildDrep, buildHolderInfo, buildNumericModifiers, decodeAddress, decodeCborToJson, DefaultHandleInfo, EMPTY, getPaymentKeyHash, getRarity, HandlePaginationModel, HandleSearchModel, HandleType, Holder, HolderPaginationModel, HolderViewModel, HttpException, IApiMetrics, IApiStore, IHandleMetadata, IndexNames, IPersonalization, IPzDatum, IPzDatumConvertedUsingSchema, ISubHandleSettings, ISubHandleTypeSettings, LogCategory, Logger, MINTED_OG_LIST, MintingData, NETWORK, Sort, StoredHandle, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, bech32FromHex, buildCharacters, buildDrep, buildHolderInfo, buildNumericModifiers, decodeAddress, decodeCborToJson, DefaultHandleInfo, EMPTY, getPaymentKeyHash, getRarity, HandlePaginationModel, HandleSearchModel, HandleType, Holder, HolderPaginationModel, HolderViewModel, HttpException, IApiMetrics, IApiStore, IHandleMetadata, IndexNames, IPersonalization, IPzDatum, IPzDatumConvertedUsingSchema, ISubHandleSettings, ISubHandleTypeSettings, LogCategory, Logger, MINTED_OG_LIST, MintingData, NETWORK, Sort, StoredHandle, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { designerSchema, handleDatumSchema, portalSchema, socialsSchema, subHandleSettingsDatumSchema } from '@koralabs/kora-labs-common/utils/cbor';
 import * as crypto from 'crypto';
 import { isDatumEndpointEnabled } from '../config';
-import { HASHES, MAX_HASHES_PER_PIPE, MAX_SETS_PER_PIPE, MAX_ZSETS_PER_PIPE, SETS, ZSETS } from '../config/constants';
 import { BuildPersonalizationInput, HandleOnChainMetadata, MetadataLabel } from '../interfaces/ogmios.interfaces';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { decodeCborFromIPFSFile } from '../utils/ipfs';
@@ -676,43 +675,40 @@ export class HandlesRepository {
             this.store.addValueToIndexedSet(IndexNames.HASH_OF_STAKE_KEY_HASH, hashOfStakeKeyHash, handle.name);
         }
 
-        this.store.pipeline(() => {
-            // Set the main index (SAVES THE HANDLE)
-            this.store.setValueOnIndex(IndexNames.HANDLE, name, handle);
+        // Set the main index (SAVES THE HANDLE)
+        this.store.setValueOnIndex(IndexNames.HANDLE, name, handle);
 
-            // set all one-to-many indexes
-            this.store.addValueToIndexedSet(IndexNames.RARITY, rarity, name);
-            this.store.addValueToIndexedSet(IndexNames.CHARACTER, characters, name);
-            this.store.addValueToIndexedSet(IndexNames.NUMERIC_MODIFIER, numeric_modifiers, name);
-            this.store.addValueToIndexedSet(IndexNames.LENGTH, length, name);
-            this.store.addValueToIndexedSet(IndexNames.HANDLE_TYPE, handle.handle_type, name);
+        // set all one-to-many indexes
+        this.store.addValueToIndexedSet(IndexNames.RARITY, rarity, name);
+        this.store.addValueToIndexedSet(IndexNames.CHARACTER, characters, name);
+        this.store.addValueToIndexedSet(IndexNames.NUMERIC_MODIFIER, numeric_modifiers, name);
+        this.store.addValueToIndexedSet(IndexNames.LENGTH, length, name);
+        this.store.addValueToIndexedSet(IndexNames.HANDLE_TYPE, handle.handle_type, name);
 
-            if (name.includes('@')) {
-                const rootHandle = name.split('@')[1];
-                this.store.addValueToIndexedSet(IndexNames.SUBHANDLE, rootHandle, name);
-            }
+        if (name.includes('@')) {
+            const rootHandle = name.split('@')[1];
+            this.store.addValueToIndexedSet(IndexNames.SUBHANDLE, rootHandle, name);
+        }
 
-            const personalized = (() => {
-                if (handle.image_hash != handle.standard_image_hash) return true;
-                const pz = handle.personalization;
-                return !!pz?.designer || !!pz?.portal || !!pz?.socials
-            })();
+        const personalized = (() => {
+            if (handle.image_hash != handle.standard_image_hash) return true;
+            const pz = handle.personalization;
+            return !!pz?.designer || !!pz?.portal || !!pz?.socials
+        })();
 
-            // remove the old - these can change over time
-            this.store.removeValueFromIndexedSet(IndexNames.OG, Number(!ogFlag), name);
-            this.store.removeValueFromIndexedSet(IndexNames.PERSONALIZED, Number(!personalized), name);
-            this.store.removeValueFromIndexedSet(IndexNames.ADDRESS, oldHandle?.resolved_addresses.ada!, name); 
-            this.store.removeValueFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, old_payment_key_hash, name);
-            this.store.removeValuesFromOrderedSet(IndexNames.SLOT, updated_slot_number);
-            
-            // add the new
-            this.store.addValueToIndexedSet(IndexNames.PERSONALIZED, Number(personalized), name);
-            this.store.addValueToIndexedSet(IndexNames.OG, Number(ogFlag), name);
-            this.store.addValueToIndexedSet(IndexNames.ADDRESS, ada, name);
-            this.store.addValueToIndexedSet(IndexNames.PAYMENT_KEY_HASH, payment_key_hash, name);
-            this.store.addValueToOrderedSet(IndexNames.SLOT, updated_slot_number, name);
-
-        });
+        // remove the old - these can change over time
+        this.store.removeValueFromIndexedSet(IndexNames.OG, Number(!ogFlag), name);
+        this.store.removeValueFromIndexedSet(IndexNames.PERSONALIZED, Number(!personalized), name);
+        this.store.removeValueFromIndexedSet(IndexNames.ADDRESS, oldHandle?.resolved_addresses.ada!, name); 
+        this.store.removeValueFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, old_payment_key_hash, name);
+        this.store.removeValuesFromOrderedSet(IndexNames.SLOT, updated_slot_number);
+        
+        // add the new
+        this.store.addValueToIndexedSet(IndexNames.PERSONALIZED, Number(personalized), name);
+        this.store.addValueToIndexedSet(IndexNames.OG, Number(ogFlag), name);
+        this.store.addValueToIndexedSet(IndexNames.ADDRESS, ada, name);
+        this.store.addValueToIndexedSet(IndexNames.PAYMENT_KEY_HASH, payment_key_hash, name);
+        this.store.addValueToOrderedSet(IndexNames.SLOT, updated_slot_number, name);
     }
 
     public getDefaultHandle(holder: Holder, newHandle?: DefaultHandleInfo): DefaultHandleInfo {
@@ -758,45 +754,6 @@ export class HandlesRepository {
     
     public async getStartingPoint(updateHandleIndexes: (utxo: UTxOWithTxInfo) => void, failed = false): Promise<Point | null> {
         return this.store.getStartingPoint(updateHandleIndexes , failed);
-    }
-
-    private _runBulkLoadBatching(indexName: string, index: Map<string | number, ApiIndexType>, max: number, repoCall: CallableFunction) {
-        let counter = 0;
-        const indexSize = index.size;
-        const keys = Array.from(index.keys());
-        const values = Array.from(index.values());
-        while (counter < indexSize) {
-            //console.log(`BULK_LOADING: ${indexName} - ${indexSize} records. Current count: ${counter}. Max: ${max}`)
-            let batch = 0;
-            this.store.pipeline(() => {
-                while (counter < indexSize && batch < max) {
-                    repoCall(indexName, keys[counter], values[counter]);
-                    counter++
-                    batch++;
-                }
-            });
-        }
-    }
-
-    public bulkLoad(scanningRepo: HandlesRepository) {
-        if (this.store.constructor.name == 'HandlesMemoryStore')
-            return;
-
-        this.store.rollBackToGenesis();
-
-        for (const indexName of HASHES) {
-            this._runBulkLoadBatching(indexName, scanningRepo.store.getIndex(indexName), MAX_HASHES_PER_PIPE, this.store.setValueOnIndex.bind(this.store))
-        }
-
-        for (const indexName of SETS) {
-            this._runBulkLoadBatching(indexName, scanningRepo.store.getIndex(indexName), MAX_SETS_PER_PIPE, this.store.addValueToIndexedSet.bind(this.store))
-        }
-
-        for (const indexName of ZSETS) {
-            this._runBulkLoadBatching(indexName, scanningRepo.store.getIndex(indexName), MAX_ZSETS_PER_PIPE, this.store.setValueOnIndex.bind(this.store))
-        }
-
-        this.store.setMetrics(scanningRepo.getMetrics());
     }
 
     public getUTxO(utxoId: string): UTxOWithTxInfo | null {

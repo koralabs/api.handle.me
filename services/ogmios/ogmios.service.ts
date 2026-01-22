@@ -131,21 +131,6 @@ class OgmiosService {
                                         throw new Error(`Block type ${result.block.type} is not supported`);
 
                                     const block = result.block as BlockPraos
-
-                                    // if (!firstBlockProcessed) {
-                                    //     firstBlockProcessed = true;
-                                    //     if (block.slot >= result.tip.slot - ACCEPTABLE_TIP_PROXIMITY) {
-                                    //         if ((this.handlesRepo.getMetrics().currentSlot ?? 0) >= block.slot) {
-                                    //             Logger.log('Starting in TIP mode')
-                                    //             this.scanningMode = ScanningMode.TIP
-                                    //         }
-                                    //     }
-                                    // }
-                                    // if (this.scanningMode == ScanningMode.BACKFILL && block.slot == result.tip.slot) {
-                                    //     this.handlesRepo.bulkLoad(this.scanningRepo);
-                                    //     this.scanningMode = ScanningMode.TIP;
-                                    // }
-
                                     await this.processBlock(block);    
                                                                     
                                     const metrics = {
@@ -156,8 +141,6 @@ class OgmiosService {
                                     }
                                     
                                     this.scanningRepo.setMetrics(metrics);
-                                    // if (this.scanningMode == ScanningMode.TIP)
-                                    //     this.handlesRepo.setMetrics(metrics);
                                 }
                                 catch (error: any) {
                                     Logger.log({
