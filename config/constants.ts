@@ -38,6 +38,8 @@ export const SETS = [
     IndexNames.HANDLE_TYPE
 ]
 
+export const RATE_LIMITER_ENABLED = process.env.RATE_LIMITER_ENABLED == 'true';
+
 export const HASHES = [IndexNames.HANDLE, IndexNames.HOLDER]
 export const ZSETS = [IndexNames.SLOT]
 export const META_INDEXES = [IndexNames.HANDLE, IndexNames.SUBHANDLE]

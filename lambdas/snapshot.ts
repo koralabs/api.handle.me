@@ -6,15 +6,15 @@ import zlib from 'zlib';
 import { RedisHandlesStore } from '../stores/redis';
 
 declare global {
-  interface Console {
-    sameLine(msg: string): void;
-  }
+    interface Console {
+        sameLine(msg: string): void;
+    }
 }
-console.sameLine = function(message) {
+console.sameLine = function (message) {
     stdOut.clearLine(process.stdout, 0); // Clear the current line from the cursor to the right
     stdOut.cursorTo(process.stdout, 0); // Move the cursor to the beginning of the line
     process.stdout.write(message);
-}
+};
 
 const getRedisItems = async () => {
     const utxos: Map<string, UTxOWithTxInfo | null> = new Map();
@@ -87,7 +87,11 @@ const getRedisItems = async () => {
                 // console.log('PIPELINE RESULTS LENGTH', pipelineResults, pipelineResults.length);
                 for (let i = 0; i < pipelineResults.length; i++) {
                     const item = pipelineResults[i];
-                    const filteredResults: MintingData[] = item ? Array.from(item).map(md => JSON.parse(md)).filter(md => md.created_slot <= lastSlot) : [];
+                    const filteredResults: MintingData[] = item
+                        ? Array.from(item)
+                            .map((md) => JSON.parse(md))
+                            .filter((md) => md.created_slot <= lastSlot)
+                        : [];
                     mints.set(keys[i].split(':')[2], filteredResults);
                 }
             }
@@ -118,8 +122,8 @@ export const processSnapshot = async (network: string) => {
         utxos: Array.from(results.utxos)
             .map(([_, v]) => v)
             .filter((v): v is UTxOWithTxInfo => v !== null),
-        mintingData: Array.from(results.mints).reduce<{ [handle: string]: MintingData[]; }>((acc, [k, v]) => {
-            if (v !== null) acc[k]  = v as unknown as MintingData[];
+        mintingData: Array.from(results.mints).reduce<{ [handle: string]: MintingData[] }>((acc, [k, v]) => {
+            if (v !== null) acc[k] = v as unknown as MintingData[];
             return acc;
         }, {})
     };
