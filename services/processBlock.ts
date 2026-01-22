@@ -107,6 +107,7 @@ export const processBlock = async (txBlock: BlockPraos, repo: HandlesRepository)
                     }
                 }
                 repo.addMintData(mintData);
+                repo.updateHolderIndex(utxo);
                 repo.updateHandleIndexes(utxo);
             }
         }
