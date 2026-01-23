@@ -251,7 +251,6 @@ export class HandlesRepository {
         return { searchTotal, handles };
     }
     public addUTxO(utxo: UTxOWithTxInfo) {
-
         // save the UTxO id to the store with slot as the key
         this.store.addValueToOrderedSet(IndexNames.UTXO_SLOT, utxo.slot, utxo.id);
 
@@ -560,15 +559,16 @@ export class HandlesRepository {
                 const { ownerTokenHex, name, isCip67, assetLabel } = getHandleNameFromAssetName(assetName);
                 const isMintTx = isCip67 
                     ? (assetLabel === AssetNameLabel.LBL_222 || assetLabel === AssetNameLabel.LBL_000)
-                        ? utxo.mint.flatMap(([, handles]) => Object.keys(handles)).includes(assetName) 
+                        ? utxo.mint.flatMap(([, mintHandles]) => Object.keys(mintHandles)).includes(assetName) 
                         : false 
-                    : utxo.mint.flatMap(([, handles]) => Object.keys(handles)).includes(assetName)
+                    : utxo.mint.flatMap(([, mintHandles]) => Object.keys(mintHandles)).includes(assetName)
                 const mintIndexValue = this.store.getValuesFromIndexedSet(IndexNames.MINT, name) as Set<string>;
-                const mintingData: MintingData= Array.from(mintIndexValue).map(md => JSON.parse(md)).sort((a, b) => a.created_slot - b.created_slot)[0];
+                const mintingData: MintingData = Array.from(mintIndexValue).map(md => JSON.parse(md)).sort((a, b) => a.created_slot - b.created_slot)[0];
                 const {lovelace, datum, address, slot, script } = utxo
 
                 // mintingData from the index should never be undefined.
                 // however, metadata can.
+                console.log(`HANDLENAME`, name, mintingData, mintIndexValue)
                 const metadata: { [handleName: string]: HandleOnChainMetadata } | undefined = ((mintingData.metadata as any)?.[MetadataLabel.NFT] as any)?.[policy];
                 const data = metadata && (metadata[isCip67 ? ownerTokenHex : name] as unknown as IHandleMetadata);
                 const existingHandle = handles ? handles.get(name) : this.prepareHandle(this.store.getValueFromIndex(IndexNames.HANDLE, name) as StoredHandle) ?? undefined;

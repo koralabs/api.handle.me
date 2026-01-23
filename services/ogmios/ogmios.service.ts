@@ -42,7 +42,7 @@ class OgmiosService {
         // attempt ogmios resume (see if starting point exists or errors)
         const firstStartingPoint = await this.scanningRepo.getStartingPoint([
             this.scanningRepo.addUTxO.bind(this.scanningRepo),
-            this.scanningRepo.addMintData.bind(this.scanningRepo),
+            this.scanningRepo.updateHolderIndex.bind(this.scanningRepo),
             this.scanningRepo.updateHandleIndexes.bind(this.scanningRepo)
         ]);
         // const firstStartingPoint = {id: 'eca47c4fb9ca7f8eb2c524b975da3db1d05ced0a9ef0c4ee2c40c4cf2fcb3ea5', slot: 134281477} as Point
@@ -69,9 +69,9 @@ class OgmiosService {
                     } catch (error: any) {
                         Logger.log({ message: `Error initializing Handles: ${error.message} code: ${error.code}`, category: LogCategory.ERROR, event: 'initializeStorage.firstFileFailed' });
                         const secondStartingPoint = await this.scanningRepo.getStartingPoint([
-                            this.scanningRepo.addUTxO,
-                            this.scanningRepo.addMintData,
-                            this.scanningRepo.updateHandleIndexes
+                            this.scanningRepo.addUTxO.bind(this.scanningRepo),
+                            this.scanningRepo.updateHolderIndex.bind(this.scanningRepo),
+                            this.scanningRepo.updateHandleIndexes.bind(this.scanningRepo)
                         ], true);
                         // If error, try the other file's starting point
                         if (error.code === 1000) {
@@ -196,8 +196,8 @@ class OgmiosService {
         this.client!.send(JSON.stringify({ jsonrpc: '2.0', method, params, id }));
     }
 
-    private processBlock = async (txBlock: BlockPraos) => {
-        await processBlock(txBlock, this.scanningRepo);
+    private processBlock = (txBlock: BlockPraos) => {
+        processBlock(txBlock, this.scanningRepo);
         // if (this.scanningMode == ScanningMode.TIP) {
         //     await processBlock(txBlock, this.handlesRepo);
         // }
