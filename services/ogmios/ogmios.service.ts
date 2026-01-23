@@ -1,5 +1,5 @@
 import { BlockPraos, NextBlockResponse, Point, RollForward } from '@cardano-ogmios/schema';
-import { delay, getDateStringFromSlot, LogCategory, Logger, NETWORK } from '@koralabs/kora-labs-common';
+import { delay, getDateStringFromSlot, LogCategory, Logger, NETWORK, UTxOFunctionName } from '@koralabs/kora-labs-common';
 import fastq from 'fastq';
 import * as url from 'url';
 import WebSocket from 'ws';
@@ -40,11 +40,11 @@ class OgmiosService {
         });
 
         // attempt ogmios resume (see if starting point exists or errors)
-        const firstStartingPoint = await this.scanningRepo.getStartingPoint([
-            this.scanningRepo.addUTxO.bind(this.scanningRepo),
-            this.scanningRepo.addMintData.bind(this.scanningRepo),
-            this.scanningRepo.updateHandleIndexes.bind(this.scanningRepo)
-        ]);
+        const firstStartingPoint = await this.scanningRepo.getStartingPoint({
+            [UTxOFunctionName.ADD_UTXO]: this.scanningRepo.addUTxO.bind(this.scanningRepo),
+            [UTxOFunctionName.UPDATE_HOLDER_INDEX]: this.scanningRepo.updateHolderIndex.bind(this.scanningRepo),
+            [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: this.scanningRepo.updateHandleIndexes.bind(this.scanningRepo)
+        });
         // const firstStartingPoint = {id: 'eca47c4fb9ca7f8eb2c524b975da3db1d05ced0a9ef0c4ee2c40c4cf2fcb3ea5', slot: 134281477} as Point
 
         // eslint-disable-next-line no-constant-condition
@@ -68,11 +68,11 @@ class OgmiosService {
                         break;
                     } catch (error: any) {
                         Logger.log({ message: `Error initializing Handles: ${error.message} code: ${error.code}`, category: LogCategory.ERROR, event: 'initializeStorage.firstFileFailed' });
-                        const secondStartingPoint = await this.scanningRepo.getStartingPoint([
-                            this.scanningRepo.addUTxO,
-                            this.scanningRepo.addMintData,
-                            this.scanningRepo.updateHandleIndexes
-                        ], true);
+                        const secondStartingPoint = await this.scanningRepo.getStartingPoint({
+                            [UTxOFunctionName.ADD_UTXO]: this.scanningRepo.addUTxO.bind(this.scanningRepo),
+                            [UTxOFunctionName.UPDATE_HOLDER_INDEX]: this.scanningRepo.updateHolderIndex.bind(this.scanningRepo),
+                            [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: this.scanningRepo.updateHandleIndexes.bind(this.scanningRepo)
+                        }, true);
                         // If error, try the other file's starting point
                         if (error.code === 1000) {
                             this.scanningRepo.destroy();

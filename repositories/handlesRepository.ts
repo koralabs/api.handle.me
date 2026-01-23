@@ -1,5 +1,5 @@
 import { Point } from '@cardano-ogmios/schema';
-import { AssetNameLabel, bech32FromHex, buildCharacters, buildDrep, buildHolderInfo, buildNumericModifiers, decodeAddress, decodeCborToJson, DefaultHandleInfo, EMPTY, getPaymentKeyHash, getRarity, HandlePaginationModel, HandleSearchModel, HandleType, Holder, HolderPaginationModel, HolderViewModel, HttpException, IApiMetrics, IApiStore, IHandleMetadata, IndexNames, IPersonalization, IPzDatum, IPzDatumConvertedUsingSchema, ISubHandleSettings, ISubHandleTypeSettings, LogCategory, Logger, MINTED_OG_LIST, MintingData, NETWORK, Sort, StoredHandle, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, bech32FromHex, buildCharacters, buildDrep, buildHolderInfo, buildNumericModifiers, decodeAddress, decodeCborToJson, DefaultHandleInfo, EMPTY, getPaymentKeyHash, getRarity, HandlePaginationModel, HandleSearchModel, HandleType, Holder, HolderPaginationModel, HolderViewModel, HttpException, IApiMetrics, IApiStore, IHandleMetadata, IndexNames, IPersonalization, IPzDatum, IPzDatumConvertedUsingSchema, ISubHandleSettings, ISubHandleTypeSettings, LogCategory, Logger, MINTED_OG_LIST, MintingData, NETWORK, Sort, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { designerSchema, handleDatumSchema, portalSchema, socialsSchema, subHandleSettingsDatumSchema } from '@koralabs/kora-labs-common/utils/cbor';
 import * as crypto from 'crypto';
 import { isDatumEndpointEnabled } from '../config';
@@ -557,6 +557,8 @@ export class HandlesRepository {
                     // Don't process the nameless token.
                     continue;
                 }
+                const {lovelace, datum, address, slot, script } = utxo
+
                 const { ownerTokenHex, name, isCip67, assetLabel } = getHandleNameFromAssetName(assetName);
                 const isMintTx = isCip67 
                     ? (assetLabel === AssetNameLabel.LBL_222 || assetLabel === AssetNameLabel.LBL_000)
@@ -564,12 +566,11 @@ export class HandlesRepository {
                         : false 
                     : utxo.mint.flatMap(([, handles]) => Object.keys(handles)).includes(assetName)
                 const mintIndexValue = this.store.getValuesFromIndexedSet(IndexNames.MINT, name) as Set<string>;
-                const mintingData: MintingData= Array.from(mintIndexValue).map(md => JSON.parse(md)).sort((a, b) => a.created_slot - b.created_slot)[0];
-                const {lovelace, datum, address, slot, script } = utxo
+                const [mintingData] = Array.from(mintIndexValue).map<MintingData>(md => JSON.parse(md)).sort((a, b) => a.created_slot - b.created_slot);
 
                 // mintingData from the index should never be undefined.
                 // however, metadata can.
-                const metadata: { [handleName: string]: HandleOnChainMetadata } | undefined = ((mintingData.metadata as any)?.[MetadataLabel.NFT] as any)?.[policy];
+                const metadata: { [handleName: string]: HandleOnChainMetadata } | undefined = (mintingData.metadata?.[MetadataLabel.NFT] as any)?.[policy];
                 const data = metadata && (metadata[isCip67 ? ownerTokenHex : name] as unknown as IHandleMetadata);
                 const existingHandle = handles ? handles.get(name) : this.prepareHandle(this.store.getValueFromIndex(IndexNames.HANDLE, name) as StoredHandle) ?? undefined;
                 let handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData.created_slot}, data);
@@ -786,8 +787,8 @@ export class HandlesRepository {
         return personalization
     }
     
-    public async getStartingPoint(updateHandleIndexes: ((utxo: UTxOWithTxInfo) => void)[], failed = false): Promise<Point | null> {
-        return this.store.getStartingPoint(updateHandleIndexes , failed);
+    public async getStartingPoint(utxoFunctions: Record<UTxOFunctionName, (utxo: UTxOWithTxInfo) => void>, failed = false): Promise<Point | null> {
+        return this.store.getStartingPoint(utxoFunctions , failed);
     }
 
     public getUTxO(utxoId: string): UTxOWithTxInfo | null {
