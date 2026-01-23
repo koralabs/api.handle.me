@@ -251,7 +251,6 @@ export class HandlesRepository {
         return { searchTotal, handles };
     }
     public addUTxO(utxo: UTxOWithTxInfo) {
-
         // save the UTxO id to the store with slot as the key
         this.store.addValueToOrderedSet(IndexNames.UTXO_SLOT, utxo.slot, utxo.id);
 
@@ -562,9 +561,9 @@ export class HandlesRepository {
                 const { ownerTokenHex, name, isCip67, assetLabel } = getHandleNameFromAssetName(assetName);
                 const isMintTx = isCip67 
                     ? (assetLabel === AssetNameLabel.LBL_222 || assetLabel === AssetNameLabel.LBL_000)
-                        ? utxo.mint.flatMap(([, handles]) => Object.keys(handles)).includes(assetName) 
+                        ? utxo.mint.flatMap(([, mintHandles]) => Object.keys(mintHandles)).includes(assetName) 
                         : false 
-                    : utxo.mint.flatMap(([, handles]) => Object.keys(handles)).includes(assetName)
+                    : utxo.mint.flatMap(([, mintHandles]) => Object.keys(mintHandles)).includes(assetName)
                 const mintIndexValue = this.store.getValuesFromIndexedSet(IndexNames.MINT, name) as Set<string>;
                 const [mintingData] = Array.from(mintIndexValue).map<MintingData>(md => JSON.parse(md)).sort((a, b) => a.created_slot - b.created_slot);
 

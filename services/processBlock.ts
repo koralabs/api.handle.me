@@ -3,7 +3,7 @@ import { AssetNameLabel, HANDLE_POLICIES, LogCategory, Logger, NETWORK, Network,
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from './ogmios/utils';
 
-export const processBlock = async (txBlock: BlockPraos, repo: HandlesRepository) => {
+export const processBlock = (txBlock: BlockPraos, repo: HandlesRepository) => {
     const currentSlot = txBlock?.slot ?? repo.getMetrics().currentSlot ?? 0;
     for (let b = 0; b < (txBlock?.transactions ?? []).length; b++) {
         const txBody = txBlock?.transactions?.[b];

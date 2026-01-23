@@ -69,7 +69,7 @@ export class RedisHandlesStore implements IApiStore {
         RedisHandlesStore._pipeline = undefined;
     }
 
-    async repopulateIndexesFromUTxOs(utxoFunctions: Record<UTxOFunctionName, (utxo: UTxOWithTxInfo) => void>): Promise<void> {
+    repopulateIndexesFromUTxOs(utxoFunctions: Record<UTxOFunctionName, (utxo: UTxOWithTxInfo) => void>): void {
         let cursor = '0';
         let deleted = 0;
         let added = 0;
@@ -78,12 +78,12 @@ export class RedisHandlesStore implements IApiStore {
             // Skip UTXO and MINT indexes
             if ([IndexNames.UTXO_SLOT, IndexNames.UTXO, IndexNames.MINT].includes(indexName)) continue;
             do {
-                const [nextCursor, keys] = (await this.redisClientCall('scan', cursor, { match: `{root}:${indexName}:*`, count: 1000 })) as [string, string[]];
+                const [nextCursor, keys] = (this.redisClientCall('scan', cursor, { match: `{root}:${indexName}:*`, count: 1000 })) as [string, string[]];
                 cursor = nextCursor;
 
                 if (keys && keys.length > 0) {
                     // Delete keys directly using del with spread operator
-                    await this.redisClientCall('del', keys);
+                    this.redisClientCall('del', keys);
                     deleted += keys.length;
 
                     // Log progress every 100k keys
@@ -219,7 +219,7 @@ export class RedisHandlesStore implements IApiStore {
                 // we need to delete all keys that don't start with {root}:mint nd {root}:utxo
                 // then we need to rebuild the indexes by looping through the utxos in order
                 Logger.log({ message: `Repopulating indexes from UTxOs to schema version ${this.getIndexSchemaVersion()}`, category: LogCategory.INFO, event: 'getStartingPoint.repopulateIndexesFromUTxOs' });
-                await this.repopulateIndexesFromUTxOs(utxoFunctions);
+                this.repopulateIndexesFromUTxOs(utxoFunctions);
                 this.setMetrics({ indexSchemaVersion: this.getIndexSchemaVersion() });
             }
 
@@ -387,7 +387,7 @@ export class RedisHandlesStore implements IApiStore {
         );
     }
 
-    private async saveObjectToCache(key: string, obj: any) {
+    private saveObjectToCache(key: string, obj: any) {
         const parentFields: Record<string, string> = {};
         if (this._isPlainObject(obj)) {
             for (const [field, value] of Object.entries(obj)) {
@@ -435,8 +435,8 @@ export class RedisHandlesStore implements IApiStore {
 
     public redisClientCall(cmd: string, ...args: any[]) {
         if (RedisHandlesStore._pipeline && cmd != 'batch') {
+            // scard needs to go through for removeValueFromIndexedSet to work right
             if (cmd != 'scard') {
-                // scard needs to go through for removeValueFromIndexedSet to work right
                 RedisHandlesStore._pipeline.push([cmd, args]);
                 return;
             }
