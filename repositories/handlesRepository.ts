@@ -569,7 +569,7 @@ export class HandlesRepository {
 
                 // mintingData from the index should never be undefined.
                 // however, metadata can.
-                const metadata: { [handleName: string]: HandleOnChainMetadata } | undefined = ((mintingData.metadata as any)[MetadataLabel.NFT] as any)?.[policy];
+                const metadata: { [handleName: string]: HandleOnChainMetadata } | undefined = ((mintingData.metadata as any)?.[MetadataLabel.NFT] as any)?.[policy];
                 const data = metadata && (metadata[isCip67 ? ownerTokenHex : name] as unknown as IHandleMetadata);
                 const existingHandle = handles ? handles.get(name) : this.prepareHandle(this.store.getValueFromIndex(IndexNames.HANDLE, name) as StoredHandle) ?? undefined;
                 let handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData.created_slot}, data);
