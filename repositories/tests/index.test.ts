@@ -47,7 +47,7 @@ const repo = new HandlesRepository(storeInstance);
 repo.initialize();
 repo.rollBackToGenesis();
 
-describe('Storage tests - ' + RedisHandlesStore.constructor.name, () => {
+describe('Storage tests', () => {
     const filePath = 'storage/handles-test.json';
     const defaultReferenceToken: klc.UTxO = {
         tx_id: 'default_ref_tx',
@@ -64,6 +64,7 @@ describe('Storage tests - ' + RedisHandlesStore.constructor.name, () => {
         // populate storage
         for (const key in handlesFixture) {
             const handle = handlesFixture[key];
+            repo.Internal.updateHolder(handle);
             repo.save({
                 ...handle,
                 datum: `some_datum_${key}`,
@@ -75,7 +76,7 @@ describe('Storage tests - ' + RedisHandlesStore.constructor.name, () => {
     afterEach(async () => {
         const handles = (repo.search().handles as klc.StoredHandle[]).filter(Boolean).map((h) => h.name);
         for (const handle of handles) {
-            repo.removeHandle(repo.getHandle(handle)!, 0);
+            repo.removeHandle(repo.getHandle(handle)!);
         }
         jest.clearAllMocks();
     });
@@ -145,6 +146,7 @@ describe('Storage tests - ' + RedisHandlesStore.constructor.name, () => {
                 updated_slot_number: updatedTimeStamp1
             });
 
+            repo.Internal.updateHolder(handle);
             repo.save(handle);
 
             handle = repo.getHandle('nachos')!;
@@ -191,42 +193,43 @@ describe('Storage tests - ' + RedisHandlesStore.constructor.name, () => {
                 nsfw: false
             };
 
-            repo.save(
-                repo.Internal.buildHandle(
-                    {
-                        hex: Buffer.from('chimichanga').toString('hex'),
-                        name: 'chimichanga',
-                        updated_slot_number: updatedTimeStamp1 - 1,
-                        personalization: personalizationData,
-                        reference_token: defaultReferenceToken,
-                        policy,
-                        pfp_image: 'todo',
-                        bg_image: 'todo',
-                        image_hash: '0x123',
-                        standard_image_hash: '0x123',
-                        svg_version: '1.0.0',
-                        standard_image: '',
-                        last_update_address: '',
-                        id_hash: '0x0fed83b6268892be468965a7fa0705ff22014c4b78a6ba82b4d65fe395d6d5ee9f',
-                        resolved_addresses: { ada: '', btc: '2213kjsjkn', eth: 'sad2wsad' }
-                    },
-                    {
-                        name: 'chimichanga',
-                        image: 'ipfs://123',
-                        mediaType: 'image/jpeg',
-                        og: 0,
-                        og_number: 0,
-                        rarity: 'todo',
-                        length: 10,
-                        characters: 'todo',
-                        numeric_modifiers: 'todo',
-                        version: 0,
-                        handle_type: HandleType.HANDLE
-                    }
-                )
-            );
+            let handle: klc.StoredHandle | null = repo.Internal.buildHandle(
+                {
+                    hex: Buffer.from('chimichanga').toString('hex'),
+                    name: 'chimichanga',
+                    updated_slot_number: updatedTimeStamp1 - 1,
+                    personalization: personalizationData,
+                    reference_token: defaultReferenceToken,
+                    policy,
+                    pfp_image: 'todo',
+                    bg_image: 'todo',
+                    image_hash: '0x123',
+                    standard_image_hash: '0x123',
+                    svg_version: '1.0.0',
+                    standard_image: '',
+                    last_update_address: '',
+                    id_hash: '0x0fed83b6268892be468965a7fa0705ff22014c4b78a6ba82b4d65fe395d6d5ee9f',
+                    resolved_addresses: { ada: '', btc: '2213kjsjkn', eth: 'sad2wsad' }
+                },
+                {
+                    name: 'chimichanga',
+                    image: 'ipfs://123',
+                    mediaType: 'image/jpeg',
+                    og: 0,
+                    og_number: 0,
+                    rarity: 'todo',
+                    length: 10,
+                    characters: 'todo',
+                    numeric_modifiers: 'todo',
+                    version: 0,
+                    handle_type: HandleType.HANDLE
+                }
+            )
+            
+            repo.Internal.updateHolder(handle);
+            repo.save(handle);
 
-            let handle = repo.getHandle('chimichanga');
+            handle = repo.getHandle('chimichanga');
             repo.save(
                 repo.Internal.buildHandle({
                     ...handle,
@@ -415,6 +418,7 @@ describe('Storage tests - ' + RedisHandlesStore.constructor.name, () => {
                 characters: 'letters',
                 created_slot_number: updatedTimeStamp99,
                 default_in_wallet: 'taco',
+                default: false,
                 handle_type: 'handle',
                 has_datum: false,
                 hex: Buffer.from('chimichanga').toString('hex'),
@@ -693,22 +697,23 @@ describe('Storage tests - ' + RedisHandlesStore.constructor.name, () => {
         it('Should update personalization data and save the default handle', async () => {
             const handleName = 'tortilla-soup';
             const handleHex = Buffer.from(handleName).toString('hex');
-            repo.save(
-                repo.Internal.buildHandle({
-                    hex: handleHex,
-                    name: handleName,
-                    og_number: 0,
-                    utxo: 'utxo123#0',
-                    policy,
-                    lovelace: 0,
-                    image: '',
-                    image_hash: '0x123',
-                    svg_version: '1.0.0',
-                    handle_type: HandleType.HANDLE,
-                    resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
-                    updated_slot_number: updatedTimeStamp1
-                })
-            );
+            let handle: klc.StoredHandle | null = repo.Internal.buildHandle({
+                hex: handleHex,
+                name: handleName,
+                og_number: 0,
+                utxo: 'utxo123#0',
+                policy,
+                lovelace: 0,
+                image: '',
+                image_hash: '0x123',
+                svg_version: '1.0.0',
+                handle_type: HandleType.HANDLE,
+                resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
+                updated_slot_number: updatedTimeStamp1
+            });
+            
+            repo.Internal.updateHolder(handle)
+            repo.save(handle)
 
             const personalizationUpdates: IPersonalization = {
                 designer: {
@@ -720,31 +725,34 @@ describe('Storage tests - ' + RedisHandlesStore.constructor.name, () => {
                 nsfw: false
             };
 
-            let handle = repo.getHandle(handleName);
+            handle = repo.getHandle(handleName);
+
+            const updatedHandle = repo.Internal.buildHandle({
+                ...handle,
+                hex: handleHex,
+                name: handleName,
+                personalization: personalizationUpdates,
+                reference_token: defaultReferenceToken,
+                policy,
+                image: 'ipfs://123',
+                og_number: 0,
+                length: 2,
+                version: 0,
+                handle_type: HandleType.HANDLE,
+                pfp_image: 'todo',
+                bg_image: 'todo',
+                image_hash: '0x123',
+                standard_image_hash: '0x123',
+                svg_version: '1.0.0',
+                standard_image: '',
+                last_update_address: '',
+                resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
+                updated_slot_number: updatedTimeStamp2,
+                default: true
+            });
+            repo.Internal.updateHolder(updatedHandle)
             repo.save(
-                repo.Internal.buildHandle({
-                    ...handle,
-                    hex: handleHex,
-                    name: handleName,
-                    personalization: personalizationUpdates,
-                    reference_token: defaultReferenceToken,
-                    policy,
-                    image: 'ipfs://123',
-                    og_number: 0,
-                    length: 2,
-                    version: 0,
-                    handle_type: HandleType.HANDLE,
-                    pfp_image: 'todo',
-                    bg_image: 'todo',
-                    image_hash: '0x123',
-                    standard_image_hash: '0x123',
-                    svg_version: '1.0.0',
-                    standard_image: '',
-                    last_update_address: '',
-                    resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
-                    updated_slot_number: updatedTimeStamp2,
-                    default: true
-                }),
+                updatedHandle,
                 handle!
             );
 
@@ -777,6 +785,7 @@ describe('Storage tests - ' + RedisHandlesStore.constructor.name, () => {
             const handleName = 'pork-belly';
             const handleHex = Buffer.from(handleName).toString('hex');
             let handle = repo.getHandle(handleName);
+            repo.Internal.updateHolder(handle!);
             repo.save(
                 repo.Internal.buildHandle({
                     ...handle,
@@ -1461,7 +1470,7 @@ describe('Storage tests - ' + RedisHandlesStore.constructor.name, () => {
             const handleName = 'taco';
             let handle = repo.getHandle(handleName);
             const timestamp = Date.now() + 200;
-            repo.removeHandle(handle!, timestamp);
+            repo.removeHandle(handle!);
 
             // After burn, expect not to find the handle
             handle = repo.getHandle(handleName);

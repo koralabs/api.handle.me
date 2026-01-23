@@ -1,5 +1,5 @@
 import { BlockPraos } from '@cardano-ogmios/schema';
-import { AssetNameLabel, HANDLE_POLICIES, LogCategory, Logger, MintingData, NETWORK, Network, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, HANDLE_POLICIES, LogCategory, Logger, NETWORK, Network, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from './ogmios/utils';
 
@@ -85,30 +85,7 @@ export const processBlock = async (txBlock: BlockPraos, repo: HandlesRepository)
                 }
 
                 // save UTxO to repo
-                repo.addUTxO(utxo);
-                const mintData: { handleName: string, mintingData: MintingData }[] = [];
-                for (const asset of utxo.handles) {
-                    for (const assetName of asset[1]) {
-                        if (assetName === '') {
-                            // Don't process the nameless token.
-                            continue;
-                        }
-                        const { isCip67, name, assetLabel } = getHandleNameFromAssetName(assetName);
-                        const isMintTx = isCip67 
-                            ? (assetLabel === AssetNameLabel.LBL_222 || assetLabel === AssetNameLabel.LBL_000)
-                                ? utxo.mint.flatMap(([, handles]) => handles).includes(assetName) 
-                                : false 
-                            : utxo.mint.flatMap(([, handles]) => handles).includes(assetName);
-
-                        if (isMintTx) {
-                            // TODO: Change metadata to only include handle metadata
-                            mintData.push({ handleName: name, mintingData: { created_slot: currentSlot, metadata: utxo.metadata, txHash: `${txId}` } });
-                        }
-                    }
-                }
-                repo.addMintData(mintData);
-                repo.updateHolderIndex(utxo);
-                repo.updateHandleIndexes(utxo);
+                repo.addUTxOAndMintData(utxo);
             }
         }
         // remove all the utxos that were spent as inputs to this tx

@@ -69,7 +69,7 @@ export class RedisHandlesStore implements IApiStore {
         RedisHandlesStore._pipeline = undefined;
     }
 
-    async repopulateIndexesFromUTxOs(updateHandleIndexes: (utxo: UTxOWithTxInfo) => void): Promise<void> {
+    async repopulateIndexesFromUTxOs(utxoFunctions: ((utxo: UTxOWithTxInfo) => void)[]): Promise<void> {
         let cursor = '0';
         let deleted = 0;
         let added = 0;
@@ -99,20 +99,23 @@ export class RedisHandlesStore implements IApiStore {
         // iterate through UTXO_SLOT and grab the UTxOs using the slot.
         const utxoIds = (this.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 0) ?? []) as string[];
         Logger.log(`Repopulating indexes from ${utxoIds.length.toLocaleString()} UTxOs, ${utxoIds[0]}`);
-        for (const utxoId of utxoIds) {
-            const utxo = this.getValueFromIndex(IndexNames.UTXO, utxoId);
-            if (utxo) {
-                updateHandleIndexes(utxo as UTxOWithTxInfo);
-            } else {
-                Logger.log({ message: `UTxO not found for key: ${utxoId}`, category: LogCategory.NOTIFY, event: 'repopulateIndexesFromUTxOs.missingUTxO' });
+        
+        const utxos = this.pipeline(() => {
+            utxoIds.map(utxoId => this.getValueFromIndex(IndexNames.UTXO, utxoId)).filter(Boolean)
+        });
+
+        this.pipeline(() => {
+            for (const utxo of utxos) {
+                utxoFunctions.forEach(f => f(utxo))
+                added++;
             }
-            added++;
-            // Log progress every 10k keys
-            if (added % 10000 === 0) {
-                const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-                const rate = (added / ((Date.now() - startTime) / 1000)).toFixed(0);
-                console.log(`Added: ${added.toLocaleString()} keys (${elapsed}s, ~${rate} keys/sec)`);
-            }
+        })
+        
+        // Log progress every 10k keys
+        if (added % 10000 === 0) {
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+            const rate = (added / ((Date.now() - startTime) / 1000)).toFixed(0);
+            console.log(`Added: ${added.toLocaleString()} keys (${elapsed}s, ~${rate} keys/sec)`);
         }
         
         const endTime = Date.now();
@@ -121,7 +124,7 @@ export class RedisHandlesStore implements IApiStore {
         Logger.log(`Repopulate Handle indexes from UTxOs took ${pad(Math.floor(seconds / 3600))}:${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`);
     }
 
-    public async tryPopulateFromS3UTxOs(updateHandleIndexes: (utxo: UTxOWithTxInfo) => void): Promise<{ slot: number; id: string }> {
+    public async tryPopulateFromS3UTxOs(utxoFunctions: ((utxo: UTxOWithTxInfo) => void)[]): Promise<{ slot: number; id: string }> {
         const startTime = Date.now();
         this.redisClientCall('flushdb');
         let id = handleEraBoundaries[NETWORK].id;
@@ -142,24 +145,7 @@ export class RedisHandlesStore implements IApiStore {
             const { utxos, slot: s3Slot, mintingData, hash: s3Hash, utxoSchemaVersion } = storedS3HandlesUTxOJson;
 
             if (utxoSchemaVersion == currentUTxOSchemaVersion) {
-                // save all the individual handles to the store
-                utxos.sort((a, b) => a.slot - b.slot);
-
-                const utxoChunks = chunk(utxos, MAX_SETS_PER_PIPE);
-                for (const utxoChunk of utxoChunks) {
-                    this.pipeline(() => {
-                        utxoChunk.forEach((utxo) => {
-                            // save the UTxO id to the store with slot as the key
-                            this.addValueToOrderedSet(IndexNames.UTXO_SLOT, utxo.slot, utxo.id);
-
-                            // save the UTxO to the store
-                            this.setValueOnIndex(IndexNames.UTXO, utxo.id, utxo);
-                        });
-                    });
-                }
-
-                Logger.log(`Saved ${utxos.length.toLocaleString()} UTxOs from S3 snapshot`);
-
+                // Save minting data first
                 const mintingDataChunks = chunk(Object.entries(mintingData), MAX_SETS_PER_PIPE);
                 for (const mintingDataChunk of mintingDataChunks) {
                     this.pipeline(() => {
@@ -171,11 +157,20 @@ export class RedisHandlesStore implements IApiStore {
 
                 Logger.log(`Saved minting data for ${Object.keys(mintingData).length.toLocaleString()} handles from S3 snapshot`);
 
-                for (let i = 0; i < utxos.length; i++) {
-                    // clone it
-                    const newUTxO = { ...utxos[i] };
-                    updateHandleIndexes(newUTxO);
+                // save all the individual handles to the store
+                utxos.sort((a, b) => a.slot - b.slot);
+
+                const utxoChunks = chunk(utxos, MAX_SETS_PER_PIPE);
+                for (const utxoChunk of utxoChunks) {
+                    this.pipeline(() => {
+                        utxoChunk.forEach((utxo) => {
+                            utxoFunctions.forEach(f => f(utxo))
+                        });
+                    });
                 }
+
+                Logger.log(`Saved ${utxos.length.toLocaleString()} UTxOs from S3 snapshot`);
+
 
                 id = s3Hash;
                 slot = s3Slot;
@@ -194,7 +189,13 @@ export class RedisHandlesStore implements IApiStore {
         return { id, slot };
     }
 
-    public async getStartingPoint(updateHandleIndexes: (utxo: UTxOWithTxInfo) => void, failed = false): Promise<{ slot: number; id: string } | null> {
+    /**
+     * 
+     * @param utxoFunctions Functions that are used to set indexes. NOTE: The first function should always be addUtxos
+     * @param failed 
+     * @returns 
+     */
+    public async getStartingPoint(utxoFunctions: ((utxo: UTxOWithTxInfo) => void)[], failed = false): Promise<{ slot: number; id: string } | null> {
         // repo.getsUTxos();
         // if process.env.UTXO_SCHEMA_VERSION matches redis utxoSchemaVersion (should hardly change) but process.env.INDEX_SCHEMA_VERSION doesn't match redis IndexSchemaVersion
         //  we need to loop through slots to get the utxos in redis in order and call repo.updateHandleIndexes(utxo);
@@ -207,7 +208,7 @@ export class RedisHandlesStore implements IApiStore {
             const currentSchemaVersion = this.getUTxOSchemaVersion();
             if (currentSchemaVersion > (utxoSchemaVersion ?? 0) || !currentBlockHash || !currentSlot) {
                 // start at Handle genesis
-                const { id, slot } = await this.tryPopulateFromS3UTxOs(updateHandleIndexes);
+                const { id, slot } = await this.tryPopulateFromS3UTxOs(utxoFunctions);
                 return { id, slot };
             }
 
@@ -215,7 +216,7 @@ export class RedisHandlesStore implements IApiStore {
                 // we need to delete all keys that don't start with {root}:mint nd {root}:utxo
                 // then we need to rebuild the indexes by looping through the utxos in order
                 Logger.log({ message: `Repopulating indexes from UTxOs to schema version ${this.getIndexSchemaVersion()}`, category: LogCategory.INFO, event: 'getStartingPoint.repopulateIndexesFromUTxOs' });
-                await this.repopulateIndexesFromUTxOs(updateHandleIndexes);
+                await this.repopulateIndexesFromUTxOs(utxoFunctions.slice(1));
                 this.setMetrics({ indexSchemaVersion: this.getIndexSchemaVersion() });
             }
 
@@ -226,7 +227,7 @@ export class RedisHandlesStore implements IApiStore {
             }
 
             try {
-                const { id, slot } = await this.tryPopulateFromS3UTxOs(updateHandleIndexes);
+                const { id, slot } = await this.tryPopulateFromS3UTxOs(utxoFunctions);
                 return { id, slot };
             } catch (error: any) {
                 Logger.log(`Error fetching file from online with error: ${error.message}`);

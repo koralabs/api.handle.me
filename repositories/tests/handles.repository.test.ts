@@ -66,8 +66,10 @@ describe('Store Tests - RedisHandlesStore', () => {
 
     beforeAll(async () => {
         handlesFixture.map((handle) => {
+            repo.Internal.updateHolder(handle);
             return repo.save(handle);
         });
+        repo.Internal.updateHolder(expectedVirtualHandle);
         repo.save(repo.Internal.buildHandle(expectedVirtualHandle));
         repo.setMetrics({
             lastSlot: Date.now() + 10000,
@@ -320,14 +322,17 @@ describe('Store Tests - RedisHandlesStore', () => {
                 resolved_addresses: { ada: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q' },
                 updated_slot_number: 0
             });
+            const difHandle = {
+                ...handle,
+                hex: Buffer.from('pollo-verde').toString('hex'),
+                name: 'pollo-verde',
+                utxo: ''
+            }
             await Promise.all([
+                repo.Internal.updateHolder(handle),
+                repo.Internal.updateHolder(difHandle),
                 repo.save(handle),
-                repo.save({
-                    ...handle,
-                    hex: Buffer.from('pollo-verde').toString('hex'),
-                    name: 'pollo-verde',
-                    utxo: ''
-                })
+                repo.save(difHandle)
             ]);
         });
 
@@ -372,7 +377,10 @@ describe('Store Tests - RedisHandlesStore', () => {
                 resolved_addresses: { ada: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q' },
                 updated_slot_number: 0
             });
-            await Promise.all([repo.save(handle)]);
+            await Promise.all([
+                repo.Internal.updateHolder(handle),
+                repo.save(handle)
+            ]);
         });
 
         it('should get subhandles for root handle', async () => {
