@@ -106,7 +106,7 @@ export class RedisHandlesStore implements IApiStore {
 
         this.pipeline(() => {
             for (const utxo of utxos) {
-                utxoFunctions.forEach(f => f(utxo, new Map<string, any>()))
+                utxoFunctions.forEach(f => f(utxo))
                 added++;
             }
         })
