@@ -1,4 +1,4 @@
-import { ApiIndexType, chunk, Holder, IApiMetrics, IApiStore, IHandleFileContent, IndexNames, ISlotHistory, isNumeric, LogCategory, Logger, NETWORK, SortAndLimitOptions, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { ApiIndexType, chunk, Holder, IApiMetrics, IApiStore, IHandleFileContent, IndexNames, ISlotHistory, isNumeric, LogCategory, Logger, NETWORK, SortAndLimitOptions, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { GlideString, HashDataType, SortOptions } from '@valkey/valkey-glide';
 import { promisify } from 'util';
 import { MessageChannel, receiveMessageOnPort, Worker } from 'worker_threads';
@@ -69,7 +69,7 @@ export class RedisHandlesStore implements IApiStore {
         RedisHandlesStore._pipeline = undefined;
     }
 
-    repopulateIndexesFromUTxOs(utxoFunctions: ((utxo: UTxOWithTxInfo) => void)[]): void {
+    repopulateIndexesFromUTxOs(utxoFunctions: Record<UTxOFunctionName, (utxo: UTxOWithTxInfo) => void>): void {
         let cursor = '0';
         let deleted = 0;
         let added = 0;
@@ -106,7 +106,8 @@ export class RedisHandlesStore implements IApiStore {
 
         this.pipeline(() => {
             for (const utxo of utxos) {
-                utxoFunctions.forEach(f => f(utxo))
+                utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo);
+                utxoFunctions[UTxOFunctionName.UPDATE_HOLDER_INDEX](utxo);
                 added++;
             }
         })
@@ -124,7 +125,7 @@ export class RedisHandlesStore implements IApiStore {
         Logger.log(`Repopulate Handle indexes from UTxOs took ${pad(Math.floor(seconds / 3600))}:${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`);
     }
 
-    public async tryPopulateFromS3UTxOs(utxoFunctions: ((utxo: UTxOWithTxInfo) => void)[]): Promise<{ slot: number; id: string }> {
+    public async tryPopulateFromS3UTxOs(utxoFunctions: Record<UTxOFunctionName, (utxo: UTxOWithTxInfo) => void>): Promise<{ slot: number; id: string }> {
         const startTime = Date.now();
         this.redisClientCall('flushdb');
         let id = handleEraBoundaries[NETWORK].id;
@@ -164,7 +165,9 @@ export class RedisHandlesStore implements IApiStore {
                 for (const utxoChunk of utxoChunks) {
                     this.pipeline(() => {
                         utxoChunk.forEach((utxo) => {
-                            utxoFunctions.forEach(f => f(utxo))
+                            utxoFunctions[UTxOFunctionName.ADD_UTXO](utxo);
+                            utxoFunctions[UTxOFunctionName.UPDATE_HOLDER_INDEX](utxo);
+                            utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo);
                         });
                     });
                 }
@@ -195,7 +198,7 @@ export class RedisHandlesStore implements IApiStore {
      * @param failed 
      * @returns 
      */
-    public async getStartingPoint(utxoFunctions: ((utxo: UTxOWithTxInfo) => void)[], failed = false): Promise<{ slot: number; id: string } | null> {
+    public async getStartingPoint(utxoFunctions: Record<UTxOFunctionName, (utxo: UTxOWithTxInfo) => void>, failed = false): Promise<{ slot: number; id: string } | null> {
         // repo.getsUTxos();
         // if process.env.UTXO_SCHEMA_VERSION matches redis utxoSchemaVersion (should hardly change) but process.env.INDEX_SCHEMA_VERSION doesn't match redis IndexSchemaVersion
         //  we need to loop through slots to get the utxos in redis in order and call repo.updateHandleIndexes(utxo);
@@ -216,7 +219,7 @@ export class RedisHandlesStore implements IApiStore {
                 // we need to delete all keys that don't start with {root}:mint nd {root}:utxo
                 // then we need to rebuild the indexes by looping through the utxos in order
                 Logger.log({ message: `Repopulating indexes from UTxOs to schema version ${this.getIndexSchemaVersion()}`, category: LogCategory.INFO, event: 'getStartingPoint.repopulateIndexesFromUTxOs' });
-                this.repopulateIndexesFromUTxOs(utxoFunctions.slice(1));
+                this.repopulateIndexesFromUTxOs(utxoFunctions);
                 this.setMetrics({ indexSchemaVersion: this.getIndexSchemaVersion() });
             }
 
