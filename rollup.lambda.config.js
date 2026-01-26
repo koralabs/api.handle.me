@@ -6,8 +6,11 @@ import typescript from 'rollup-plugin-typescript2';
 
 export default (async () => ({
     input: [
-        'lambda.ts',
-        'block_processors/*.processor.ts',
+        'lambdas/api.ts',
+        'lambdas/reindex.ts',
+        'lambdas/rollback.ts',
+        'lambdas/scanner.ts',
+        'lambdas/snapshot.ts',
         'ioc/*.registry.ts',
         'middlewares/*.middleware.ts',
         'routes/*.route.ts',
