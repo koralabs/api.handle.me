@@ -68,6 +68,14 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context:AWSLambda
     const handlesRepo = new HandlesRepository(new RedisHandlesStore());
     const { lastSlot = Infinity, currentSlot = 0, currentBlockHash } = handlesRepo.getMetrics();
     
+
+    if (this.getIndexSchemaVersion() > (indexSchemaVersion ?? 0)) {
+        // Pause the scanner 
+        // Trigger reindex lambda
+        // exit
+    }
+
+    // Is scanning fast enough to do this without MAX_TIP_SLOTS? Or a much higher one?
     if (lastSlot - currentSlot <= MAX_TIP_SCAN_SLOTS) {
         const bResp: {hash: string, slot: number, confirmations: number}[] = await fetchPaginatedResults(`blocks/${currentBlockHash}/next`);
         bResp.sort((a, b) => b.confirmations - a.confirmations);

@@ -20,7 +20,7 @@ const getRedisItems = async () => {
     const utxos: Map<string, UTxOWithTxInfo | null> = new Map();
     const mints: Map<string, MintingData[] | null> = new Map();
 
-    let lastSlot = 0;
+    let lastSlot = 0; // Lets hardcode this to 20 blocks ago (from Bf) To avoid recording a rollbak to the snapshot
     let lastHash = '';
     let utxoSchemaVersion = 0;
 

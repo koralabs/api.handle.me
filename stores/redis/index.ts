@@ -216,8 +216,6 @@ export class RedisHandlesStore implements IApiStore {
             }
 
             if (this.getIndexSchemaVersion() > (indexSchemaVersion ?? 0)) {
-                // we need to delete all keys that don't start with {root}:mint nd {root}:utxo
-                // then we need to rebuild the indexes by looping through the utxos in order
                 Logger.log({ message: `Repopulating indexes from UTxOs to schema version ${this.getIndexSchemaVersion()}`, category: LogCategory.INFO, event: 'getStartingPoint.repopulateIndexesFromUTxOs' });
                 this.repopulateIndexesFromUTxOs(utxoFunctions);
                 this.setMetrics({ indexSchemaVersion: this.getIndexSchemaVersion() });
