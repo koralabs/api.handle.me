@@ -45,6 +45,8 @@ export class RedisHandlesStore implements IApiStore {
         //console.log('PIPELINE', RedisHandlesStore._pipeline)
         const results = this.redisClientCall('batch', RedisHandlesStore._pipeline);
         for (let i = 0; i < results.length; i++) {
+            // All results are returned
+            // Only used to rehydrate the hgetall
             if (RedisHandlesStore._pipeline[i][0] == 'hgetall') {
                 //console.log(RedisHandlesStore._pipeline[i][1][0], results[i])
                 results[i] = this.rehydrateObject(RedisHandlesStore._pipeline[i][1][0], results[i]);

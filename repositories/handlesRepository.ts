@@ -258,12 +258,60 @@ export class HandlesRepository {
         this.store.setValueOnIndex(IndexNames.UTXO, utxo.id, utxo);
     }
 
+    public buildMintingDataFromUTxO(utxo: UTxOWithTxInfo) {
+        const mintingData: Map<string, MintingData[]>  = new Map();
+        for (const asset of utxo.handles) {
+            for (const assetName of asset[1]) {
+                if (assetName === '') {
+                    // Don't process the nameless token.
+                    continue;
+                }
+                const { isCip67, name, assetLabel } = getHandleNameFromAssetName(assetName);
+
+                // TODO: CHANGE THIS NAME!!!!!!!!
+                const isMintTx = isCip67 
+                    ? (assetLabel === AssetNameLabel.LBL_222 || assetLabel === AssetNameLabel.LBL_000)
+                        ? utxo.mint.flatMap(([, handles]) => handles).includes(assetName) 
+                        : false 
+                    : utxo.mint.flatMap(([, handles]) => handles).includes(assetName);
+
+                if (isMintTx) {
+                    // TODO: Change metadata to only include handle metadata
+                    const data = { created_slot: utxo.slot, metadata: utxo.metadata, txHash: `${utxo.tx_id}` };
+                    const existingMintData = mintingData.get(name);
+                    if (existingMintData) existingMintData.push(data)
+                    else mintingData.set(name, [data]);
+                }
+            }
+        }
+
+        const missingMintingDataHandles = utxo.handles.flatMap(([, handles]) => handles).filter(assetName => {
+            const { name } = getHandleNameFromAssetName(assetName);
+            return !mintingData.get(name)
+        })
+
+        const retrievedMintingData = this.store.pipeline(() => {
+            missingMintingDataHandles.forEach(handleName => {
+                this.store.getValuesFromIndexedSet(IndexNames.MINT, handleName) as Set<string>;
+            })
+        });
+
+        Array.from(retrievedMintingData as Set<string>[]).forEach((md, i) => {
+            const handleName = missingMintingDataHandles[i];
+            mintingData.set(handleName, Array.from(md).map(md => JSON.parse(md)));
+        })
+
+        return mintingData
+    }
+
     public addUTxOAndMintData(utxo: UTxOWithTxInfo) {
+        const mintingData = this.buildMintingDataFromUTxO(utxo);
+
         this.store.pipeline(() => {
             this.addUTxO(utxo);
             this.addMintData(utxo);
-            this.updateHolderIndex(utxo);
-            this.updateHandleIndexes(utxo);
+            this.updateHolderIndex(utxo);            
+            this.updateHandleIndexes(utxo, mintingData);
         });
     }
 
@@ -284,26 +332,7 @@ export class HandlesRepository {
     }
 
     public addMintData(utxo: UTxOWithTxInfo) {
-        const mintData: { handleName: string, mintingData: MintingData }[] = [];
-        for (const asset of utxo.handles) {
-            for (const assetName of asset[1]) {
-                if (assetName === '') {
-                    // Don't process the nameless token.
-                    continue;
-                }
-                const { isCip67, name, assetLabel } = getHandleNameFromAssetName(assetName);
-                const isMintTx = isCip67 
-                    ? (assetLabel === AssetNameLabel.LBL_222 || assetLabel === AssetNameLabel.LBL_000)
-                        ? utxo.mint.flatMap(([, handles]) => handles).includes(assetName) 
-                        : false 
-                    : utxo.mint.flatMap(([, handles]) => handles).includes(assetName);
-
-                if (isMintTx) {
-                    // TODO: Change metadata to only include handle metadata
-                    mintData.push({ handleName: name, mintingData: { created_slot: utxo.slot, metadata: utxo.metadata, txHash: `${utxo.tx_id}` } });
-                }
-            }
-        }
+        const mintData = this.buildMintingDataFromUTxO(utxo)
     
         for (const item of mintData) {
             this.store.addValueToIndexedSet(IndexNames.MINT, item.handleName, JSON.stringify(item.mintingData, (_, val) => (typeof val === 'bigint' ? `${Number(val)}` : val)));
@@ -548,7 +577,7 @@ export class HandlesRepository {
         return holder;
     }
 
-    public updateHandleIndexes(utxo: UTxOWithTxInfo, handles?: Map<string, StoredHandle>): void {
+    public updateHandleIndexes(utxo: UTxOWithTxInfo, mintValueIndex: Map<string, MintingData[]>, handles?: Map<string, StoredHandle>): void {
         for (const asset of utxo.handles) {
             const policy = asset[0];
             for (const assetName of asset[1]) {
@@ -556,7 +585,6 @@ export class HandlesRepository {
                     // Don't process the nameless token.
                     continue;
                 }
-                const {lovelace, datum, address, slot, script } = utxo
 
                 const { ownerTokenHex, name, isCip67, assetLabel } = getHandleNameFromAssetName(assetName);
                 const isMintTx = isCip67 
@@ -564,14 +592,18 @@ export class HandlesRepository {
                         ? utxo.mint.flatMap(([, mintHandles]) => Object.keys(mintHandles)).includes(assetName) 
                         : false 
                     : utxo.mint.flatMap(([, mintHandles]) => Object.keys(mintHandles)).includes(assetName)
-                const mintIndexValue = this.store.getValuesFromIndexedSet(IndexNames.MINT, name) as Set<string>;
-                const [mintingData] = Array.from(mintIndexValue).map<MintingData>(md => JSON.parse(md)).sort((a, b) => a.created_slot - b.created_slot);
+                //const mintIndexValue = this.store.getValuesFromIndexedSet(IndexNames.MINT, name) as Set<string>;
+                //.map<MintingData>(md => JSON.parse(md))
+                const mintIndexValue = mintValueIndex.get(name)!;
+                const [mintingData] = Array.from(mintIndexValue).sort((a, b) => a.created_slot - b.created_slot);
 
                 // mintingData from the index should never be undefined.
                 // however, metadata can.
                 const metadata: { [handleName: string]: HandleOnChainMetadata } | undefined = (mintingData.metadata?.[MetadataLabel.NFT] as any)?.[policy];
                 const data = metadata && (metadata[isCip67 ? ownerTokenHex : name] as unknown as IHandleMetadata);
                 const existingHandle = handles ? handles.get(name) : this.prepareHandle(this.store.getValueFromIndex(IndexNames.HANDLE, name) as StoredHandle) ?? undefined;
+
+                const {lovelace, datum, address, slot, script } = utxo
                 let handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData.created_slot}, data);
                 
                 // if (['ap@adaprotocol', 'b-263-54'].some(n => n == handle.name))
