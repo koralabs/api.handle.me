@@ -3,6 +3,7 @@ import { IHandleFileContent, IndexNames, MintingData, UTxOWithTxInfo } from '@ko
 import fs from 'fs';
 import stdOut from 'node:readline';
 import zlib from 'zlib';
+import { HandlesRepository } from '../repositories/handlesRepository';
 import { RedisHandlesStore } from '../stores/redis';
 
 declare global {
@@ -113,6 +114,7 @@ const getRedisItems = async () => {
 };
 
 export const processSnapshot = async (network: string) => {
+
     const results = await getRedisItems();
 
     const fileJson: IHandleFileContent = {
@@ -132,7 +134,16 @@ export const processSnapshot = async (network: string) => {
 };
 
 export const handler = async (event: any) => {
-    const networks = ['mainnet', 'preview', 'preprod'];
+    const store = new RedisHandlesStore();
+    const handlesRepo = new HandlesRepository(store);
+    const { lockLambdas, last2160check} = handlesRepo.getMetrics();
+
+    if (lockLambdas) {
+        // we probably need some recovery checks/notify here
+        return
+    }
+
+    const networks = ['mainnet', 'preview', 'preprod']; // We can't do this, each region/network has it's own redis
     for (let i = 0; i < networks.length; i++) {
         const fileJson = await processSnapshot(networks[i]);
 
