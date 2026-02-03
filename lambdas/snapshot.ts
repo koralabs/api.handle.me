@@ -90,8 +90,8 @@ const getRedisItems = async () => {
                     const item = pipelineResults[i];
                     const filteredResults: MintingData[] = item
                         ? Array.from(item)
-                            .map((md) => JSON.parse(md))
-                            .filter((md) => md.created_slot <= lastSlot)
+                              .map((md) => JSON.parse(md))
+                              .filter((md) => md.created_slot <= lastSlot)
                         : [];
                     mints.set(keys[i].split(':')[2], filteredResults);
                 }
@@ -114,7 +114,6 @@ const getRedisItems = async () => {
 };
 
 export const processSnapshot = async (network: string) => {
-
     const results = await getRedisItems();
 
     const fileJson: IHandleFileContent = {
@@ -136,11 +135,14 @@ export const processSnapshot = async (network: string) => {
 export const handler = async (event: any) => {
     const store = new RedisHandlesStore();
     const handlesRepo = new HandlesRepository(store);
-    const { lockLambdas, last2160check} = handlesRepo.getMetrics();
+    const { lockLambdas, lastMaxRollbackCheck } = handlesRepo.getMetrics();
 
     if (lockLambdas) {
         // we probably need some recovery checks/notify here
-        return
+        return {
+            statusCode: 200,
+            body: ''
+        };
     }
 
     const networks = ['mainnet', 'preview', 'preprod']; // We can't do this, each region/network has it's own redis

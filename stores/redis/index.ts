@@ -106,6 +106,7 @@ export class RedisHandlesStore implements IApiStore {
             utxoIds.map(utxoId => this.getValueFromIndex(IndexNames.UTXO, utxoId)).filter(Boolean)
         });
 
+        // TODO: This will have to be chunked to 10k at a time
         this.pipeline(() => {
             for (const utxo of utxos) {
                 utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo);
@@ -153,7 +154,7 @@ export class RedisHandlesStore implements IApiStore {
                 for (const mintingDataChunk of mintingDataChunks) {
                     this.pipeline(() => {
                         mintingDataChunk.forEach(([handle, mintData]) => {
-                            this.addValueToIndexedSet(IndexNames.MINT, handle, JSON.stringify(mintData))
+                            mintData.forEach(md => this.addValueToIndexedSet(IndexNames.MINT, handle, JSON.stringify(md)))
                         });
                     });
                 }
@@ -201,12 +202,7 @@ export class RedisHandlesStore implements IApiStore {
      * @returns 
      */
     public async getStartingPoint(utxoFunctions: Record<UTxOFunctionName, (utxo: UTxOWithTxInfo) => void>, failed = false): Promise<{ slot: number; id: string } | null> {
-        // repo.getsUTxos();
-        // if process.env.UTXO_SCHEMA_VERSION matches redis utxoSchemaVersion (should hardly change) but process.env.INDEX_SCHEMA_VERSION doesn't match redis IndexSchemaVersion
-        //  we need to loop through slots to get the utxos in redis in order and call repo.updateHandleIndexes(utxo);
-        // if the utxo version is wrong, we should check S3 to see if we have a utxo version snapshot.
-        //      if so, use it.
-        //      if not return the origin from this function. (flushdb)
+        // This should run locally so we're not worried about a long running process
         if (!failed) {
             const { indexSchemaVersion, utxoSchemaVersion, currentSlot, currentBlockHash } = this.getMetrics();
 

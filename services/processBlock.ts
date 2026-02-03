@@ -3,7 +3,7 @@ import { AssetNameLabel, HANDLE_POLICIES, LogCategory, Logger, NETWORK, Network,
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from './ogmios/utils';
 
-export const processBlock = (txBlock: BlockPraos, repo: HandlesRepository) => {
+export const processBlock = (txBlock: BlockPraos, repo: HandlesRepository, updateIndexes = true) => {
     const currentSlot = txBlock?.slot ?? repo.getMetrics().currentSlot ?? 0;
     for (let b = 0; b < (txBlock?.transactions ?? []).length; b++) {
         const txBody = txBlock?.transactions?.[b];
@@ -11,17 +11,19 @@ export const processBlock = (txBlock: BlockPraos, repo: HandlesRepository) => {
 
         // Look for burn transactions
         //const assetNameInMintAssets = txBody?.mint?.[policyId]?.[assetName] !== undefined;
-        const mintAssets = Object.entries(txBody?.mint ?? {});
-        for (let i = 0; i < mintAssets.length; i++) {
-            const [policy, assetInfo] = mintAssets[i];
-            if (HANDLE_POLICIES.contains(NETWORK as Network, policy)) {
-                for (const [assetName, quantity] of Object.entries(assetInfo)) {
-                    if (quantity == BigInt(-1)) {
-                        const { name, isCip67 } = getHandleNameFromAssetName(assetName);
-                        if (!isCip67 || assetName.startsWith(AssetNameLabel.LBL_222) || assetName.startsWith(AssetNameLabel.LBL_000)) {
-                            const handle = repo.getHandle(name);
-                            if (!handle) continue;
-                            repo.removeHandle(handle);
+        if (updateIndexes) {
+            const mintAssets = Object.entries(txBody?.mint ?? {});
+            for (let i = 0; i < mintAssets.length; i++) {
+                const [policy, assetInfo] = mintAssets[i];
+                if (HANDLE_POLICIES.contains(NETWORK as Network, policy)) {
+                    for (const [assetName, quantity] of Object.entries(assetInfo)) {
+                        if (quantity == BigInt(-1)) {
+                            const { name, isCip67 } = getHandleNameFromAssetName(assetName);
+                            if (!isCip67 || assetName.startsWith(AssetNameLabel.LBL_222) || assetName.startsWith(AssetNameLabel.LBL_000)) {
+                                const handle = repo.getHandle(name);
+                                if (!handle) continue;
+                                repo.removeHandle(handle);
+                            }
                         }
                     }
                 }
@@ -81,15 +83,16 @@ export const processBlock = (txBlock: BlockPraos, repo: HandlesRepository) => {
                     } : undefined,
                     handles: handleAssets,
                     mint: mintAssets, // filtered for the minted assets in this UTxO
-                    metadata // filtered for the minted assets in this UTxO
+                    metadata, // filtered for the minted assets in this UTxO
+                    blockHash: txBlock.id,
+                    blockNum: txBlock.height
                 }
 
                 // save UTxO to repo
-                repo.addUTxOAndMintData(utxo);
+                repo.addUTxOAndMintData(utxo, updateIndexes);
             }
         }
         // remove all the utxos that were spent as inputs to this tx
         repo.removeUTxOs(txBody?.inputs.flatMap((x) => `${x.transaction.id}#${x.index}`) ?? []);
     }
-    
 };
