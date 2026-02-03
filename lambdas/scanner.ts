@@ -16,7 +16,7 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context:AWSLambda
     if (lockLambdas) {
         // we probably need some recovery checks/notify here
         return
-    };
+    }
     
     if (Number(store.getIndexSchemaVersion()) > (handlesRepo.getMetrics().indexSchemaVersion ?? 0)) {
         // Pause the scanner 

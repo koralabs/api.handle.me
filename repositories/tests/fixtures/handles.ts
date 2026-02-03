@@ -551,7 +551,7 @@ export const createRandomHandles = async (store: RedisHandlesStore, count: numbe
                 updated_slot_number: i
             });
             if (saveToHandleStore) {
-                repo.Internal.updateHolder(handle);
+                repo.updateHolder(handle);
                 repo.save(handle);
             }
             handles.push(handle);
@@ -605,7 +605,7 @@ export const performRandomHandleUpdates = async (store: RedisHandlesStore, count
                         resolved_addresses: {ada: createRandomAddress()},
                         updated_slot_number: beginningSlot + i
                     });
-                    repo.Internal.updateHolder(newHandle);
+                    repo.updateHolder(newHandle);
                     repo.save(newHandle);
                 }
                 break;
@@ -619,7 +619,7 @@ export const performRandomHandleUpdates = async (store: RedisHandlesStore, count
                     resolved_addresses: { ada: createRandomAddress() },
                     updated_slot_number: beginningSlot + i
                 } as StoredHandle;
-                repo.Internal.updateHolder(handle)
+                repo.updateHolder(handle)
                 repo.save(handle, oldHandle);
                 break;
             }

@@ -965,7 +965,7 @@ describe('processBlock Tests', () => {
         jest.spyOn(HandlesRepository.prototype, 'getMetrics').mockReturnValue({});
 
         const handle = repo.Internal.buildHandle({ name: handleName, hex: handleHexName, policy: policyId, resolved_addresses: { ada: defaultAddress } });
-        repo.Internal.updateHolder(handle);
+        repo.updateHolder(handle);
         repo.save(handle);
 
         await ogmios['processBlock'](txBlock({ policy: policyId, handleHexName, isBurn: true, slot }));
@@ -1016,7 +1016,7 @@ describe('processBlock Tests', () => {
             const datum = await encodeJsonToDatum({
                 constructor_12: [{}, 1, {}]
             });
-            const result = repo['_buildPersonalizationData']({ name: 'taco', hex: '7461636F' } as StoredHandle, datum);
+            const result = repo['buildPersonalizationData']({ name: 'taco', hex: '7461636F' } as StoredHandle, datum);
             expect(result).toEqual({ nftAttributes: null, projectAttributes: null });
         });
 
@@ -1024,7 +1024,7 @@ describe('processBlock Tests', () => {
             const datum = await encodeJsonToDatum({
                 constructor_0: [{}, 1, {}]
             });
-            const result = repo['_buildPersonalizationData']({ name: 'taco', hex: '7461636F' } as StoredHandle, datum);
+            const result = repo['buildPersonalizationData']({ name: 'taco', hex: '7461636F' } as StoredHandle, datum);
             expect(result).toEqual({ nftAttributes: {}, projectAttributes: {} });
         });
 
@@ -1035,7 +1035,7 @@ describe('processBlock Tests', () => {
                 },
                 { defaultToText: true }
             );
-            const result = repo['_buildPersonalizationData']({ name: 'taco', hex: '7461636F' } as StoredHandle, datum);
+            const result = repo['buildPersonalizationData']({ name: 'taco', hex: '7461636F' } as StoredHandle, datum);
             expect(result).toEqual({ nftAttributes: { a: 'a' }, projectAttributes: { b: 'b' } });
         });
 
@@ -1068,7 +1068,7 @@ describe('processBlock Tests', () => {
                 ]
             });
 
-            const result = await repo['_buildPersonalizationData']({ name: 'taco', hex: '7461636F' } as StoredHandle, datum);
+            const result = await repo['buildPersonalizationData']({ name: 'taco', hex: '7461636F' } as StoredHandle, datum);
             expect(result).toEqual({
                 nftAttributes: {
                     characters: '',
@@ -1126,7 +1126,7 @@ describe('processBlock Tests', () => {
                     }
                 ]
             });
-            const result = await repo['_buildPersonalizationData']({ name: 'taco', hex: '7461636F' } as StoredHandle, datum);
+            const result = await repo['buildPersonalizationData']({ name: 'taco', hex: '7461636F' } as StoredHandle, datum);
             expect(result).toBeTruthy();
         });
 
@@ -1171,7 +1171,7 @@ describe('processBlock Tests', () => {
                     }
                 ]
             });
-            const result = await repo['_buildPersonalizationData']({ name: 'taco', hex: '7461636F' } as StoredHandle, datum);
+            const result = await repo['buildPersonalizationData']({ name: 'taco', hex: '7461636F' } as StoredHandle, datum);
             expect(result).toBeTruthy();
         });
     });
