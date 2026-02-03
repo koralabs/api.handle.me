@@ -8,7 +8,7 @@ const config = {
     'preset': 'ts-jest/presets/default-esm',
     'testEnvironment': 'node',
     'globalTeardown': './repositories/tests/globalTeardown.ts',
-    'silent': true,
+    'silent': true
 
 }
 export default config

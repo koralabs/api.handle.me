@@ -572,11 +572,8 @@ export class HandlesRepository {
         // Set defaultHandle to incoming if isDefault, otherwise if manuallySet, then keep the current
         // default. If neither, then run this.getDefaultHandle algo
         holder.defaultHandle = (() => {
-            if (handle.default) {return handle.name}
-            else {
-                if (holder.manuallySet) return holder.defaultHandle;
-                //                                 this is here because of og_number possibly changing
-                else return this.getDefaultHandle(holder, holderHandle)?.name ?? ''}
+            if (handle.default) return handle.name
+            else return this.getDefaultHandle(holder, holderHandle)?.name ?? ''
         })();
         delete handle.default; // This is a temp property not meant to save to the handle
 
@@ -748,7 +745,7 @@ export class HandlesRepository {
         handle.holder = holder.address
         handle.holder_type = holder.type
         
-        if (oldHandle) {
+        if (oldHandle && oldHandle?.holder !== handle.holder) {
             this._removeHandleFromHolder(oldHandle?.resolved_addresses.ada, name)
         }
 
@@ -800,6 +797,11 @@ export class HandlesRepository {
         // This is to avoid thousands of handles being iterated through for known owners with massive amounts of handles
         const handles = [...holder.handles];
         if (newHandle) handles.push(newHandle);
+        
+        if (holder.manuallySet) {
+            const defaultHandle = handles.find(h => h.name == holder.defaultHandle);
+            if (defaultHandle) return defaultHandle;
+        }
 
         if (!!holder.knownOwnerName && handles.length > 100) return handles[0];
 
@@ -1002,7 +1004,7 @@ export class HandlesRepository {
                 this.store.removeKeyFromIndex(IndexNames.HOLDER, holderInfo.address);   
             } else {
                 holder.manuallySet = holder.manuallySet && holder.defaultHandle != name;
-                holder.defaultHandle = holder.manuallySet ? holder.defaultHandle : this.getDefaultHandle(holder)?.name ?? '';
+                holder.defaultHandle = this.getDefaultHandle(holder)?.name ?? '';
                 this.store.setValueOnIndex(IndexNames.HOLDER, holderInfo.address, holder);
             }
             // This could return null if it is a pre-Shelley address (not bech32)

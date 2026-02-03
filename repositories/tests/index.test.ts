@@ -226,8 +226,8 @@ describe('Storage tests', () => {
                     version: 0,
                     handle_type: HandleType.HANDLE
                 }
-            )
-            
+            );
+
             repo.updateHolder(handle);
             repo.save(handle);
 
@@ -640,29 +640,31 @@ describe('Storage tests', () => {
                 nsfw: false
             };
 
-            repo.save(
-                repo.Internal.buildHandle({
-                    hex: Buffer.from('sour-cream').toString('hex'),
-                    name: 'sour-cream',
-                    personalization: designerUpdates,
-                    reference_token: defaultReferenceToken,
-                    policy,
-                    image: 'ipfs://123',
-                    og_number: 0,
-                    length: 2,
-                    version: 0,
-                    handle_type: HandleType.HANDLE,
-                    updated_slot_number: updatedTimeStamp2,
-                    pfp_image: 'todo',
-                    bg_image: 'todo',
-                    image_hash: '0x123',
-                    standard_image_hash: '0x123',
-                    svg_version: '1.0.0',
-                    standard_image: 'ipfs://123',
-                    last_update_address: '',
-                    resolved_addresses: { ada: '0xaaaa', btc: '2213kjsjkn', eth: 'sad2wsad' }
-                })
-            );
+            const sourCreamHandle = repo.Internal.buildHandle({
+                hex: Buffer.from('sour-cream').toString('hex'),
+                name: 'sour-cream',
+                personalization: designerUpdates,
+                reference_token: defaultReferenceToken,
+                policy,
+                image: 'ipfs://123',
+                og_number: 0,
+                length: 2,
+                version: 0,
+                handle_type: HandleType.HANDLE,
+                updated_slot_number: updatedTimeStamp2,
+                pfp_image: 'todo',
+                bg_image: 'todo',
+                image_hash: '0x123',
+                standard_image_hash: '0x123',
+                svg_version: '1.0.0',
+                standard_image: 'ipfs://123',
+                last_update_address: '',
+                resolved_addresses: { ada: '0xaaaa', btc: '2213kjsjkn', eth: 'sad2wsad' }
+            });
+
+            repo.updateHolder(sourCreamHandle);
+
+            repo.save(repo.Internal.buildHandle(sourCreamHandle));
 
             expect(storeInstance.getIndex(klc.IndexNames.HANDLE).get('sour-cream')).toEqual({
                 bg_image: 'todo',
@@ -700,6 +702,7 @@ describe('Storage tests', () => {
             });
         });
 
+        // BROKEN
         it('Should update personalization data and save the default handle', async () => {
             const handleName = 'tortilla-soup';
             const handleHex = Buffer.from(handleName).toString('hex');
@@ -717,9 +720,9 @@ describe('Storage tests', () => {
                 resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
                 updated_slot_number: updatedTimeStamp1
             });
-            
-            repo.updateHolder(handle)
-            repo.save(handle)
+
+            repo.updateHolder(handle);
+            repo.save(handle);
 
             const personalizationUpdates: IPersonalization = {
                 designer: {
@@ -756,11 +759,8 @@ describe('Storage tests', () => {
                 updated_slot_number: updatedTimeStamp2,
                 default: true
             });
-            repo.updateHolder(updatedHandle)
-            repo.save(
-                updatedHandle,
-                handle!
-            );
+            repo.updateHolder(updatedHandle);
+            repo.save(updatedHandle, handle!);
 
             handle = repo.getHandle(handleName);
 
@@ -791,26 +791,26 @@ describe('Storage tests', () => {
             const handleName = 'pork-belly';
             const handleHex = Buffer.from(handleName).toString('hex');
             let handle = repo.getHandle(handleName);
-            repo.updateHolder(handle!);
-            repo.save(
-                repo.Internal.buildHandle({
-                    ...handle,
-                    hex: handleHex,
-                    name: handleName,
-                    og_number: 0,
-                    utxo: 'utxo123#0',
-                    policy,
-                    lovelace: 0,
-                    image: '',
-                    image_hash: '0x123',
-                    svg_version: '1.0.0',
-                    handle_type: HandleType.HANDLE,
-                    pz_enabled: false,
-                    resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
-                    updated_slot_number: updatedTimeStamp1
-                }),
-                handle!
-            );
+
+            const porkBellyHandle = repo.Internal.buildHandle({
+                ...handle,
+                hex: handleHex,
+                name: handleName,
+                og_number: 0,
+                utxo: 'utxo123#0',
+                policy,
+                lovelace: 0,
+                image: '',
+                image_hash: '0x123',
+                svg_version: '1.0.0',
+                handle_type: HandleType.HANDLE,
+                pz_enabled: false,
+                resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
+                updated_slot_number: updatedTimeStamp1
+            });
+
+            repo.updateHolder(porkBellyHandle);
+            repo.save(porkBellyHandle, handle!);
 
             const personalizationUpdates: IPersonalization = {
                 socials: [
@@ -828,33 +828,35 @@ describe('Storage tests', () => {
                 nsfw: false
             };
 
+            const updatedPorkBellyHandle = repo.Internal.buildHandle({
+                ...handle,
+                hex: handleHex,
+                name: handleName,
+                personalization: personalizationUpdates,
+                reference_token: defaultReferenceToken,
+                policy,
+                pfp_image: 'todo',
+                bg_image: 'todo',
+                image_hash: '0x123',
+                standard_image_hash: '0x123',
+                svg_version: '1.0.0',
+                standard_image: '',
+                last_update_address: '0x222',
+                pz_enabled: false,
+                image: 'ipfs://123',
+                og_number: 0,
+                version: 0,
+                handle_type: HandleType.HANDLE,
+                resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
+                updated_slot_number: updatedTimeStamp2,
+                default: true
+            });
+
             handle = repo.getHandle(handleName);
-            repo.save(
-                repo.Internal.buildHandle({
-                    ...handle,
-                    hex: handleHex,
-                    name: handleName,
-                    personalization: personalizationUpdates,
-                    reference_token: defaultReferenceToken,
-                    policy,
-                    pfp_image: 'todo',
-                    bg_image: 'todo',
-                    image_hash: '0x123',
-                    standard_image_hash: '0x123',
-                    svg_version: '1.0.0',
-                    standard_image: '',
-                    last_update_address: '0x222',
-                    pz_enabled: false,
-                    image: 'ipfs://123',
-                    og_number: 0,
-                    version: 0,
-                    handle_type: HandleType.HANDLE,
-                    resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
-                    updated_slot_number: updatedTimeStamp2,
-                    default: true
-                }),
-                handle!
-            );
+
+            repo.updateHolder(updatedPorkBellyHandle);
+
+            repo.save(updatedPorkBellyHandle, handle!);
 
             handle = repo.getHandle(handleName);
             expect(handle?.personalization).toEqual(personalizationUpdates);
@@ -869,32 +871,33 @@ describe('Storage tests', () => {
                 nsfw: false
             };
 
-            repo.save(
-                repo.Internal.buildHandle({
-                    ...handle,
-                    hex: handleHex,
-                    name: handleName,
-                    personalization: newPersonalizationUpdates,
-                    reference_token: defaultReferenceToken,
-                    policy,
-                    image: 'ipfs://123',
-                    og_number: 0,
-                    version: 0,
-                    handle_type: HandleType.HANDLE,
-                    pfp_image: 'todo',
-                    bg_image: 'todo',
-                    image_hash: '0x123',
-                    standard_image_hash: '0x123',
-                    svg_version: '1.0.0',
-                    standard_image: '',
-                    last_update_address: '0x333',
-                    pz_enabled: false,
-                    resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
-                    updated_slot_number: updatedTimeStamp3,
-                    default: true
-                }),
-                handle!
-            );
+            const thirdUpdateHandle = repo.Internal.buildHandle({
+                ...handle,
+                hex: handleHex,
+                name: handleName,
+                personalization: newPersonalizationUpdates,
+                reference_token: defaultReferenceToken,
+                policy,
+                image: 'ipfs://123',
+                og_number: 0,
+                version: 0,
+                handle_type: HandleType.HANDLE,
+                pfp_image: 'todo',
+                bg_image: 'todo',
+                image_hash: '0x123',
+                standard_image_hash: '0x123',
+                svg_version: '1.0.0',
+                standard_image: '',
+                last_update_address: '0x333',
+                pz_enabled: false,
+                resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
+                updated_slot_number: updatedTimeStamp3,
+                default: true
+            });
+
+            repo.updateHolder(thirdUpdateHandle);
+
+            repo.save(thirdUpdateHandle, handle!);
 
             handle = repo.getHandle(handleName);
             expect(handle?.personalization).toEqual(newPersonalizationUpdates);
@@ -910,31 +913,32 @@ describe('Storage tests', () => {
                 nsfw: false
             };
 
-            repo.save(
-                repo.Internal.buildHandle({
-                    ...handle,
-                    hex: handleHex,
-                    name: handleName,
-                    personalization: personalizationUpdatesWithDefaultWalletChange,
-                    reference_token: defaultReferenceToken,
-                    policy,
-                    image: 'ipfs://123',
-                    og_number: 0,
-                    version: 0,
-                    handle_type: HandleType.HANDLE,
-                    pfp_image: 'todo',
-                    bg_image: 'todo',
-                    image_hash: '0x123',
-                    standard_image_hash: '0x123',
-                    svg_version: '1.0.0',
-                    standard_image: '',
-                    last_update_address: '0x444',
-                    pz_enabled: false,
-                    resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
-                    updated_slot_number: updatedTimeStamp4
-                }),
-                handle!
-            );
+            const finalUpdateHandle = repo.Internal.buildHandle({
+                ...handle,
+                hex: handleHex,
+                name: handleName,
+                personalization: personalizationUpdatesWithDefaultWalletChange,
+                reference_token: defaultReferenceToken,
+                policy,
+                image: 'ipfs://123',
+                og_number: 0,
+                version: 0,
+                handle_type: HandleType.HANDLE,
+                pfp_image: 'todo',
+                bg_image: 'todo',
+                image_hash: '0x123',
+                standard_image_hash: '0x123',
+                svg_version: '1.0.0',
+                standard_image: '',
+                last_update_address: '0x444',
+                pz_enabled: false,
+                resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
+                updated_slot_number: updatedTimeStamp4
+            });
+
+            repo.updateHolder(finalUpdateHandle);
+
+            repo.save(finalUpdateHandle, handle!);
 
             handle = repo.getHandle(handleName);
             expect(handle?.personalization).toEqual(personalizationUpdatesWithDefaultWalletChange);
@@ -955,30 +959,31 @@ describe('Storage tests', () => {
 
             let handle = repo.getHandle('taco');
 
-            repo.save(
-                repo.Internal.buildHandle({
-                    ...handle,
-                    hex: Buffer.from('taco').toString('hex'),
-                    name: 'taco',
-                    personalization: tacoPzUpdate,
-                    reference_token: defaultReferenceToken,
-                    policy,
-                    image: 'ipfs://123',
-                    og_number: 0,
-                    version: 0,
-                    handle_type: HandleType.HANDLE,
-                    pfp_image: 'todo',
-                    bg_image: 'todo',
-                    image_hash: '0x123',
-                    standard_image_hash: '0x123',
-                    svg_version: '1.0.0',
-                    standard_image: '',
-                    last_update_address: '',
-                    resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
-                    updated_slot_number: updatedTimeStamp1
-                }),
-                handle!
-            );
+            const updatedTacoHandle = repo.Internal.buildHandle({
+                ...handle,
+                hex: Buffer.from('taco').toString('hex'),
+                name: 'taco',
+                personalization: tacoPzUpdate,
+                reference_token: defaultReferenceToken,
+                policy,
+                image: 'ipfs://123',
+                og_number: 0,
+                version: 0,
+                handle_type: HandleType.HANDLE,
+                pfp_image: 'todo',
+                bg_image: 'todo',
+                image_hash: '0x123',
+                standard_image_hash: '0x123',
+                svg_version: '1.0.0',
+                standard_image: '',
+                last_update_address: '',
+                resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
+                updated_slot_number: updatedTimeStamp1
+            });
+
+            repo.updateHolder(updatedTacoHandle);
+
+            repo.save(updatedTacoHandle, handle!);
 
             handle = repo.getHandle('taco');
             expect(handle?.default_in_wallet).toEqual('taco');
@@ -1030,31 +1035,32 @@ describe('Storage tests', () => {
                 nsfw: false
             };
 
-            repo.save(
-                repo.Internal.buildHandle({
-                    ...handle,
-                    hex: Buffer.from('barbacoa').toString('hex'),
-                    name: 'barbacoa',
-                    personalization: barbacoaPzUpdate,
-                    reference_token: defaultReferenceToken,
-                    policy,
-                    image: 'ipfs://123',
-                    og_number: 0,
-                    version: 0,
-                    handle_type: HandleType.HANDLE,
-                    pfp_image: 'todo',
-                    bg_image: 'todo',
-                    image_hash: '0x123',
-                    standard_image_hash: '0x123',
-                    svg_version: '1.0.0',
-                    standard_image: '',
-                    last_update_address: '',
-                    resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
-                    updated_slot_number: updatedTimeStamp3,
-                    default: true
-                }),
-                handle!
-            );
+            const updatedBarbacoaHandle = repo.Internal.buildHandle({
+                ...handle,
+                hex: Buffer.from('barbacoa').toString('hex'),
+                name: 'barbacoa',
+                personalization: barbacoaPzUpdate,
+                reference_token: defaultReferenceToken,
+                policy,
+                image: 'ipfs://123',
+                og_number: 0,
+                version: 0,
+                handle_type: HandleType.HANDLE,
+                pfp_image: 'todo',
+                bg_image: 'todo',
+                image_hash: '0x123',
+                standard_image_hash: '0x123',
+                svg_version: '1.0.0',
+                standard_image: '',
+                last_update_address: '',
+                resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
+                updated_slot_number: updatedTimeStamp3,
+                default: true
+            });
+
+            repo.updateHolder(updatedBarbacoaHandle);
+
+            repo.save(updatedBarbacoaHandle, handle!);
 
             handle = repo.getHandle('barbacoa');
             expect(handle?.default_in_wallet).toEqual('barbacoa');
@@ -1101,26 +1107,29 @@ describe('Storage tests', () => {
         it('should save details for nft handle', async () => {
             const handleName = 'nft@hndl';
             const handleHex = Buffer.from(handleName).toString('hex');
-            repo.save(
-                repo.Internal.buildHandle({
-                    hex: handleHex,
-                    name: handleName,
-                    og_number: 0,
-                    utxo: 'utxo123#0',
-                    policy,
-                    lovelace: 0,
-                    image: '',
-                    image_hash: '0x123',
-                    svg_version: '1.0.0',
-                    handle_type: HandleType.NFT_SUBHANDLE,
-                    sub_rarity: 'rare',
-                    sub_length: 10,
-                    sub_characters: 'letters',
-                    sub_numeric_modifiers: 'numbers',
-                    resolved_addresses: { ada: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q' },
-                    updated_slot_number: updatedTimeStamp1
-                })
-            );
+
+            const nftHandle = repo.Internal.buildHandle({
+                hex: handleHex,
+                name: handleName,
+                og_number: 0,
+                utxo: 'utxo123#0',
+                policy,
+                lovelace: 0,
+                image: '',
+                image_hash: '0x123',
+                svg_version: '1.0.0',
+                handle_type: HandleType.NFT_SUBHANDLE,
+                sub_rarity: 'rare',
+                sub_length: 10,
+                sub_characters: 'letters',
+                sub_numeric_modifiers: 'numbers',
+                resolved_addresses: { ada: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q' },
+                updated_slot_number: updatedTimeStamp1
+            });
+
+            repo.updateHolder(nftHandle);
+
+            repo.save(nftHandle);
 
             const personalizationUpdates: IPersonalization = {
                 designer: {
@@ -1190,33 +1199,35 @@ describe('Storage tests', () => {
                 sub_numeric_modifiers: 'numbers'
             };
 
-            repo.save(
-                repo.Internal.buildHandle({
-                    hex: handleHex,
-                    name: handleName,
-                    policy,
-                    personalization: personalizationUpdates,
-                    reference_token: defaultReferenceToken,
-                    image: 'ipfs://123',
-                    og_number: 0,
-                    version: 0,
-                    handle_type: HandleType.VIRTUAL_SUBHANDLE,
-                    pfp_image: 'todo',
-                    bg_image: 'todo',
-                    image_hash: '0x123',
-                    standard_image_hash: '0x123',
-                    svg_version: '1.0.0',
-                    standard_image: '',
-                    last_update_address: '',
-                    virtual: {
-                        expires_time: 1,
-                        public_mint: false
-                    },
-                    resolved_addresses: { ada: 'addr_test1qq9hgdhkephnvfvq7vfulmmez6kzhpmffqm5r3zj7sgtfe240h0h7dr4r98k6swwj3yjxz35f42spnhesexnvahmzs9qzkg9d7' },
-                    updated_slot_number: updatedTimeStamp3,
-                    utxo: `${defaultReferenceToken.tx_id}#${defaultReferenceToken.index}`
-                })
-            );
+            const virtualHandle = repo.Internal.buildHandle({
+                hex: handleHex,
+                name: handleName,
+                policy,
+                personalization: personalizationUpdates,
+                reference_token: defaultReferenceToken,
+                image: 'ipfs://123',
+                og_number: 0,
+                version: 0,
+                handle_type: HandleType.VIRTUAL_SUBHANDLE,
+                pfp_image: 'todo',
+                bg_image: 'todo',
+                image_hash: '0x123',
+                standard_image_hash: '0x123',
+                svg_version: '1.0.0',
+                standard_image: '',
+                last_update_address: '',
+                virtual: {
+                    expires_time: 1,
+                    public_mint: false
+                },
+                resolved_addresses: { ada: 'addr_test1qq9hgdhkephnvfvq7vfulmmez6kzhpmffqm5r3zj7sgtfe240h0h7dr4r98k6swwj3yjxz35f42spnhesexnvahmzs9qzkg9d7' },
+                updated_slot_number: updatedTimeStamp3,
+                utxo: `${defaultReferenceToken.tx_id}#${defaultReferenceToken.index}`
+            });
+
+            repo.updateHolder(virtualHandle);
+
+            repo.save(virtualHandle);
 
             const virtualSubHandle = repo.getHandle(handleName);
             expect(virtualSubHandle?.personalization).toEqual(personalizationUpdates);
@@ -1242,35 +1253,36 @@ describe('Storage tests', () => {
 
     describe('saveSubHandleSettingsChange tests', () => {
         it('Should update SubHandle settings', async () => {
-            repo.save(
-                repo.Internal.buildHandle({
-                    hex: Buffer.from('shrimp-taco').toString('hex'),
-                    name: 'shrimp-taco',
-                    og_number: 0,
-                    utxo: 'utxo123#0',
-                    policy,
-                    lovelace: 0,
-                    image: 'ipfs://123',
-                    image_hash: '0x123',
-                    svg_version: '1.0.0',
-                    handle_type: HandleType.HANDLE,
-                    resolved_addresses: { ada: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q' },
-                    updated_slot_number: updatedTimeStamp1
-                })
-            );
+            const shrimpTacoHandle = repo.Internal.buildHandle({
+                hex: Buffer.from('shrimp-taco').toString('hex'),
+                name: 'shrimp-taco',
+                og_number: 0,
+                utxo: 'utxo123#0',
+                policy,
+                lovelace: 0,
+                image: 'ipfs://123',
+                image_hash: '0x123',
+                svg_version: '1.0.0',
+                handle_type: HandleType.HANDLE,
+                resolved_addresses: { ada: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q' },
+                updated_slot_number: updatedTimeStamp1
+            });
+
+            repo.updateHolder(shrimpTacoHandle);
+            repo.save(shrimpTacoHandle);
 
             const settings = 'a2436e6674a347656e61626c6564014b7469657250726963696e679f9f011903e8ff9f021901f4ff9f0318faff9f040affff48656e61626c65507a00477669727475616ca447656e61626c6564014b7469657250726963696e679f9f010fffff48656e61626c65507a004f657870697265735f696e5f64617973190168';
-            const utxoDetails: klc.UTxO = { 
-                address: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q', 
-                datum: settings, 
-                index: 0, 
-                lovelace: 1, 
+            const utxoDetails: klc.UTxO = {
+                address: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q',
+                datum: settings,
+                index: 0,
+                lovelace: 1,
                 tx_id: 'some_id',
                 slot: 0,
                 id: 'some_id#0',
                 blockHash: 'block_hash',
                 blockNum: 0
-             };
+            };
 
             let handle = repo.getHandle('shrimp-taco');
             repo.save(
@@ -1298,33 +1310,34 @@ describe('Storage tests', () => {
         it('Should update settings and history correctly when saving multiple times', async () => {
             const handleName = 'halibut-taco';
             const handleHex = Buffer.from(handleName).toString('hex');
-            repo.save(
-                repo.Internal.buildHandle({
-                    hex: handleHex,
-                    name: handleName,
-                    og_number: 0,
-                    utxo: 'utxo123#0',
-                    policy,
-                    lovelace: 0,
-                    image: '',
-                    image_hash: '0x123',
-                    svg_version: '1.0.0',
-                    handle_type: HandleType.HANDLE,
-                    resolved_addresses: { ada: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q' },
-                    updated_slot_number: updatedTimeStamp1
-                })
-            );
+            const halibutTacoHandle = repo.Internal.buildHandle({
+                hex: handleHex,
+                name: handleName,
+                og_number: 0,
+                utxo: 'utxo123#0',
+                policy,
+                lovelace: 0,
+                image: '',
+                image_hash: '0x123',
+                svg_version: '1.0.0',
+                handle_type: HandleType.HANDLE,
+                resolved_addresses: { ada: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q' },
+                updated_slot_number: updatedTimeStamp1
+            });
+            repo.updateHolder(halibutTacoHandle);
+            repo.save(halibutTacoHandle);
 
-            const utxoDetails = { 
-                address: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q', datum: 'a2436e6674a347656e61626c6564014b7469657250726963696e679f9f011903e8ff9f021901f4ff9f0318faff9f040affff48656e61626c65507a00477669727475616ca447656e61626c6564014b7469657250726963696e679f9f010fffff48656e61626c65507a004f657870697265735f696e5f64617973190168', 
-                index: 0, 
-                lovelace: 1, 
+            const utxoDetails = {
+                address: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q',
+                datum: 'a2436e6674a347656e61626c6564014b7469657250726963696e679f9f011903e8ff9f021901f4ff9f0318faff9f040affff48656e61626c65507a00477669727475616ca447656e61626c6564014b7469657250726963696e679f9f010fffff48656e61626c65507a004f657870697265735f696e5f64617973190168',
+                index: 0,
+                lovelace: 1,
                 tx_id: 'some_id',
                 blockHash: 'block_hash',
                 blockNum: 0,
                 slot: 0,
                 id: 'some_id#0'
-             };
+            };
             const payment_address = 'abc';
 
             let handle = repo.getHandle(handleName);
@@ -1346,8 +1359,17 @@ describe('Storage tests', () => {
 
             handle = repo.getHandle(handleName);
             expect(handle?.subhandle_settings).toEqual({
-                utxo: { 
-                    address: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q', datum: 'a2436e6674a347656e61626c6564014b7469657250726963696e679f9f011903e8ff9f021901f4ff9f0318faff9f040affff48656e61626c65507a00477669727475616ca447656e61626c6564014b7469657250726963696e679f9f010fffff48656e61626c65507a004f657870697265735f696e5f64617973190168', index: 0, lovelace: 1, tx_id: 'some_id', slot: 0, id: 'some_id#0', blockHash: 'blockHash', blockNum: 0 },
+                utxo: {
+                    address: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q',
+                    datum: 'a2436e6674a347656e61626c6564014b7469657250726963696e679f9f011903e8ff9f021901f4ff9f0318faff9f040affff48656e61626c65507a00477669727475616ca447656e61626c6564014b7469657250726963696e679f9f010fffff48656e61626c65507a004f657870697265735f696e5f64617973190168',
+                    index: 0,
+                    lovelace: 1,
+                    tx_id: 'some_id',
+                    slot: 0,
+                    id: 'some_id#0',
+                    blockHash: 'block_hash',
+                    blockNum: 0
+                },
                 payment_address
             });
 
@@ -1389,8 +1411,7 @@ describe('Storage tests', () => {
             const address = 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g';
             const newAddress = 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746';
 
-            // @ts-ignore
-            const storedHandle: klc.StoredHandle = {
+            const storedHandle = repo.Internal.buildHandle({
                 hex: handleHex,
                 name: handleName,
                 og_number: 0,
@@ -1404,13 +1425,11 @@ describe('Storage tests', () => {
                 handle_type: HandleType.HANDLE,
                 resolved_addresses: { ada: address },
                 updated_slot_number: updatedTimeStamp1
-            }
+            });
 
             repo.updateHolder(storedHandle);
 
-            repo.save(
-                repo.Internal.buildHandle(storedHandle)
-            );
+            repo.save(repo.Internal.buildHandle(storedHandle));
 
             const existingHandle = repo.getHandle(handleName);
             expect(existingHandle?.resolved_addresses.ada).toEqual(address);
@@ -1419,20 +1438,20 @@ describe('Storage tests', () => {
             const holderAddress = storeInstance.getIndex(klc.IndexNames.HOLDER, {}).get(stakeKey);
             expect((holderAddress as klc.Holder)?.handles?.some((h) => h.name == handleName)).toBeTruthy();
 
-            repo.save(
-                repo.Internal.buildHandle({
-                    ...existingHandle,
-                    lovelace: 10,
-                    hex: handleHex,
-                    name: handleName,
-                    utxo: 'utxo_salsa2#0',
-                    policy,
-                    resolved_addresses: { ada: newAddress },
-                    updated_slot_number: updatedTimeStamp2,
-                    datum: ''
-                }),
-                existingHandle!
-            );
+            const updatedHandle = repo.Internal.buildHandle({
+                ...existingHandle,
+                lovelace: 10,
+                hex: handleHex,
+                name: handleName,
+                utxo: 'utxo_salsa2#0',
+                policy,
+                resolved_addresses: { ada: newAddress },
+                updated_slot_number: updatedTimeStamp2,
+                datum: ''
+            });
+
+            repo.updateHolder(updatedHandle);
+            repo.save(repo.Internal.buildHandle(updatedHandle), existingHandle!);
 
             const handle = repo.getHandle(handleName);
             expect(handle).toEqual({

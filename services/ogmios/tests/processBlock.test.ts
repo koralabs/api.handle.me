@@ -183,10 +183,13 @@ describe('processBlock Tests', () => {
 
         expect(saveSpy).toHaveBeenCalledTimes(2);
 
-        expect(addMintDataSpy).toHaveBeenCalledWith([
-            { handleName: 'test1234', mintingData: { created_slot: 0, metadata: { '721': { f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a: { test1234: { core: { og: 1n }, image: 'ifps://some_hash_test1234' } } } }, txHash: 'some_id' } },
-            { handleName: 'test456', mintingData: { created_slot: 0, metadata: { '721': { f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a: { test1234: { core: { og: 1n }, image: 'ifps://some_hash_test1234' } } } }, txHash: 'some_id' } }
-        ]);
+        const expectedMap = new Map();
+        expectedMap.set('test1234', [{"created_slot": 0, "metadata": {"721": {"f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a": {"test1234": {"core": {"og": 1n}, "image": "ifps://some_hash_test1234"}}}}, "txHash": "some_id"}])
+        expectedMap.set('test456', [{"created_slot": 0, "metadata": {"721": {"f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a": {"test1234": {"core": {"og": 1n}, "image": "ifps://some_hash_test1234"}}}}, "txHash": "some_id"}])
+        
+        expect(addMintDataSpy).toHaveBeenCalledWith(
+            expectedMap
+        );
 
         expect(saveSpy).toHaveBeenNthCalledWith(
             1,
@@ -1006,8 +1009,7 @@ describe('processBlock Tests', () => {
                 updated_slot_number: 0,
                 utxo: '',
                 version: 0
-            },
-            slot
+            }
         );
     });
 
