@@ -56,7 +56,9 @@ describe('Storage tests', () => {
         index: 0,
         lovelace: 0,
         datum: '',
-        address: ''
+        address: '',
+        blockHash: '',
+        blockNum: 0
     };
     beforeEach(async () => {
         const mostRecentSlot = handlesFixture.reduce((slot, h) => Math.max(slot, h.updated_slot_number), 0);
@@ -64,7 +66,7 @@ describe('Storage tests', () => {
         // populate storage
         for (const key in handlesFixture) {
             const handle = handlesFixture[key];
-            repo.Internal.updateHolder(handle);
+            repo.updateHolder(handle);
             repo.save({
                 ...handle,
                 datum: `some_datum_${key}`,
@@ -146,7 +148,7 @@ describe('Storage tests', () => {
                 updated_slot_number: updatedTimeStamp1
             });
 
-            repo.Internal.updateHolder(handle);
+            repo.updateHolder(handle);
             repo.save(handle);
 
             handle = repo.getHandle('nachos')!;
@@ -226,7 +228,7 @@ describe('Storage tests', () => {
                 }
             )
             
-            repo.Internal.updateHolder(handle);
+            repo.updateHolder(handle);
             repo.save(handle);
 
             handle = repo.getHandle('chimichanga');
@@ -369,7 +371,9 @@ describe('Storage tests', () => {
                         index: 0,
                         lovelace: 50,
                         datum: 'datum123',
-                        address: ''
+                        address: '',
+                        blockHash: '',
+                        blockNum: 0
                     },
                     policy,
                     image: 'ipfs://zb2rhoQxa62DEDBMcWcsPHTpCuoC8FykX584jCXzNBGZdCH7M',
@@ -446,7 +450,9 @@ describe('Storage tests', () => {
                     index: 0,
                     lovelace: 50,
                     datum: 'datum123',
-                    address: ''
+                    address: '',
+                    blockHash: '',
+                    blockNum: 0
                 },
                 standard_image: 'ipfs://zb2rhoQxa62DEDBMcWcsPHTpCuoC8FykX584jCXzNBGZdCH7M',
                 standard_image_hash: '0xf92d124059974e63560343f173a01f8096ea5f65a25983fcb335af4d56cd1368',
@@ -712,7 +718,7 @@ describe('Storage tests', () => {
                 updated_slot_number: updatedTimeStamp1
             });
             
-            repo.Internal.updateHolder(handle)
+            repo.updateHolder(handle)
             repo.save(handle)
 
             const personalizationUpdates: IPersonalization = {
@@ -750,7 +756,7 @@ describe('Storage tests', () => {
                 updated_slot_number: updatedTimeStamp2,
                 default: true
             });
-            repo.Internal.updateHolder(updatedHandle)
+            repo.updateHolder(updatedHandle)
             repo.save(
                 updatedHandle,
                 handle!
@@ -785,7 +791,7 @@ describe('Storage tests', () => {
             const handleName = 'pork-belly';
             const handleHex = Buffer.from(handleName).toString('hex');
             let handle = repo.getHandle(handleName);
-            repo.Internal.updateHolder(handle!);
+            repo.updateHolder(handle!);
             repo.save(
                 repo.Internal.buildHandle({
                     ...handle,
@@ -1261,7 +1267,9 @@ describe('Storage tests', () => {
                 lovelace: 1, 
                 tx_id: 'some_id',
                 slot: 0,
-                id: 'some_id#0'
+                id: 'some_id#0',
+                blockHash: 'block_hash',
+                blockNum: 0
              };
 
             let handle = repo.getHandle('shrimp-taco');
@@ -1312,6 +1320,8 @@ describe('Storage tests', () => {
                 index: 0, 
                 lovelace: 1, 
                 tx_id: 'some_id',
+                blockHash: 'block_hash',
+                blockNum: 0,
                 slot: 0,
                 id: 'some_id#0'
              };
@@ -1337,7 +1347,7 @@ describe('Storage tests', () => {
             handle = repo.getHandle(handleName);
             expect(handle?.subhandle_settings).toEqual({
                 utxo: { 
-                    address: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q', datum: 'a2436e6674a347656e61626c6564014b7469657250726963696e679f9f011903e8ff9f021901f4ff9f0318faff9f040affff48656e61626c65507a00477669727475616ca447656e61626c6564014b7469657250726963696e679f9f010fffff48656e61626c65507a004f657870697265735f696e5f64617973190168', index: 0, lovelace: 1, tx_id: 'some_id', slot: 0, id: 'some_id#0' },
+                    address: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q', datum: 'a2436e6674a347656e61626c6564014b7469657250726963696e679f9f011903e8ff9f021901f4ff9f0318faff9f040affff48656e61626c65507a00477669727475616ca447656e61626c6564014b7469657250726963696e679f9f010fffff48656e61626c65507a004f657870697265735f696e5f64617973190168', index: 0, lovelace: 1, tx_id: 'some_id', slot: 0, id: 'some_id#0', blockHash: 'blockHash', blockNum: 0 },
                 payment_address
             });
 
@@ -1379,22 +1389,27 @@ describe('Storage tests', () => {
             const address = 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g';
             const newAddress = 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746';
 
+            // @ts-ignore
+            const storedHandle: klc.StoredHandle = {
+                hex: handleHex,
+                name: handleName,
+                og_number: 0,
+                utxo: 'utxo_salsa1#0',
+                policy,
+                lovelace: 0,
+                image: 'ipfs://123',
+                datum: 'a2datum_salsa',
+                image_hash: '0x123',
+                svg_version: '1.0.0',
+                handle_type: HandleType.HANDLE,
+                resolved_addresses: { ada: address },
+                updated_slot_number: updatedTimeStamp1
+            }
+
+            repo.updateHolder(storedHandle);
+
             repo.save(
-                repo.Internal.buildHandle({
-                    hex: handleHex,
-                    name: handleName,
-                    og_number: 0,
-                    utxo: 'utxo_salsa1#0',
-                    policy,
-                    lovelace: 0,
-                    image: 'ipfs://123',
-                    datum: 'a2datum_salsa',
-                    image_hash: '0x123',
-                    svg_version: '1.0.0',
-                    handle_type: HandleType.HANDLE,
-                    resolved_addresses: { ada: address },
-                    updated_slot_number: updatedTimeStamp1
-                })
+                repo.Internal.buildHandle(storedHandle)
             );
 
             const existingHandle = repo.getHandle(handleName);

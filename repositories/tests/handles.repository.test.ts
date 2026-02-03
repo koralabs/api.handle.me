@@ -46,7 +46,9 @@ describe('Store Tests - RedisHandlesStore', () => {
             lovelace: 0,
             tx_id: '',
             slot: 0,
-            id: ''
+            id: '',
+            blockHash: '',
+            blockNum: 0
         },
         resolved_addresses: {
             ada: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q'
@@ -66,10 +68,10 @@ describe('Store Tests - RedisHandlesStore', () => {
 
     beforeAll(async () => {
         handlesFixture.map((handle) => {
-            repo.Internal.updateHolder(handle);
+            repo.updateHolder(handle);
             return repo.save(handle);
         });
-        repo.Internal.updateHolder(expectedVirtualHandle);
+        repo.updateHolder(expectedVirtualHandle);
         repo.save(repo.Internal.buildHandle(expectedVirtualHandle));
         repo.setMetrics({
             lastSlot: Date.now() + 10000,
@@ -125,7 +127,9 @@ describe('Store Tests - RedisHandlesStore', () => {
                 mint: [[policy, ['handle1', 'handle2']]],
                 metadata,
                 tx_id: '',
-                index: 0
+                index: 0,
+                blockHash: '',
+                blockNum: 0
             };
 
             repo.addUTxO(utxo);
@@ -329,8 +333,8 @@ describe('Store Tests - RedisHandlesStore', () => {
                 utxo: ''
             }
             await Promise.all([
-                repo.Internal.updateHolder(handle),
-                repo.Internal.updateHolder(difHandle),
+                repo.updateHolder(handle),
+                repo.updateHolder(difHandle),
                 repo.save(handle),
                 repo.save(difHandle)
             ]);
@@ -378,7 +382,7 @@ describe('Store Tests - RedisHandlesStore', () => {
                 updated_slot_number: 0
             });
             await Promise.all([
-                repo.Internal.updateHolder(handle),
+                repo.updateHolder(handle),
                 repo.save(handle)
             ]);
         });

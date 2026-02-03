@@ -1,4 +1,4 @@
-import { ApiIndexType, chunk, Holder, IApiMetrics, IApiStore, IHandleFileContent, IndexNames, ISlotHistory, isNumeric, LogCategory, Logger, NETWORK, SortAndLimitOptions, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { ApiIndexType, chunk, Holder, IApiMetrics, IApiStore, IHandleFileContent, IndexNames, ISlotHistory, isNumeric, LogCategory, Logger, NETWORK, SortAndLimitOptions, UTxOFunctionName, UTxOFunctions } from '@koralabs/kora-labs-common';
 import { GlideString, HashDataType, SortOptions } from '@valkey/valkey-glide';
 import { promisify } from 'util';
 import { MessageChannel, receiveMessageOnPort, Worker } from 'worker_threads';
@@ -71,7 +71,7 @@ export class RedisHandlesStore implements IApiStore {
         RedisHandlesStore._pipeline = undefined;
     }
 
-    repopulateIndexesFromUTxOs(utxoFunctions: Record<UTxOFunctionName, (utxo: UTxOWithTxInfo) => void>): void {
+    repopulateIndexesFromUTxOs(utxoFunctions: UTxOFunctions): void {
         let cursor = '0';
         let deleted = 0;
         let added = 0;
@@ -128,7 +128,7 @@ export class RedisHandlesStore implements IApiStore {
         Logger.log(`Repopulate Handle indexes from UTxOs took ${pad(Math.floor(seconds / 3600))}:${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`);
     }
 
-    public async tryPopulateFromS3UTxOs(utxoFunctions: Record<UTxOFunctionName, (utxo: UTxOWithTxInfo) => void>): Promise<{ slot: number; id: string }> {
+    public async tryPopulateFromS3UTxOs(utxoFunctions: UTxOFunctions): Promise<{ slot: number; id: string }> {
         const startTime = Date.now();
         this.redisClientCall('flushdb');
         let id = handleEraBoundaries[NETWORK].id;
@@ -201,7 +201,7 @@ export class RedisHandlesStore implements IApiStore {
      * @param failed 
      * @returns 
      */
-    public async getStartingPoint(utxoFunctions: Record<UTxOFunctionName, (utxo: UTxOWithTxInfo) => void>, failed = false): Promise<{ slot: number; id: string } | null> {
+    public async getStartingPoint(utxoFunctions: UTxOFunctions, failed = false): Promise<{ slot: number; id: string } | null> {
         // This should run locally so we're not worried about a long running process
         if (!failed) {
             const { indexSchemaVersion, utxoSchemaVersion, currentSlot, currentBlockHash } = this.getMetrics();

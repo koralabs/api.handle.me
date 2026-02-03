@@ -1,5 +1,5 @@
 import { Point } from '@cardano-ogmios/schema';
-import { AssetNameLabel, bech32FromHex, buildCharacters, buildDrep, buildHolderInfo, buildNumericModifiers, decodeAddress, decodeCborToJson, DefaultHandleInfo, EMPTY, getPaymentKeyHash, getRarity, HandlePaginationModel, HandleSearchModel, HandleType, Holder, HolderPaginationModel, HolderViewModel, HttpException, IApiMetrics, IApiStore, IHandleMetadata, IndexNames, IPersonalization, IPzDatum, IPzDatumConvertedUsingSchema, ISubHandleSettings, ISubHandleTypeSettings, LogCategory, Logger, MINTED_OG_LIST, MintingData, NETWORK, Sort, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, bech32FromHex, buildCharacters, buildDrep, buildHolderInfo, buildNumericModifiers, decodeAddress, decodeCborToJson, DefaultHandleInfo, EMPTY, getPaymentKeyHash, getRarity, HandlePaginationModel, HandleSearchModel, HandleType, Holder, HolderPaginationModel, HolderViewModel, HttpException, IApiMetrics, IApiStore, IHandleMetadata, IndexNames, IPersonalization, IPzDatum, IPzDatumConvertedUsingSchema, ISubHandleSettings, ISubHandleTypeSettings, LogCategory, Logger, MINTED_OG_LIST, MintingData, NETWORK, Sort, StoredHandle, UTxOFunctions, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { designerSchema, handleDatumSchema, portalSchema, socialsSchema, subHandleSettingsDatumSchema } from '@koralabs/kora-labs-common/utils/cbor';
 import * as crypto from 'crypto';
 import { isDatumEndpointEnabled } from '../config';
@@ -491,7 +491,7 @@ export class HandlesRepository {
         }
     }
 
-    public updateHolderIndex(utxo: UTxOWithTxInfo, mintingData: Map<string, MintingData[]>, holders?: Map<string, Holder>) {
+    public updateHolderIndex(utxo: UTxOWithTxInfo, mintingDataMap?: Map<string, MintingData[]>, holders?: Map<string, Holder>) {
         for (const asset of utxo.handles) {
             const policy = asset[0];
             for (const assetName of asset[1]) {
@@ -501,7 +501,8 @@ export class HandlesRepository {
                 }
                 const { ownerTokenHex, name } = getHandleNameFromAssetName(assetName);
                 const { address, slot } = utxo
-                const handle = this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData.get(name)![0].created_slot});
+                const mintingData = mintingDataMap ? mintingDataMap.get(name)! : Array.from(this.store.getValuesFromIndexedSet(IndexNames.MINT, name)!).map<MintingData>(md => JSON.parse(md));
+                const handle = this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData[0].created_slot});
 
                 if (!handle) return;
 
@@ -682,7 +683,7 @@ export class HandlesRepository {
         }
     }
 
-    public updateHandleIndexes(utxo: UTxOWithTxInfo, mintValueIndex: Map<string, MintingData[]>, handles?: Map<string, StoredHandle>): void {
+    public updateHandleIndexes(utxo: UTxOWithTxInfo, mintingData?: Map<string, MintingData[]>, handles?: Map<string, StoredHandle>): void {
         for (const asset of utxo.handles) {
             const policy = asset[0];
             for (const assetName of asset[1]) {
@@ -696,17 +697,17 @@ export class HandlesRepository {
 
                 //const mintIndexValue = this.store.getValuesFromIndexedSet(IndexNames.MINT, name) as Set<string>;
                 //.map<MintingData>(md => JSON.parse(md))
-                const mintIndexValue = mintValueIndex.get(name)!;
-                const [mintingData] = Array.from(mintIndexValue).sort((a, b) => a.created_slot - b.created_slot);
+                const mintIndexValue = mintingData ? mintingData.get(name)! : Array.from(this.store.getValuesFromIndexedSet(IndexNames.MINT, name)!).map<MintingData>(md => JSON.parse(md));
+                const [firstMintingData] = Array.from(mintIndexValue).sort((a, b) => a.created_slot - b.created_slot);
 
                 // mintingData from the index should never be undefined.
                 // however, metadata can.
-                const metadata: { [handleName: string]: HandleOnChainMetadata } | undefined = (mintingData.metadata?.[MetadataLabel.NFT] as any)?.[policy];
+                const metadata: { [handleName: string]: HandleOnChainMetadata } | undefined = (firstMintingData.metadata?.[MetadataLabel.NFT] as any)?.[policy];
                 const data = metadata && (metadata[isCip67 ? ownerTokenHex : name] as unknown as IHandleMetadata);
                 const existingHandle = handles ? handles.get(name) : this.prepareHandle(this.store.getValueFromIndex(IndexNames.HANDLE, name) as StoredHandle) ?? undefined;
 
                 const { address, slot } = utxo
-                const handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData.created_slot}, data);
+                const handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: firstMintingData.created_slot}, data);
                 
                 // if (['ap@adaprotocol', 'b-263-54'].some(n => n == handle.name))
                 //     debugLog('PROCESSED SCANNED INFO START', slotNumber, {...handle, utxo})
@@ -835,7 +836,7 @@ export class HandlesRepository {
         return personalization
     }
     
-    public async getStartingPoint(utxoFunctions: Record<UTxOFunctionName, (utxo: UTxOWithTxInfo) => void>, failed = false): Promise<Point | null> {
+    public async getStartingPoint(utxoFunctions: UTxOFunctions, failed = false): Promise<Point | null> {
         return this.store.getStartingPoint(utxoFunctions , failed);
     }
 
