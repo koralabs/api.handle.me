@@ -127,7 +127,8 @@ export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[]): UTxOWithTxI
 
             const utxo: UTxOWithTxInfo = {
                 handles,
-                mint,
+                // filter for handles in this UTxO
+                mint: mint.map(([policy, mintedHandles]) => [policy, handles.flatMap((h) => h[1]).filter((k) => mintedHandles.some((mh) => mh === k))]),
                 burn,
                 metadata,
                 id: `${o.tx_hash}#${o.tx_index}`,
