@@ -74,19 +74,21 @@ export const fetchKoios = async (path: string, method = 'GET', body?: string) =>
 export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[]): UTxOWithTxInfo[] => {
     const utxos: UTxOWithTxInfo[] = [];
     for (const t of transactions) {
-        const minted = t.assets_minted.reduce<[string, string[]][]>((acc, mintedAsset) => {
-            const { policy_id: policyId, asset_name: assetName } = mintedAsset;
-            if (HANDLE_POLICIES.contains(NETWORK as Network, policyId)) {
-                const { name, isCip67 } = getHandleNameFromAssetName(assetName);
-                if (!isCip67 || assetName.startsWith(AssetNameLabel.LBL_222) || assetName.startsWith(AssetNameLabel.LBL_000)) {
-                    if (!acc.find((a) => a[0] === policyId)) {
-                        acc.push([policyId, []]);
-                    }
-                    const policyEntry = acc.find((a) => a[0] === policyId)!;
-                    policyEntry[1].push(assetName);
+        const mint: [string, string[]][] = []
+        const burn: [string, string[]][] = []
+        t.assets_minted.forEach((asset) => {
+            if (HANDLE_POLICIES.contains(NETWORK as Network, asset.policy_id)) {
+                const { isCip67 } = getHandleNameFromAssetName(asset.asset_name);
+                if (!isCip67 || asset.asset_name.startsWith(AssetNameLabel.LBL_222) || asset.asset_name.startsWith(AssetNameLabel.LBL_000)) {
+                    let whichOne = mint;
+                    if (Number(asset.quantity) < 0)
+                        whichOne = burn;
+                    if (!whichOne.find((a) => a[0] === asset.policy_id))
+                        whichOne.push([asset.policy_id, []]);
+                    const policyEntry = whichOne.find((a) => a[0] === asset.policy_id)!;
+                    policyEntry[1].push(asset.asset_name);
                 }
             }
-            return acc;
         }, []);
 
         for (const o of t.outputs) {
@@ -101,8 +103,6 @@ export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[]): UTxOWithTxI
                 }
                 return acc;
             }, []);
-
-            const mint: [string, string[]][] = minted.map(([policy, mintedHandles]) => [policy, handles.flatMap((h) => h[1]).filter((k) => mintedHandles.some((mh) => mh === k))]);
 
             const metadata = Object.fromEntries(
                 Object.entries(t?.metadata ?? {})
@@ -128,6 +128,7 @@ export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[]): UTxOWithTxI
             const utxo: UTxOWithTxInfo = {
                 handles,
                 mint,
+                burn,
                 metadata,
                 id: `${o.tx_hash}#${o.tx_index}`,
                 tx_id: o.tx_hash,

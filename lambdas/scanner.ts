@@ -1,6 +1,7 @@
 import { Transaction } from '@cardano-ogmios/schema';
 import { StoredHandle } from '@koralabs/kora-labs-common';
 import { HandlesRepository } from '../repositories/handlesRepository';
+import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { RedisHandlesStore } from '../stores/redis';
 import { buildUTxOsFromKoiosTxs, fetchPaginatedResults, fetchTxList } from '../utils/helpers';
 
@@ -36,15 +37,12 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context:AWSLambda
             
             const builtUTxOs = buildUTxOsFromKoiosTxs(txList ?? []);
 
-            // - Call processBlock
-            // processBlock(block as unknown as BlockPraos, handlesRepo);
-
             builtUTxOs.forEach((utxo) => {
-                // handle any burns
-                const burnNames = utxo.mint.flatMap(m => m[1]).filter(m => !utxo.handles.flatMap(h => h[1]).includes(m));
+                // ********** BURNS ************* //
+                // If they are in mint, but aren't in an output, then they were burned
                 const burnHandles: StoredHandle[] = store.pipeline(() => {
-                    burnNames.forEach(name => {
-                        handlesRepo.getHandle(name);
+                    utxo.burn?.flatMap(b => b[1]).forEach(hex => {
+                        handlesRepo.getHandle(getHandleNameFromAssetName(hex).name);
                     });
                 });
                 store.pipeline(() => {
@@ -53,12 +51,12 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context:AWSLambda
                     });
                 });
                 
-                // update
+                // ********* UPDATES ************ //
                 handlesRepo.addUTxOAndMintData(utxo, true);
 
             });
 
-            // remove utxos
+            // ******** SPENT UTxOs *********** //
             handlesRepo.removeUTxOs(txList.flatMap((tx) => tx.inputs).map((i) => `${i.tx_hash}#${i.tx_index}`));
 
             handlesRepo.setMetrics({
