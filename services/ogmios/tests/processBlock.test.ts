@@ -1,5 +1,5 @@
 import { BlockPraos, Point, Script, Tip } from '@cardano-ogmios/schema';
-import { AssetNameLabel, HandleType, Logger, StoredHandle, encodeJsonToDatum } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, HandleType, Logger, MintingData, StoredHandle, encodeJsonToDatum } from '@koralabs/kora-labs-common';
 import WebSocket from 'ws';
 import { HandlesRepository } from '../../../repositories/handlesRepository';
 import { RedisHandlesStore } from '../../../stores/redis';
@@ -163,6 +163,18 @@ describe('processBlock Tests', () => {
     describe('It should handle strangely ordered blocks', () => {
         it('Should save Handle updates even if out of order', async () => {
             jest.spyOn(HandlesRepository.prototype, 'getMetrics').mockReturnValue({});
+            const handles = ['fozzyfozz', 'cloudnomad', 'eventbrite.ca', 'eventbrite.com', 'eventbrite.de', 'eventbrite.uk', 'eventim', 'virginvoyages', 'xn--ada-3r6ad', 'lemmings', 'b-263-54', 'rickdeckard'];
+            const mintData: MintingData = {
+                created_slot: 0,
+                metadata: metadata,
+                txHash: 'todo'
+            };
+            const mintingDataMap = new Map();
+            for (const handle of handles) {
+                mintingDataMap.set(handle, [mintData]);
+                repo.addMintData(mintingDataMap);
+            }
+
             // @ts-ignore #2
             await ogmios['processBlock'](block_144718140);
             // @ts-ignore #1
@@ -184,12 +196,10 @@ describe('processBlock Tests', () => {
         expect(saveSpy).toHaveBeenCalledTimes(2);
 
         const expectedMap = new Map();
-        expectedMap.set('test1234', [{"created_slot": 0, "metadata": {"721": {"f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a": {"test1234": {"core": {"og": 1n}, "image": "ifps://some_hash_test1234"}}}}, "txHash": "some_id"}])
-        expectedMap.set('test456', [{"created_slot": 0, "metadata": {"721": {"f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a": {"test1234": {"core": {"og": 1n}, "image": "ifps://some_hash_test1234"}}}}, "txHash": "some_id"}])
-        
-        expect(addMintDataSpy).toHaveBeenCalledWith(
-            expectedMap
-        );
+        expectedMap.set('test1234', [{ created_slot: 0, metadata: { '721': { f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a: { test1234: { core: { og: 1n }, image: 'ifps://some_hash_test1234' } } } }, txHash: 'some_id' }]);
+        expectedMap.set('test456', [{ created_slot: 0, metadata: { '721': { f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a: { test1234: { core: { og: 1n }, image: 'ifps://some_hash_test1234' } } } }, txHash: 'some_id' }]);
+
+        expect(addMintDataSpy).toHaveBeenCalledWith(expectedMap);
 
         expect(saveSpy).toHaveBeenNthCalledWith(
             1,
@@ -805,7 +815,7 @@ describe('processBlock Tests', () => {
         jest.spyOn(ipfs, 'decodeCborFromIPFSFile').mockResolvedValue({ test: 'data' });
 
         // First mint the virtual SubHandle so we populate the Mint Index
-        const mintCbor = 'd8799fae426f6700496f675f6e756d62657200446e616d654c746573745f73635f3030303145696d6167655835697066733a2f2f516d563965334e6e58484b71386e6d7a42337a4c725065784e677252346b7a456865415969563648756562367141466c656e6774680c467261726974794562617369634776657273696f6e01496d65646961547970654a696d6167652f6a7065674a63686172616374657273576c6574746572732c6e756d626572732c7370656369616c516e756d657269635f6d6f64696669657273404a7375625f6c656e677468044a7375625f7261726974794562617369634e7375625f6368617261637465727340557375625f6e756d657269635f6d6f646966696572734001b34e7374616e646172645f696d6167655835697066733a2f2f516d563965334e6e58484b71386e6d7a42337a4c725065784e677252346b7a4568654159695636487565623671414862675f696d61676540497066705f696d6167654046706f7274616c404864657369676e6572404676656e646f72404764656661756c7400536c6173745f7570646174655f6164647265737342abcd527265736f6c7665645f616464726573736573a1436164615f584061646472317178666867756e3234766e6671366174323467636c68786d37757a6c376d716c6d377939727967746d6e636c3973716c7a736b736d35347863677a5826356e633065636736636b72616d77707863386c3934636d3773793263636a637773777871646aff47736f6369616c73404a696d6167655f6861736842abcd537374616e646172645f696d6167655f6861736842abcd4b7376675f76657273696f6e45312e302e304c76616c6964617465645f6279404c6167726565645f7465726d7340546d6967726174655f7369675f72657175697265640045747269616c00446e73667700477669727475616ca24c657870697265735f74696d65014b7075626c69635f6d696e7400ff'
+        const mintCbor = 'd8799fae426f6700496f675f6e756d62657200446e616d654c746573745f73635f3030303145696d6167655835697066733a2f2f516d563965334e6e58484b71386e6d7a42337a4c725065784e677252346b7a456865415969563648756562367141466c656e6774680c467261726974794562617369634776657273696f6e01496d65646961547970654a696d6167652f6a7065674a63686172616374657273576c6574746572732c6e756d626572732c7370656369616c516e756d657269635f6d6f64696669657273404a7375625f6c656e677468044a7375625f7261726974794562617369634e7375625f6368617261637465727340557375625f6e756d657269635f6d6f646966696572734001b34e7374616e646172645f696d6167655835697066733a2f2f516d563965334e6e58484b71386e6d7a42337a4c725065784e677252346b7a4568654159695636487565623671414862675f696d61676540497066705f696d6167654046706f7274616c404864657369676e6572404676656e646f72404764656661756c7400536c6173745f7570646174655f6164647265737342abcd527265736f6c7665645f616464726573736573a1436164615f584061646472317178666867756e3234766e6671366174323467636c68786d37757a6c376d716c6d377939727967746d6e636c3973716c7a736b736d35347863677a5826356e633065636736636b72616d77707863386c3934636d3773793263636a637773777871646aff47736f6369616c73404a696d6167655f6861736842abcd537374616e646172645f696d6167655f6861736842abcd4b7376675f76657273696f6e45312e302e304c76616c6964617465645f6279404c6167726565645f7465726d7340546d6967726174655f7369675f72657175697265640045747269616c00446e73667700477669727475616ca24c657870697265735f74696d65014b7075626c69635f6d696e7400ff';
         await ogmios['processBlock'](
             txBlock({
                 policy: policyId,
@@ -827,7 +837,8 @@ describe('processBlock Tests', () => {
             })
         );
 
-        expect(saveSpy).toHaveBeenNthCalledWith(2,
+        expect(saveSpy).toHaveBeenNthCalledWith(
+            2,
             {
                 amount: 1,
                 bg_image: '',
@@ -921,6 +932,16 @@ describe('processBlock Tests', () => {
         const handleName = `burritos`;
         const handleHexName = `${AssetNameLabel.LBL_100}${Buffer.from(handleName).toString('hex')}`;
 
+        const mintData: MintingData = {
+            created_slot: 0,
+            metadata: metadata,
+            txHash: 'todo'
+        };
+        const mintingDataMap = new Map();
+
+        mintingDataMap.set(handleName, [mintData]);
+        repo.addMintData(mintingDataMap);
+
         const savePersonalizationChangeSpy = jest.spyOn(HandlesRepository.prototype, 'save');
         jest.spyOn(HandlesRepository.prototype, 'getMetrics').mockReturnValue({});
         jest.spyOn(ipfs, 'decodeCborFromIPFSFile').mockResolvedValue({ test: 'data' });
@@ -945,6 +966,17 @@ describe('processBlock Tests', () => {
 
     it('Should log error for 100 asset token when there is no datum', async () => {
         const handleName = `burritos`;
+
+        const mintData: MintingData = {
+            created_slot: 0,
+            metadata: metadata,
+            txHash: 'todo'
+        };
+        const mintingDataMap = new Map();
+
+        mintingDataMap.set(handleName, [mintData]);
+        repo.addMintData(mintingDataMap);
+
         const handleHexName = `${AssetNameLabel.LBL_100}${Buffer.from(handleName).toString('hex')}`;
         const savePersonalizationChangeSpy = jest.spyOn(HandlesRepository.prototype, 'save');
         const loggerSpy = jest.spyOn(Logger, 'log');
@@ -973,44 +1005,42 @@ describe('processBlock Tests', () => {
 
         await ogmios['processBlock'](txBlock({ policy: policyId, handleHexName, isBurn: true, slot }));
 
-        expect(burnHandleSpy).toHaveBeenCalledWith(
-            {
-                amount: 1,
-                characters: 'letters',
-                created_slot_number: 0,
-                datum: undefined,
-                default_in_wallet: 'burritos',
-                drep: undefined,
-                handle_type: 'handle',
-                has_datum: false,
-                hex: '000de1406275727269746f73',
-                holder: 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70',
-                holder_type: 'wallet',
-                image: '',
-                image_hash: '',
-                length: 8,
-                lovelace: 0,
-                name: 'burritos',
-                numeric_modifiers: '',
-                og_number: 0,
-                payment_key_hash: '9a2bb4492f1a7b2a1c10c8cc37fe3fe2b4e613704ba5331cb94b6388',
-                policy: 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a',
-                rarity: 'basic',
-                resolved_addresses: {
-                    ada: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q'
-                },
-                standard_image: '',
-                standard_image_hash: '',
-                sub_characters: undefined,
-                sub_length: undefined,
-                sub_numeric_modifiers: undefined,
-                sub_rarity: undefined,
-                svg_version: numericString(0),
-                updated_slot_number: 0,
-                utxo: '',
-                version: 0
-            }
-        );
+        expect(burnHandleSpy).toHaveBeenCalledWith({
+            amount: 1,
+            characters: 'letters',
+            created_slot_number: 0,
+            datum: undefined,
+            default_in_wallet: 'burritos',
+            drep: undefined,
+            handle_type: 'handle',
+            has_datum: false,
+            hex: '000de1406275727269746f73',
+            holder: 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70',
+            holder_type: 'wallet',
+            image: '',
+            image_hash: '',
+            length: 8,
+            lovelace: 0,
+            name: 'burritos',
+            numeric_modifiers: '',
+            og_number: 0,
+            payment_key_hash: '9a2bb4492f1a7b2a1c10c8cc37fe3fe2b4e613704ba5331cb94b6388',
+            policy: 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a',
+            rarity: 'basic',
+            resolved_addresses: {
+                ada: 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q'
+            },
+            standard_image: '',
+            standard_image_hash: '',
+            sub_characters: undefined,
+            sub_length: undefined,
+            sub_numeric_modifiers: undefined,
+            sub_rarity: undefined,
+            svg_version: numericString(0),
+            updated_slot_number: 0,
+            utxo: '',
+            version: 0
+        });
     });
 
     describe('isValidDatum tests', () => {

@@ -290,14 +290,13 @@ export class HandlesRepository {
             }
         }
 
-        const missingMintingDataHandles = utxo.handles.flatMap(([, handles]) => handles).filter(assetName => {
-            const { name } = getHandleNameFromAssetName(assetName);
-            return !mintingData.get(name)
+        const missingMintingDataHandles = utxo.handles.flatMap(([, handles]) => handles).map(h => getHandleNameFromAssetName(h).name).filter(handleName => {
+            return !mintingData.get(handleName)
         })
 
         const retrievedMintingData = this.store.pipeline(() => {
-            missingMintingDataHandles.forEach(handleName => {
-                this.getHandleMintingData(handleName);
+            missingMintingDataHandles.forEach(name => {
+                this.getHandleMintingData(name);
             })
         }) as Set<string>[];
 
