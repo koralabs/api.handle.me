@@ -1,9 +1,7 @@
-import { BlockPraos, Transaction } from '@cardano-ogmios/schema';
+import { Transaction } from '@cardano-ogmios/schema';
 import { HandlesRepository } from '../repositories/handlesRepository';
-import { buildOgmiosTransaction } from '../services/ogmios/utils';
-import { processBlock } from '../services/processBlock';
 import { RedisHandlesStore } from '../stores/redis';
-import { fetchPaginatedResults, fetchTxList } from '../utils/helpers';
+import { buildUTxOsFromKoiosTxs, fetchPaginatedResults, fetchTxList } from '../utils/helpers';
 
 const MAX_TIP_SCAN_SLOTS = 60 * 30 // 30 mins of blocks
 
@@ -35,15 +33,21 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context:AWSLambda
 
             const txList = await fetchTxList(b.hash);
             
-            for (const t of txList) {
-                // - Convert to format that processBlock expects
-                const tx = buildOgmiosTransaction(t);
-                //console.log('TX', JSON.stringify(tx, ( _, value) => typeof value == 'bigint' ? Number(value.toString()) : value, 4))
-                block.transactions.push(tx);
-            }
+            const builtUTxOs = buildUTxOsFromKoiosTxs(txList ?? []);
 
             // - Call processBlock
-            processBlock(block as unknown as BlockPraos, handlesRepo);
+            // processBlock(block as unknown as BlockPraos, handlesRepo);
+
+            builtUTxOs.forEach((utxo) => {
+                // handle any burns
+                handlesRepo.removeHandle(handle);
+                // update
+                handlesRepo.addUTxOAndMintData(utxo, true);
+
+            });
+
+            // remove utxos
+            handlesRepo.removeUTxOs(txList.flatMap((tx) => tx.inputs).map((i) => `${i.tx_hash}#${i.tx_index}`));
 
             handlesRepo.setMetrics({
                 currentSlot: block.slot,

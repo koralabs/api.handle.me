@@ -38,6 +38,10 @@ export interface KoiosTxInfo {
             type: string;
         } | null;
     }[];
+    inputs: {
+        tx_hash: string;
+        tx_index: number;
+    }[];
     tx_hash: string;
     assets_minted: [string, string][];
     metadata: {

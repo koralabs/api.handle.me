@@ -8,14 +8,14 @@ import { blockfrostApiCall, buildUTxOsFromKoiosTxs, defaultKoiosSettings, fetchK
 const store = new RedisHandlesStore();
 const handlesRepo = new HandlesRepository(store);
 
-const processRollback = async ({ currentSlot, rollbackOffset }: { currentSlot: number; rollbackOffset: number  }) => {
+const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSlot: number; rollbackOffset: number  }) => {
     const latestBlockResponse = await blockfrostApiCall('blocks/latest');
     if (!latestBlockResponse.ok) {
         throw new Error('Not good!');
     }
 
     const latestBlock = await latestBlockResponse.json();
-    const blockHeight = latestBlock.height - 2160;
+    const blockHeight = latestBlock.height - rollbackOffset;
 
     // Get all blocks/txs/UTxOs from Bf/Ko
     const blockList: BlockfrostBlock[] = await fetchPaginatedResults(`blocks/${blockHeight}/next`);

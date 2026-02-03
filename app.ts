@@ -1,4 +1,3 @@
-import { NextBlockResponse } from '@cardano-ogmios/schema';
 import { Logger } from '@koralabs/kora-labs-common';
 import cors from 'cors';
 import express from 'express';
@@ -7,7 +6,6 @@ import path from 'path';
 import swaggerUi from 'swagger-ui-express';
 import { parse } from 'yaml';
 import { CREDENTIALS, NODE_ENV, ORIGIN, PORT } from './config';
-import { IBlockProcessor } from './interfaces/ogmios.interfaces';
 import { IRegistry } from './interfaces/registry.interface';
 import { DynamicLoadType } from './interfaces/util.interface';
 import errorMiddleware from './middlewares/error.middleware';
@@ -21,7 +19,6 @@ class App {
     public port: string | number;
     public startTimer: number;
     public registry: IRegistry;
-    public blockProcessors: IBlockProcessor[] = [];
     public handlesRepo: HandlesRepository | undefined;
 
     constructor() {
@@ -97,44 +94,8 @@ class App {
                     this.registry[key] = value;
                 }
             });
-
-            // const processors = await dynamicallyLoad(path.resolve(`${dir}/block_processors`), DynamicLoadType.BLOCK_PROCESSOR);
-            // for (let i = 0; i < processors.length; i++) {
-            // const processor = processors[i] as IBlockProcessor;
-            // this.blockProcessors.push(await processor.initialize(this.registry));
-            //}
         }
         this.app.set('registry', this.registry);
-    }
-
-    public async processBlock(response: NextBlockResponse) {
-        if (this.blockProcessors.length > 0) {
-            const processors: Promise<void>[] = [];
-            for (let i = 0; i < this.blockProcessors.length; i++) {
-                processors.push(this.blockProcessors[i].processBlock(response));
-            }
-            Promise.all(processors);
-        }
-    }
-
-    private async loadBlockProcessorIndexes() {
-        if (this.blockProcessors.length > 0) {
-            for (let i = 0; i < this.blockProcessors.length; i++) {
-                await this.blockProcessors[i].loadIndexes();
-            }
-        }
-    }
-
-    private async resetBlockProcessors() {
-        // loop through registries and clear out storage and file
-        const handlesRepo = new HandlesRepository(new this.registry.handlesStore());
-        handlesRepo.rollBackToGenesis();
-        
-        if (this.blockProcessors.length > 0) {
-            for (let i = 0; i < this.blockProcessors.length; i++) {
-                await this.blockProcessors[i].resetIndexes();
-            }
-        }
     }
 
     private async initializeOgmios() {
@@ -153,8 +114,8 @@ class App {
             return;
         }
 
-        const ogmiosService = new OgmiosService(handlesRepo, this.processBlock.bind(this));
-        await ogmiosService.initialize(this.resetBlockProcessors.bind(this), this.loadBlockProcessorIndexes.bind(this));
+        const ogmiosService = new OgmiosService(handlesRepo);
+        await ogmiosService.initialize();
     }
 
     private initializeSwagger() {
