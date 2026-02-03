@@ -16,6 +16,8 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context:AWSLambda
 
     // Zhu-Li, Do the thing!
     Logger.log({ message: `Repopulating indexes from UTxOs to schema version ${store.getIndexSchemaVersion()}`, category: LogCategory.INFO, event: 'getStartingPoint.repopulateIndexesFromUTxOs' });
+
+    // TODO: This should process in chunks of 10k or so then stop the lambda and it should restart and pick up where it left off.
     store.repopulateIndexesFromUTxOs(utxoFunctions);
     handlesRepo.setMetrics({ indexSchemaVersion: store.getIndexSchemaVersion() });
 

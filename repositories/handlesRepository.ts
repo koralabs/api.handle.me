@@ -3,7 +3,7 @@ import { AssetNameLabel, bech32FromHex, buildCharacters, buildDrep, buildHolderI
 import { designerSchema, handleDatumSchema, portalSchema, socialsSchema, subHandleSettingsDatumSchema } from '@koralabs/kora-labs-common/utils/cbor';
 import * as crypto from 'crypto';
 import { isDatumEndpointEnabled } from '../config';
-import { BuildPersonalizationInput, HandleOnChainMetadata, MetadataLabel } from '../interfaces/ogmios.interfaces';
+import { AssetDetailsFromAssetName, BuildPersonalizationInput, HandleOnChainMetadata, MetadataLabel } from '../interfaces/ogmios.interfaces';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { decodeCborFromIPFSFile } from '../utils/ipfs';
 const blackListedIpfsCids: string[] = [];
@@ -259,6 +259,10 @@ export class HandlesRepository {
         this.store.setValueOnIndex(IndexNames.UTXO, utxo.id, utxo);
     }
 
+    public getHandleMintingData = (handle: string) => {
+        return this.store.getValuesFromIndexedSet(IndexNames.MINT, handle) as Set<string>;
+    }
+
     public buildMintingDataFromUTxO(utxo: UTxOWithTxInfo) {
         const mintingData: Map<string, MintingData[]>  = new Map();
         for (const asset of utxo.handles) {
@@ -293,11 +297,11 @@ export class HandlesRepository {
 
         const retrievedMintingData = this.store.pipeline(() => {
             missingMintingDataHandles.forEach(handleName => {
-                this.store.getValuesFromIndexedSet(IndexNames.MINT, handleName) as Set<string>;
+                this.getHandleMintingData(handleName);
             })
-        });
+        }) as Set<string>[];
 
-        Array.from(retrievedMintingData as Set<string>[]).forEach((md, i) => {
+        retrievedMintingData.forEach((md, i) => {
             const handleName = missingMintingDataHandles[i];
             mintingData.set(handleName, Array.from(md).map(md => JSON.parse(md)));
         })
@@ -305,14 +309,16 @@ export class HandlesRepository {
         return mintingData
     }
 
-    public addUTxOAndMintData(utxo: UTxOWithTxInfo) {
+    public addUTxOAndMintData(utxo: UTxOWithTxInfo, updateIndexes = true) {
         const mintingData = this.buildMintingDataFromUTxO(utxo);
 
         this.store.pipeline(() => {
             this.addUTxO(utxo);
-            this.addMintData(utxo);
-            this.updateHolderIndex(utxo);            
-            this.updateHandleIndexes(utxo, mintingData);
+            this.addMintData(mintingData);
+            if (updateIndexes) {
+                this.updateHolderIndex(utxo, mintingData);            
+                this.updateHandleIndexes(utxo, mintingData);
+            }
         });
     }
 
@@ -332,11 +338,11 @@ export class HandlesRepository {
         });
     }
 
-    public addMintData(utxo: UTxOWithTxInfo) {
-        const mintData = this.buildMintingDataFromUTxO(utxo)
-    
-        for (const item of mintData) {
-            this.store.addValueToIndexedSet(IndexNames.MINT, item.handleName, JSON.stringify(item.mintingData, (_, val) => (typeof val === 'bigint' ? `${Number(val)}` : val)));
+    public addMintData(mintData: Map<string, MintingData[]>) {    
+        for (const [handleName, mintingData] of mintData) {
+            mintingData.forEach(md => {
+                this.store.addValueToIndexedSet(IndexNames.MINT, handleName, JSON.stringify(md, (_, val) => (typeof val === 'bigint' ? `${Number(val)}` : val)));
+            }) 
         }
     }
 
@@ -486,7 +492,7 @@ export class HandlesRepository {
         }
     }
 
-    public updateHolderIndex(utxo: UTxOWithTxInfo, holders?: Map<string, Holder>, mintingData?: MintingData) {
+    public updateHolderIndex(utxo: UTxOWithTxInfo, mintingData: Map<string, MintingData[]>, holders?: Map<string, Holder>) {
         for (const asset of utxo.handles) {
             const policy = asset[0];
             for (const assetName of asset[1]) {
@@ -496,22 +502,22 @@ export class HandlesRepository {
                 }
                 const { ownerTokenHex, name } = getHandleNameFromAssetName(assetName);
                 const { address, slot } = utxo
-                const handle = this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData?.created_slot});
+                const handle = this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData.get(name)![0].created_slot});
 
                 if (!handle) return;
 
                 // TODO: set default if set in the 100 token
 
-                this._updateHolder(handle);
+                this.updateHolder(handle, holders);
             }
         }
     }
 
-    private _updateHolder(handle: StoredHandle ) {
+    public updateHolder(handle: StoredHandle, holders?: Map<string, Holder>) {
         const holderInfo = buildHolderInfo(handle.resolved_addresses.ada);
         const { address: holderAddress, knownOwnerName, type } = holderInfo;
 
-        const holder = (this.store.getValueFromIndex(IndexNames.HOLDER, holderAddress) ?? {
+        const holder = holders?.get(holderAddress) ?? (this.store.getValueFromIndex(IndexNames.HOLDER, holderAddress) ?? {
             handles: [],
             defaultHandle: '',
             manuallySet: false,
@@ -528,6 +534,7 @@ export class HandlesRepository {
         
         // if by this point, we have no handles, we need to remove the holder address from the index
         if (holder.handles.length == 0) {
+            holders?.delete(holderAddress);
             this.store.removeKeyFromIndex(IndexNames.HOLDER, holderAddress);
             return;
         }
@@ -573,9 +580,107 @@ export class HandlesRepository {
         })();
         delete handle.default; // This is a temp property not meant to save to the handle
 
+        holders?.set(holderAddress, holder);
         this.store.setValueOnIndex(IndexNames.HOLDER, holderAddress, holder);
 
         return holder;
+    }
+
+    /**
+     * 
+     * Mutates the handle object passed in
+     * 
+     */
+    public populateHandle({ assetDetails, handle, existingHandle, utxo }: { assetDetails: AssetDetailsFromAssetName; handle: StoredHandle; existingHandle?: StoredHandle; utxo: UTxOWithTxInfo }): void {
+        const isMintTx = assetDetails.isCip67 
+            ? (assetDetails.assetLabel === AssetNameLabel.LBL_222 || assetDetails.assetLabel === AssetNameLabel.LBL_000)
+                ? utxo.mint.flatMap(([, mintHandles]) => Object.keys(mintHandles)).includes(handle.hex) 
+                : false 
+            : utxo.mint.flatMap(([, mintHandles]) => Object.keys(mintHandles)).includes(handle.hex)
+
+        switch (assetDetails.assetLabel) {
+            case null:
+            case AssetNameLabel.NONE:
+            case AssetNameLabel.LBL_222:
+                // if (!existingHandle && !isMintTx) {
+                //     Logger.log({ message: `Handle was updated but there is no existing handle in storage with name: ${name}`, category: LogCategory.INFO, event: 'saveHandleUpdate.noHandleFound' });
+                // }
+
+                if (utxo.slot < handle.updated_slot_number && isMintTx) {
+                    handle.created_slot_number = Math.min(handle.created_slot_number, utxo.slot, existingHandle?.created_slot_number ?? Number.POSITIVE_INFINITY);
+                }
+                if (utxo.slot >= handle.updated_slot_number) {
+                    // check if existing handle has a utxo. If it does, we may have a double mint
+                    if (isMintTx && existingHandle?.utxo && existingHandle?.utxo != utxo.id) {
+                        handle.amount = (handle.amount ?? 1) + 1;
+                        if (handle.name != 'mydexaccounts') // The one double mint we had when half of Cardano nodes disconnected/restarted at 2023-01-22T00:09:00Z. Both the doublemint and what caused it on our side have been remedied
+                            Logger.log({ message: `POSSIBLE DOUBLE MINT! Name: ${name} | Old UTxO ${existingHandle?.utxo} | Old Slot: ${existingHandle.created_slot_number} | New UTxO: ${utxo.id} | New Slot: ${utxo.slot}`, category: LogCategory.NOTIFY, event: 'saveHandleUpdate.utxoAlreadyExists'});
+                    }
+                    handle.updated_slot_number = utxo.slot;
+                    handle.script = utxo.script;
+                    handle.datum = isDatumEndpointEnabled() && utxo.datum ? utxo.datum : undefined;
+                    handle.has_datum = !!utxo.datum;
+                    handle.lovelace = utxo.lovelace;
+                    handle.utxo = utxo.id;
+                    handle.resolved_addresses!.ada = utxo.address;
+                    handle = new UpdatedOwnerHandle(handle);
+                }
+                break;
+            case AssetNameLabel.LBL_100:
+            case AssetNameLabel.LBL_000:
+            {
+                if (utxo.slot >= handle.updated_slot_number) {
+                    if (!utxo.datum) {
+                        Logger.log({ message: `No datum for reference token ${handle.name}`, category: LogCategory.ERROR, event: 'processScannedHandleInfo.referenceToken.noDatum' });
+                        return;
+                    }
+
+                    const { projectAttributes } = this.buildPersonalizationData(handle, utxo.datum); // <- handle is mutated
+
+                    handle.updated_slot_number = utxo.slot;
+                    handle.reference_utxo = utxo.id;
+                    handle.resolved_addresses = {
+                        ...projectAttributes?.resolved_addresses,
+                        ada: existingHandle?.resolved_addresses?.ada ?? ''
+                    }
+
+                    // VIRTUAL_SUBHANDLE
+                    if (assetDetails.assetLabel == AssetNameLabel.LBL_000) {
+                        handle.virtual = projectAttributes?.virtual ? { expires_time: projectAttributes.virtual.expires_time, public_mint: !!projectAttributes.virtual.public_mint } : undefined
+                        handle.utxo = utxo.id;
+                        handle.resolved_addresses!.ada = bech32FromHex(projectAttributes!.resolved_addresses!.ada.replace('0x', ''), isTestnet);
+                        handle.handle_type = HandleType.VIRTUAL_SUBHANDLE;
+                    }
+                }
+                break;
+            }
+            case AssetNameLabel.LBL_001:
+                if (utxo.slot >= handle.updated_slot_number) {
+                    if (!existingHandle) {
+                        // There should always be an existing root handle for a subhandle
+                        // Logger.log({ message: `Cannot save subhandle settings for ${name} because root handle does not exist`, event: 'this.saveSubHandleSettingsChange', category: LogCategory.INFO });
+                        // return;  
+                    }
+            
+                    if (!utxo.datum) {
+                        Logger.log({ message: `No datum for SubHandle token ${handle.name}`,  category: LogCategory.ERROR, event: 'processScannedHandleInfo.subHandle.noDatum'});
+                        return;
+                    }
+
+                    // TODO: change to utxo_id to utxo and update handle.me to requst /subhandle-settings/utxo
+                    handle.subhandle_settings = {
+                        ...(this.parseSubHandleSettingsDatum(utxo.datum)),
+                        utxo_id: utxo.id
+                    }
+                    handle.updated_slot_number = utxo.slot;
+                    if (!handle.resolved_addresses) {
+                        handle.resolved_addresses = { ada: '' };
+                    }
+                }
+                break;
+            default:
+                Logger.log({ message: `Unknown asset: ${handle.name}`, category: LogCategory.ERROR, event: 'processScannedHandleInfo.unknownAssetName' });
+        }
     }
 
     public updateHandleIndexes(utxo: UTxOWithTxInfo, mintValueIndex: Map<string, MintingData[]>, handles?: Map<string, StoredHandle>): void {
@@ -587,12 +692,9 @@ export class HandlesRepository {
                     continue;
                 }
 
-                const { ownerTokenHex, name, isCip67, assetLabel } = getHandleNameFromAssetName(assetName);
-                const isMintTx = isCip67 
-                    ? (assetLabel === AssetNameLabel.LBL_222 || assetLabel === AssetNameLabel.LBL_000)
-                        ? utxo.mint.flatMap(([, mintHandles]) => Object.keys(mintHandles)).includes(assetName) 
-                        : false 
-                    : utxo.mint.flatMap(([, mintHandles]) => Object.keys(mintHandles)).includes(assetName)
+                const assetDetails = getHandleNameFromAssetName(assetName);
+                const { ownerTokenHex, name, isCip67 } = assetDetails;
+
                 //const mintIndexValue = this.store.getValuesFromIndexedSet(IndexNames.MINT, name) as Set<string>;
                 //.map<MintingData>(md => JSON.parse(md))
                 const mintIndexValue = mintValueIndex.get(name)!;
@@ -604,98 +706,13 @@ export class HandlesRepository {
                 const data = metadata && (metadata[isCip67 ? ownerTokenHex : name] as unknown as IHandleMetadata);
                 const existingHandle = handles?.get(name) ?? this.prepareHandle(this.store.getValueFromIndex(IndexNames.HANDLE, name) as StoredHandle) ?? undefined;
 
-                const {lovelace, datum, address, slot, script } = utxo
-                let handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData.created_slot}, data);
+                const { address, slot } = utxo
+                const handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData.created_slot}, data);
                 
                 // if (['ap@adaprotocol', 'b-263-54'].some(n => n == handle.name))
                 //     debugLog('PROCESSED SCANNED INFO START', slotNumber, {...handle, utxo})
 
-                const [txId, indexString] = utxo.id.split('#');
-                const index = parseInt(indexString);
-                const utxoDetails = { tx_id: txId, index, lovelace, datum: datum ?? '', address };
-                switch (assetLabel) {
-                    case null:
-                    case AssetNameLabel.NONE:
-                    case AssetNameLabel.LBL_222:
-                        // if (!existingHandle && !isMintTx) {
-                        //     Logger.log({ message: `Handle was updated but there is no existing handle in storage with name: ${name}`, category: LogCategory.INFO, event: 'saveHandleUpdate.noHandleFound' });
-                        // }
-                        if (slot < handle.updated_slot_number && isMintTx) {
-                            handle.created_slot_number = Math.min(handle.created_slot_number, slot, existingHandle?.created_slot_number ?? Number.POSITIVE_INFINITY);
-                        }
-                        if (slot >= handle.updated_slot_number) {
-                            // check if existing handle has a utxo. If it does, we may have a double mint
-                            if (isMintTx && existingHandle?.utxo && existingHandle?.utxo != utxo.id) {
-                                handle.amount = (handle.amount ?? 1) + 1;
-                                if (handle.name != 'mydexaccounts') // The one double mint we had when half of Cardano nodes disconnected/restarted at 2023-01-22T00:09:00Z. Both the doublemint and what caused it on our side have been remedied
-                                    Logger.log({ message: `POSSIBLE DOUBLE MINT! Name: ${name} | Old UTxO ${existingHandle?.utxo} | Old Slot: ${existingHandle.created_slot_number} | New UTxO: ${utxo} | New Slot: ${slot}`, category: LogCategory.NOTIFY, event: 'saveHandleUpdate.utxoAlreadyExists'});
-                            }
-                            handle.updated_slot_number = slot;
-                            handle.script = script;
-                            handle.datum = isDatumEndpointEnabled() && datum ? datum : undefined;
-                            handle.has_datum = !!datum;
-                            handle.lovelace = lovelace;
-                            handle.utxo = utxo.id;
-                            handle.resolved_addresses!.ada = address;
-                            handle = new UpdatedOwnerHandle(handle);
-                        }
-                        break;
-                    case AssetNameLabel.LBL_100:
-                    case AssetNameLabel.LBL_000:
-                    {
-                        if (slot >= handle.updated_slot_number) {
-                            if (!datum) {
-                                Logger.log({ message: `No datum for reference token ${assetName}`, category: LogCategory.ERROR, event: 'processScannedHandleInfo.referenceToken.noDatum' });
-                                return;
-                            }
-
-                            const { projectAttributes } = this._buildPersonalizationData(handle, datum); // <- handle is mutated
-
-                            handle.updated_slot_number = slot
-                            handle.reference_utxo = utxo.id;
-                            handle.resolved_addresses = {
-                                ...projectAttributes?.resolved_addresses,
-                                ada: existingHandle?.resolved_addresses?.ada ?? ''
-                            }
-
-                            // VIRTUAL_SUBHANDLE
-                            if (assetLabel == AssetNameLabel.LBL_000) {
-                                handle.virtual = projectAttributes?.virtual ? { expires_time: projectAttributes.virtual.expires_time, public_mint: !!projectAttributes.virtual.public_mint } : undefined
-                                handle.utxo = `${utxoDetails.tx_id}#${utxoDetails.index}`;
-                                handle.resolved_addresses!.ada = bech32FromHex(projectAttributes!.resolved_addresses!.ada.replace('0x', ''), isTestnet);
-                                handle.handle_type = HandleType.VIRTUAL_SUBHANDLE;
-                            }
-                        }
-                        break;
-                    }
-                    case AssetNameLabel.LBL_001:
-                        if (slot >= handle.updated_slot_number) {
-                            if (!existingHandle) {
-                                // There should always be an existing root handle for a subhandle
-                                // Logger.log({ message: `Cannot save subhandle settings for ${name} because root handle does not exist`, event: 'this.saveSubHandleSettingsChange', category: LogCategory.INFO });
-                                // return;  
-                            }
-                    
-                            if (!datum) {
-                                Logger.log({ message: `No datum for SubHandle token ${assetName}`,  category: LogCategory.ERROR, event: 'processScannedHandleInfo.subHandle.noDatum'});
-                                return;
-                            }
-
-                            // TODO: change to utxo_id to utxo and update handle.me to requst /subhandle-settings/utxo
-                            handle.subhandle_settings = {
-                                ...(this._parseSubHandleSettingsDatum(datum)),
-                                utxo_id: utxo.id
-                            }
-                            handle.updated_slot_number = slot;
-                            handle.resolved_addresses = {
-                                ...existingHandle?.resolved_addresses,
-                                ada: existingHandle?.resolved_addresses?.ada ?? ''
-                            }
-                        }
-                        break;
-                    default:
-                        Logger.log({ message: `Unknown asset: ${assetName}`, category: LogCategory.ERROR, event: 'processScannedHandleInfo.unknownAssetName' });
-                }
+                this.populateHandle({ assetDetails, handle, existingHandle, utxo }); // <- handle is mutated
                 handles?.set(handle.name, handle);
                 this.save(handle, existingHandle);
 
@@ -807,7 +824,7 @@ export class HandlesRepository {
         if (handle?.reference_utxo) {
             const refUtxo = this.getUTxO(handle?.reference_utxo)
             console.log('REFUTXO', refUtxo)
-            const { projectAttributes } = this._buildPersonalizationData(handle, refUtxo?.datum!);
+            const { projectAttributes } = this.buildPersonalizationData(handle, refUtxo?.datum!);
             console.log('PROJECTATTRIBUTES', projectAttributes)
             personalization = await this._buildPersonalization({ 
                 personalizationDatum: projectAttributes!, 
@@ -875,7 +892,7 @@ export class HandlesRepository {
     /**
      * @description Mutates handle - adding personalization data
      */
-    private _buildPersonalizationData = (handle: StoredHandle, datum: string): { nftAttributes: IHandleMetadata | null; projectAttributes: IPzDatumConvertedUsingSchema | null; } => {
+    public buildPersonalizationData = (handle: StoredHandle, datum: string): { nftAttributes: IHandleMetadata | null; projectAttributes: IPzDatumConvertedUsingSchema | null; } => {
         const decodedDatum = decodeCborToJson({ cborString: datum, schema: handleDatumSchema });
         const datumObject = typeof decodedDatum === 'string' ? JSON.parse(decodedDatum) : decodedDatum;
         const { constructor_0 } = datumObject;
@@ -1108,7 +1125,7 @@ export class HandlesRepository {
         return updatedPersonalization;
     };
 
-    private _parseSubHandleSettingsDatum(datum: string) {
+    public parseSubHandleSettingsDatum(datum: string) {
         try {
             const decodedSettings = decodeCborToJson({ cborString: datum, schema: subHandleSettingsDatumSchema });
 
@@ -1147,7 +1164,6 @@ export class HandlesRepository {
         sortOGHandle: this._sortOGHandle.bind(this),
         sortedByLength: this._sortedByLength.bind(this),
         sortByCreatedSlotNumber: this._sortByCreatedSlotNumber.bind(this),
-        sortAlphabetically: this._sortAlphabetically.bind(this),
-        updateHolder: this._updateHolder.bind(this)
+        sortAlphabetically: this._sortAlphabetically.bind(this)
     }
 }

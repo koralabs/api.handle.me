@@ -1,6 +1,7 @@
-import { delay, Logger } from "@koralabs/kora-labs-common";
+import { delay, HANDLE_POLICIES, LogCategory, Logger, Network, NETWORK, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { KoiosTxInfo } from '../interfaces/provider.interface';
 
-export const defaultKoiosSettings = {_inputs: false, _withdrawals: false, _certs: false, _scripts: false, _bytecode: false, _governance: false, _metadata: true, _assets: true}
+export const defaultKoiosSettings = { _inputs: false, _withdrawals: false, _certs: false, _scripts: false, _bytecode: false, _governance: false, _metadata: true, _assets: true };
 
 export const blockfrostApiCall = async (endpointSegment: string) => {
     const headers = {
@@ -9,7 +10,7 @@ export const blockfrostApiCall = async (endpointSegment: string) => {
     };
 
     const url = `https://cardano-${NETWORK.toLowerCase()}.blockfrost.io/api/v0/${endpointSegment}`;
-    return await fetch(url, {headers})
+    return await fetch(url, { headers });
 };
 
 export const fetchPaginatedResults = async <T>(endpointSegment: string): Promise<T[]> => {
@@ -43,7 +44,19 @@ export const fetchPaginatedResults = async <T>(endpointSegment: string): Promise
     return results;
 };
 
-const fetchKoios = async(path: string, method = 'GET', body?: string) => {
+/**
+ * 
+ * @param block Can be either block's hash or height
+ * @returns 
+ */
+export const fetchTxList = async (block: string) => {
+    const _tx_hashes = await fetchPaginatedResults(`blocks/${block}/txs`);
+
+    const txList: KoiosTxInfo[] = await fetchKoios(`tx_info`, 'POST', JSON.stringify({ _tx_hashes, ...defaultKoiosSettings }));
+    return txList;
+};
+
+export const fetchKoios = async (path: string, method = 'GET', body?: string) => {
     const url = `https://${NETWORK.toLowerCase() === 'mainnet' ? 'api' : NETWORK.toLowerCase()}.koios.rest/api/v1/${path}`;
     const res = await fetch(url, {
         method,
@@ -55,4 +68,87 @@ const fetchKoios = async(path: string, method = 'GET', body?: string) => {
     }).then((res) => res.json());
 
     return res;
+};
+
+export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[]): UTxOWithTxInfo[] => {
+    const utxos: UTxOWithTxInfo[] = [];
+    for (const t of transactions) {
+        const minted = t.assets_minted.reduce<[string, string[]][]>((acc, mintedAsset) => {
+            const [policyId, assetName] = mintedAsset;
+            if (HANDLE_POLICIES.contains(NETWORK as Network, policyId)) {
+                if (!acc.find((a) => a[0] === policyId)) {
+                    acc.push([policyId, []]);
+                }
+                const policyEntry = acc.find((a) => a[0] === policyId)!;
+                policyEntry[1].push(assetName);
+            }
+            return acc;
+        }, []);
+
+        for (const o of t.outputs) {
+            const handles = o.asset_list.reduce<[string, string[]][]>((acc, asset) => {
+                const [policyId, assetName] = asset;
+                if (HANDLE_POLICIES.contains(NETWORK as Network, policyId)) {
+                    if (!acc.find((a) => a[0] === policyId)) {
+                        acc.push([policyId, []]);
+                    }
+                    const policyEntry = acc.find((a) => a[0] === policyId)!;
+                    policyEntry[1].push(assetName);
+                }
+                return acc;
+            }, []);
+
+            const mint: [string, string[]][] = minted.map(([policy, mintedHandles]) => [policy, handles.flatMap((h) => h[1]).filter((k) => mintedHandles.some((mh) => mh === k))]);
+
+            const metadata = Object.fromEntries(
+                Object.entries(t?.metadata ?? {})
+                    .filter(([label, labelObj]) => label == '721' && labelObj.json) // We only need 721 label
+                    .map(([label, labelObj]) => {
+                        const { json } = labelObj;
+                        const { version, ...policies } = json as any;
+                        const filteredPolicies = Object.fromEntries(
+                            Object.entries(policies)
+                                .filter(([policyId]) => HANDLE_POLICIES.contains(NETWORK as Network, policyId))
+                                .map(([policyId, assets]) => {
+                                    // Only handles in this UTxO
+                                    const filteredAssets = Object.fromEntries(Object.entries(assets as any).filter(([assetName]) => handles.flatMap((h) => h[1]).includes(assetName) || handles.flatMap((h) => h[1]).includes(Buffer.from(assetName).toString('hex'))));
+                                    return [policyId, filteredAssets];
+                                })
+                                .filter(([, assets]) => Object.keys(assets as any).length > 0)
+                        );
+
+                        return [label, { ...filteredPolicies, ...(version && { version }) }];
+                    })
+                    // drop labels that ended up with no assets under any policyId
+                    .filter(([, labelObj]) => Object.keys(labelObj as any).some((k) => k !== 'version'))
+            );
+
+            const utxo: UTxOWithTxInfo = {
+                handles,
+                mint,
+                metadata,
+                id: `${o.tx_hash}#${o.tx_index}`,
+                tx_id: o.tx_hash,
+                index: o.tx_index,
+                blockHash: t.block_hash,
+                blockNum: t.block_height,
+                slot: t.absolute_slot,
+                address: o.payment_addr.bech32,
+                lovelace: Number(o.value),
+                datum: o.inline_datum?.bytes,
+                script: o.reference_script
+                    ? {
+                        type: 'PlutusScriptV2',
+                        cbor: o.reference_script.bytes
+                    }
+                    : undefined
+            };
+
+            if (handles.length) {
+                utxos.push(utxo);
+            }
+        }
+    }
+
+    return utxos;
 }
