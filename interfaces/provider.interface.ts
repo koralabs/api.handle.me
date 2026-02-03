@@ -1,5 +1,4 @@
 import { UTxOWithTxInfo } from '@koralabs/kora-labs-common';
-import { HandleOnChainData } from './ogmios.interfaces';
 
 export interface KoiosAssetUTxO {
     asset_list: { asset_name: string; policy_id: string }[];
@@ -17,43 +16,55 @@ export interface KoiosAssetUTxO {
     block_height: number;
 }
 
-export interface KoiosMintedAsset {
-    decimals: number,
-    quantity: string,
-    policy_id: string,
-    asset_name: string,
-    fingerprint: string
+export interface KoiosAsset {
+    decimals: number;
+    quantity: string;
+    policy_id: string;
+    asset_name: string;
+    fingerprint: string;
+}
+
+export interface HandleMetadata {
+    [policyId: string]: {
+        [handleName: string]: any;
+    };
+}
+
+export interface KoiosOutput {
+    tx_hash: string;
+    tx_index: number;
+    datum_hash: string | null;
+    stake_addr: string | null;
+    value: string;
+    payment_addr: {
+        bech32: string;
+        cred: string;
+    };
+    asset_list: KoiosAsset[];
+    inline_datum: {
+        bytes: string;
+        value: Record<string, any>;
+    } | null;
+    reference_script: {
+        bytes: string;
+        type: string;
+    } | null;
 }
 
 export interface KoiosTxInfo {
     block_hash: string;
     block_height: number;
     absolute_slot: number;
-    id: any;
-    outputs: {
-        tx_hash: string;
-        tx_index: number;
-        value: string;
-        payment_addr: {
-            bech32: string;
-        };
-        asset_list: [string, string][];
-        inline_datum: {
-            bytes: string;
-        };
-        reference_script: {
-            bytes: string;
-            type: string;
-        } | null;
-    }[];
+    reference_inputs: any[]
+    outputs: KoiosOutput[];
     inputs: {
         tx_hash: string;
         tx_index: number;
     }[];
     tx_hash: string;
-    assets_minted: KoiosMintedAsset[];
+    assets_minted: KoiosAsset[];
     metadata: {
-        [label: string]: HandleOnChainData;
+        [label: string]: HandleMetadata;
     };
 }
 

@@ -75,7 +75,7 @@ export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[]): UTxOWithTxI
     const utxos: UTxOWithTxInfo[] = [];
     for (const t of transactions) {
         const minted = t.assets_minted.reduce<[string, string[]][]>((acc, mintedAsset) => {
-            const [policyId, assetName] = mintedAsset;
+            const { policy_id: policyId, asset_name: assetName } = mintedAsset;
             if (HANDLE_POLICIES.contains(NETWORK as Network, policyId)) {
                 const { name, isCip67 } = getHandleNameFromAssetName(assetName);
                 if (!isCip67 || assetName.startsWith(AssetNameLabel.LBL_222) || assetName.startsWith(AssetNameLabel.LBL_000)) {
@@ -91,7 +91,7 @@ export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[]): UTxOWithTxI
 
         for (const o of t.outputs) {
             const handles = o.asset_list.reduce<[string, string[]][]>((acc, asset) => {
-                const [policyId, assetName] = asset;
+                const { policy_id: policyId, asset_name: assetName } = asset;
                 if (HANDLE_POLICIES.contains(NETWORK as Network, policyId)) {
                     if (!acc.find((a) => a[0] === policyId)) {
                         acc.push([policyId, []]);
@@ -106,13 +106,11 @@ export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[]): UTxOWithTxI
 
             const metadata = Object.fromEntries(
                 Object.entries(t?.metadata ?? {})
-                    .filter(([label, labelObj]) => label == '721' && labelObj.json) // We only need 721 label
+                    .filter(([label, labelObj]) => label == '721' && Object.keys(labelObj).some(k => HANDLE_POLICIES.contains(NETWORK as Network, k))) // We only need 721 label
                     .map(([label, labelObj]) => {
-                        const { json } = labelObj;
-                        const { version, ...policies } = json as any;
+                        const { version, ...policies } = labelObj as any;
                         const filteredPolicies = Object.fromEntries(
                             Object.entries(policies)
-                                .filter(([policyId]) => HANDLE_POLICIES.contains(NETWORK as Network, policyId))
                                 .map(([policyId, assets]) => {
                                     // Only handles in this UTxO
                                     const filteredAssets = Object.fromEntries(Object.entries(assets as any).filter(([assetName]) => handles.flatMap((h) => h[1]).includes(assetName) || handles.flatMap((h) => h[1]).includes(Buffer.from(assetName).toString('hex'))));
