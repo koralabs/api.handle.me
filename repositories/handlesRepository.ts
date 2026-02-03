@@ -250,6 +250,7 @@ export class HandlesRepository {
 
         return { searchTotal, handles };
     }
+
     public addUTxO(utxo: UTxOWithTxInfo) {
         // save the UTxO id to the store with slot as the key
         this.store.addValueToOrderedSet(IndexNames.UTXO_SLOT, utxo.slot, utxo.id);
@@ -601,7 +602,7 @@ export class HandlesRepository {
                 // however, metadata can.
                 const metadata: { [handleName: string]: HandleOnChainMetadata } | undefined = (mintingData.metadata?.[MetadataLabel.NFT] as any)?.[policy];
                 const data = metadata && (metadata[isCip67 ? ownerTokenHex : name] as unknown as IHandleMetadata);
-                const existingHandle = handles ? handles.get(name) : this.prepareHandle(this.store.getValueFromIndex(IndexNames.HANDLE, name) as StoredHandle) ?? undefined;
+                const existingHandle = handles?.get(name) ?? this.prepareHandle(this.store.getValueFromIndex(IndexNames.HANDLE, name) as StoredHandle) ?? undefined;
 
                 const {lovelace, datum, address, slot, script } = utxo
                 let handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData.created_slot}, data);
