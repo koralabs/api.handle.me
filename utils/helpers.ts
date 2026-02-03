@@ -1,5 +1,6 @@
-import { delay, HANDLE_POLICIES, LogCategory, Logger, Network, NETWORK, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, delay, HANDLE_POLICIES, LogCategory, Logger, Network, NETWORK, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { KoiosTxInfo } from '../interfaces/provider.interface';
+import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 
 export const defaultKoiosSettings = { _inputs: false, _withdrawals: false, _certs: false, _scripts: false, _bytecode: false, _governance: false, _metadata: true, _assets: true };
 
@@ -76,11 +77,14 @@ export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[]): UTxOWithTxI
         const minted = t.assets_minted.reduce<[string, string[]][]>((acc, mintedAsset) => {
             const [policyId, assetName] = mintedAsset;
             if (HANDLE_POLICIES.contains(NETWORK as Network, policyId)) {
-                if (!acc.find((a) => a[0] === policyId)) {
-                    acc.push([policyId, []]);
+                const { name, isCip67 } = getHandleNameFromAssetName(assetName);
+                if (!isCip67 || assetName.startsWith(AssetNameLabel.LBL_222) || assetName.startsWith(AssetNameLabel.LBL_000)) {
+                    if (!acc.find((a) => a[0] === policyId)) {
+                        acc.push([policyId, []]);
+                    }
+                    const policyEntry = acc.find((a) => a[0] === policyId)!;
+                    policyEntry[1].push(assetName);
                 }
-                const policyEntry = acc.find((a) => a[0] === policyId)!;
-                policyEntry[1].push(assetName);
             }
             return acc;
         }, []);

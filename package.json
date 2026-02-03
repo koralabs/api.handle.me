@@ -16,6 +16,7 @@
     "build:docker": "npm run build:production && docker build -t koralabs/handles-api .",
     "ogmios": "chmod +x ./shell/start_local.sh && ./shell/start_local.sh",
     "api": "tsx -r tsconfig-paths/register -r dotenv/config express.ts",
+    "readonly": "READ_ONLY_STORE=true PORT=3142 tsx -r tsconfig-paths/register -r dotenv/config express.ts",
     "test": "chmod +x ./shell/local_valkey.sh && ./shell/local_valkey.sh && (export NETWORK=preview; jest --forceExit --coverage --runInBand)",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint --ext=.js,.ts --fix --max-warnings=0 ."
   },

@@ -1,4 +1,5 @@
 import { Transaction } from '@cardano-ogmios/schema';
+import { StoredHandle } from '@koralabs/kora-labs-common';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { RedisHandlesStore } from '../stores/redis';
 import { buildUTxOsFromKoiosTxs, fetchPaginatedResults, fetchTxList } from '../utils/helpers';
@@ -7,8 +8,8 @@ const MAX_TIP_SCAN_SLOTS = 60 * 30 // 30 mins of blocks
 
 export const lambdaHandler = async (event: AWSLambda.ALBEvent, context:AWSLambda.Context) => {
     const store = new RedisHandlesStore(); // I hate this
-    await store.initialize();
     const handlesRepo = new HandlesRepository(store);
+    await handlesRepo.initialize();
     const { lastSlot = Infinity, currentSlot = 0, currentBlockHash, lockLambdas } = handlesRepo.getMetrics();
 
     if (lockLambdas) {
@@ -40,7 +41,18 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context:AWSLambda
 
             builtUTxOs.forEach((utxo) => {
                 // handle any burns
-                handlesRepo.removeHandle(handle);
+                const burnNames = utxo.mint.flatMap(m => m[1]).filter(m => !utxo.handles.flatMap(h => h[1]).includes(m));
+                const burnHandles: StoredHandle[] = store.pipeline(() => {
+                    burnNames.forEach(name => {
+                        handlesRepo.getHandle(name);
+                    });
+                });
+                store.pipeline(() => {
+                    burnHandles.forEach(burned => {
+                        handlesRepo.removeHandle(burned);
+                    });
+                });
+                
                 // update
                 handlesRepo.addUTxOAndMintData(utxo, true);
 
