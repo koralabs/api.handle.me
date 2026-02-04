@@ -845,7 +845,8 @@ describe('processBlock Tests', () => {
                 pfp_image: '',
                 characters: 'letters',
                 created_slot_number: 0,
-                default_in_wallet: 'virtual@hndl',
+                default_in_wallet: '',
+                default: false,
                 handle_type: 'virtual_subhandle',
                 has_datum: false,
                 holder: 'addr_test1xccnsefjxg6kgc3ex5urjdt9xuurqdpexc6nswtz8qukfgekv93xzvpsxycnjenzvyunwwpnx3nryvn98y6nsvfsv5mryzpe4qc',
@@ -883,12 +884,16 @@ describe('processBlock Tests', () => {
             },
             undefined
         );
-        expect(repo.getHandle('virtual@hndl')).toEqual({
+        
+        const handle = repo.getHandle('virtual@hndl');
+
+        expect(handle).toEqual({
             amount: 1,
             bg_image: '',
             characters: 'letters',
             created_slot_number: 0,
             default_in_wallet: 'virtual@hndl',
+            default: false,
             handle_type: 'virtual_subhandle',
             has_datum: false,
             hex: '000000007669727475616c40686e646c',
@@ -905,7 +910,6 @@ describe('processBlock Tests', () => {
             payment_key_hash: '313865323235646239353839356537383034393635383962383964a3',
             pfp_image: '',
             policy: 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a',
-            pz_enabled: false,
             rarity: 'basic',
             reference_utxo: 'some_id#0',
             resolved_addresses: {
