@@ -273,14 +273,13 @@ export class HandlesRepository {
                 }
                 const { isCip67, name, assetLabel } = getHandleNameFromAssetName(assetName);
 
-                // TODO: CHANGE THIS NAME!!!!!!!!
-                const isMintTx = isCip67 
+                const justMinted = isCip67 
                     ? (assetLabel === AssetNameLabel.LBL_222 || assetLabel === AssetNameLabel.LBL_000)
                         ? utxo.mint.flatMap(([, handles]) => handles).includes(assetName) 
                         : false 
                     : utxo.mint.flatMap(([, handles]) => handles).includes(assetName);
 
-                if (isMintTx) {
+                if (justMinted) {
                     // TODO: Change metadata to only include handle metadata
                     const data = { created_slot: utxo.slot, metadata: utxo.metadata, txHash: `${utxo.tx_id}` };
                     const existingMintData = mintingData.get(name);
@@ -492,6 +491,12 @@ export class HandlesRepository {
     }
 
     public updateHolderIndex(utxo: UTxOWithTxInfo, mintingDataMap?: Map<string, MintingData[]>, holders?: Map<string, Holder>) {
+        /* 
+        We need to rethink Holders so updates are atomic and idempotent
+        {root}:holder:stake1111 is an indexed set with just handles
+        {root}:defaulthandle:stake1111 stores default handle (delete if unset)
+        type, knownOwner are set on the fly
+        */
         for (const asset of utxo.handles) {
             const policy = asset[0];
             for (const assetName of asset[1]) {
@@ -710,6 +715,17 @@ export class HandlesRepository {
                 //     debugLog('PROCESSED SCANNED INFO START', slotNumber, {...handle, utxo})
 
                 this.populateHandle({ assetDetails, handle, existingHandle, utxo }); // <- handle is mutated
+                
+                const holder = buildHolderInfo(handle.resolved_addresses.ada)
+                
+                handle.holder = holder.address
+                handle.holder_type = holder.type
+                
+                if (existingHandle && existingHandle.holder !== handle.holder) {
+                    const oldHolder = this.store.getValueFromIndex(IndexNames.HOLDER, holder.address) as Holder
+                    this._removeHandleFromHolder(oldHolder, existingHandle.resolved_addresses.ada, name)
+                }
+                
                 handles?.set(handle.name, handle);
                 this.save(handle, existingHandle);
 
@@ -740,17 +756,8 @@ export class HandlesRepository {
         handle.payment_key_hash = payment_key_hash;
         handle.drep = buildDrep(ada, handle.id_hash?.replace('0x', ''));
 
-        const holder = buildHolderInfo(handle.resolved_addresses.ada)
-        
-        handle.holder = holder.address
-        handle.holder_type = holder.type
-        
-        if (oldHandle && oldHandle?.holder !== handle.holder) {
-            this._removeHandleFromHolder(oldHandle?.resolved_addresses.ada, name)
-        }
-
         // This could return null if it is a pre-Shelley address (not bech32)
-        const decodedAddress = decodeAddress(holder.address);
+        const decodedAddress = decodeAddress(handle.holder);
         if (decodedAddress) {
             const hashOfStakeKeyHash = handle.id_hash ? handle.id_hash.replace('0x', '').slice(34) : crypto.createHash('md5').update(decodedAddress, 'hex').digest('hex')
             this.store.addValueToIndexedSet(IndexNames.HASH_OF_STAKE_KEY_HASH, hashOfStakeKeyHash, handle.name);
@@ -992,9 +999,8 @@ export class HandlesRepository {
         };
     };
 
-    private _removeHandleFromHolder(address: string, name: string) {
+    private _removeHandleFromHolder(holder: Holder, address: string, name: string) {
         const holderInfo = buildHolderInfo(address);
-        const holder = this.store.getValueFromIndex(IndexNames.HOLDER, holderInfo.address) as Holder
         if (holder) {
             const oldIndex = holder.handles?.findIndex(h => h.name == name) ?? -1;
             if (oldIndex > -1) {

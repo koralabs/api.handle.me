@@ -1,4 +1,4 @@
-import { ApiIndexType, chunk, Holder, IApiMetrics, IApiStore, IHandleFileContent, IndexNames, ISlotHistory, isNumeric, LogCategory, Logger, NETWORK, SortAndLimitOptions, UTxOFunctionName, UTxOFunctions } from '@koralabs/kora-labs-common';
+import { ApiIndexType, chunk, Holder, IApiMetrics, IApiStore, IHandleFileContent, IndexNames, ISlotHistory, isNumeric, LogCategory, Logger, MintingData, NETWORK, SortAndLimitOptions, StoredHandle, UTxOFunctionName, UTxOFunctions } from '@koralabs/kora-labs-common';
 import { GlideString, HashDataType, SortOptions } from '@valkey/valkey-glide';
 import { promisify } from 'util';
 import { MessageChannel, receiveMessageOnPort, Worker } from 'worker_threads';
@@ -107,10 +107,13 @@ export class RedisHandlesStore implements IApiStore {
         });
 
         // TODO: This will have to be chunked to 10k at a time
+        const handles = new Map<string, StoredHandle>();
+        const holders = new Map<string, Holder>();
+        const mintingData: Map<string, MintingData[]> = this.getIndex(IndexNames.MINT) as Map<string, MintingData[]>
         this.pipeline(() => {
             for (const utxo of utxos) {
-                utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo);
-                utxoFunctions[UTxOFunctionName.UPDATE_HOLDER_INDEX](utxo);
+                utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo, mintingData, handles);
+                utxoFunctions[UTxOFunctionName.UPDATE_HOLDER_INDEX](utxo, mintingData, holders);
                 added++;
             }
         })
@@ -165,12 +168,15 @@ export class RedisHandlesStore implements IApiStore {
                 utxos.sort((a, b) => a.slot - b.slot);
 
                 const utxoChunks = chunk(utxos, MAX_SETS_PER_PIPE);
+                const handles = new Map<string, StoredHandle>();
+                const holders = new Map<string, Holder>();
+                const mintData = new Map(Object.entries(mintingData) as [string, MintingData[]][]);
                 for (const utxoChunk of utxoChunks) {
                     this.pipeline(() => {
                         utxoChunk.forEach((utxo) => {
                             utxoFunctions[UTxOFunctionName.ADD_UTXO](utxo);
-                            utxoFunctions[UTxOFunctionName.UPDATE_HOLDER_INDEX](utxo);
-                            utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo);
+                            utxoFunctions[UTxOFunctionName.UPDATE_HOLDER_INDEX](utxo, mintData, holders);
+                            utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo, mintData, handles);
                         });
                     });
                 }
