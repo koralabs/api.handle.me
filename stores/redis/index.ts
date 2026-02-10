@@ -103,7 +103,7 @@ export class RedisHandlesStore implements IApiStore {
         Logger.log(`Repopulating indexes from ${utxoIds.length.toLocaleString()} UTxOs, ${utxoIds[0]}`);
         
         const utxos = this.pipeline(() => {
-            utxoIds.map(utxoId => this.getValueFromIndex(IndexNames.UTXO, utxoId)).filter(Boolean)
+            utxoIds.map(utxoId => this.getHashFromIndex(IndexNames.UTXO, utxoId)).filter(Boolean)
         });
 
         // TODO: This will have to be chunked to 10k at a time
@@ -243,7 +243,19 @@ export class RedisHandlesStore implements IApiStore {
 
     // #endregion
 
-    // #region INDEXES *************************
+    // #region BASIC INDEX METHODS ******************
+
+    public getValueFromIndex(index: IndexNames, key: string | number): string | undefined {
+        return this.redisClientCall('get', `{root}:${index}:${key}`);
+    }
+
+    public setValueOnIndex(index: IndexNames, key: string | number, value: string): void {
+        this.redisClientCall('set', `{root}:${index}:${key}`, value);
+    }
+
+    // #endregion
+
+    // #region HASH INDEXES *************************
     public getIndex(index: IndexNames, options?: SortAndLimitOptions): Map<string | number, ApiIndexType> {
         // SLOT & SLOT_HISTORY uses a an ordered set (ZSET)
         if (ORDERED_SLOTS.includes(index)) {
@@ -254,7 +266,7 @@ export class RedisHandlesStore implements IApiStore {
         const keys = this.redisClientCall(command, `{root}:${index}`, options);
         const values: Map<string | number, ApiIndexType> = new Map<string | number, ApiIndexType>();
         for (const key of keys) {
-            const value = this.getValueFromIndex(index, key);
+            const value = this.getHashFromIndex(index, key);
             if (value) values.set(String(key), value);
         }
         return values;
@@ -267,20 +279,31 @@ export class RedisHandlesStore implements IApiStore {
         return [...this.redisClientCall(command, `{root}:${index}`, options)].map((v) => (isNumeric(v.toString()) && index != IndexNames.HANDLE ? Number(v.toString()) : v.toString()));
     }
 
-    public getValueFromIndex(index: IndexNames, key: string | number): ApiIndexType | undefined {
+    public getHashFromIndex(index: IndexNames, key: string | number): ApiIndexType | undefined {
         return this.rehydrateObjectFromCache(`{root}:${index}:${key}`);
     }
 
-    public setValueOnIndex(index: IndexNames, key: string | number, value: ApiIndexType): void {
+    public setHashOnIndex(index: IndexNames, key: string | number, value: ApiIndexType): void {
         this.saveObjectToCache(`{root}:${index}:${key}`, value);
         if (META_INDEXES.includes(index)) this.redisClientCall('sadd', `{root}:${index}`, [key]);
         if (index == IndexNames.HOLDER) this.addValueToOrderedSet(IndexNames.HOLDER, (value as Holder).handles.length, key as string);
     }
 
+    private removeKeyFromMetaIndex(index: IndexNames, key: string | number) {
+        if (META_INDEXES.includes(index)) {
+            const count = this.redisClientCall('scard', `{root}:${index}:${key}`) as number;
+            if ((RedisHandlesStore._pipeline && count == 1) || !count) this.redisClientCall('srem', `{root}:${index}`, [key]);
+        }
+    }
+
+    /**
+     * 
+     * @param index IndexNames
+     * @param key string | number
+     */
     public removeKeyFromIndex(index: IndexNames, key: string | number): void {
         this.redisClientCall('del', [`{root}:${index}:${key}`]);
-        if (index == IndexNames.HOLDER) this.removeValuesFromOrderedSet(IndexNames.HOLDER, key);
-        else this.redisClientCall('srem', `{root}:${index}`, [key]);
+        this.removeKeyFromMetaIndex(index, key);
     }
 
     // #endregion
@@ -300,10 +323,7 @@ export class RedisHandlesStore implements IApiStore {
     public removeValueFromIndexedSet(index: IndexNames, key: string | number, value: string): void {
         if (key != null) {
             this.redisClientCall('srem', `{root}:${index}:${key}`, [value]);
-            if (META_INDEXES.includes(index)) {
-                const count = this.redisClientCall('scard', `{root}:${index}:${key}`) as number;
-                if ((RedisHandlesStore._pipeline && count == 1) || !count) this.redisClientCall('srem', `{root}:${index}`, [key]);
-            }
+            this.removeKeyFromMetaIndex(index, key);
         }
     }
 

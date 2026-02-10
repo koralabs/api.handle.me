@@ -14,7 +14,7 @@ class HoldersController {
         } catch (error) {
             next(error);
         }
-    };
+    }
 
     public async getHolderAddressDetails(req: Request<IGetHolderAddressDetailsRequest, {}, {}>, res: Response, next: NextFunction) {
         try {

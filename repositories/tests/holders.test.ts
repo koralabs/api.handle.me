@@ -35,7 +35,7 @@ describe('holder index integrity', () => {
         const holdersList = storeInstance.getKeysFromIndex(IndexNames.HOLDER) as string[];
         const allHolders = new Map<string, Holder>();
         holdersList.forEach((h) => {
-            const holder = storeInstance.getValueFromIndex(IndexNames.HOLDER, h) as Holder;
+            const holder = storeInstance.getValueFromIndex(IndexNames.HOLDER, h) as Set<string>;
             holder.defaultHandle = `${holder.defaultHandle}`;
             allHolders.set(h, holder);
         });

@@ -55,7 +55,7 @@ const getRedisItems = async () => {
                     for (const key of keys) {
                         const keyParts = `${key}`.split(':');
                         const utxoKey = keyParts[2];
-                        redisHandleStore.getValueFromIndex(IndexNames.UTXO, utxoKey) as UTxOWithTxInfo | null;
+                        redisHandleStore.getHashFromIndex(IndexNames.UTXO, utxoKey) as UTxOWithTxInfo | null;
                     }
                 });
 

@@ -74,14 +74,19 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
         const stakeAddresses = storedHandles.map((h) => buildHolderInfo(h.resolved_addresses.ada).address);
 
         // get a full list of holders so we can pass it into the updateHolder function later
-        const holders = store.pipeline(() => {
-            stakeAddresses.forEach((address) => handlesRepo.getHolder(address));
+        const holderHandles = store.pipeline(() => {
+            stakeAddresses.forEach((address) => store.getValuesFromIndexedSet(IndexNames.HOLDER, address));
+        }) as Set<string>[]; // array of sets of handle names for each holder address
+
+        const holdersMap = new Map<string, Set<string>>();
+        stakeAddresses.forEach((address, index) => {
+            holdersMap.set(address, holderHandles[index]);
         });
 
         // update handle holders
         store.pipeline(() => {
             storedHandles.forEach((handle) => {
-                handlesRepo.updateHolder(handle, holders);
+                handlesRepo.updateHolder(handle, holdersMap);
             });
         });
 
