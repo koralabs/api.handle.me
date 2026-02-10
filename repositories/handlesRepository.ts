@@ -331,15 +331,53 @@ export class HandlesRepository {
         return mintingData
     }
 
-    public addUTxOAndMintData(utxo: UTxOWithTxInfo, updateIndexes = true) {
+    public buildIndexInfoFromUTxO(utxo: UTxOWithTxInfo) {
         const mintingData = this.buildMintingDataFromUTxO(utxo);
+        
+        // we need holders from the handles that are in the utxo
+        const holders = new Map<string, HolderHandleNames>();
+        const handles = new Map<string, StoredHandle>();
+
+        const keys: string[] = [];
+        const results = this.store.pipeline(() => {
+            for (const asset of utxo.handles) {
+                for (const assetName of asset[1]) {
+                    if (assetName === '') continue;
+                    const { name } = getHandleNameFromAssetName(assetName);
+
+                    const info = buildHolderInfo(utxo.address);
+                    this.store.getValuesFromIndexedSet(IndexNames.HOLDER, info.address) as HolderHandleNames
+
+                    this.store.getHashFromIndex(IndexNames.HANDLE, name);
+
+                    keys.push(info.address, name);
+                }
+            }
+        }) as (HolderHandleNames | StoredHandle)[];
+
+        for (let i = 0; i < keys.length; i = i + 2) {
+            const handleNames = results[i] as HolderHandleNames;
+            const storedHandle = results[i + 1] as StoredHandle;
+            holders.set(keys[i] as string, handleNames);
+            handles.set(keys[i + 1] as string, storedHandle);
+        }
+
+        return {
+            mintingData,
+            holders,
+            handles
+        }
+    }
+
+    public addUTxOAndMintData(utxo: UTxOWithTxInfo, updateIndexes = true) {
+        const { mintingData, holders, handles } = this.buildIndexInfoFromUTxO(utxo);
 
         this.store.pipeline(() => {
             this.addUTxO(utxo);
             this.addMintData(mintingData);
             if (updateIndexes) {
-                this.updateHolderIndex(utxo, mintingData); // TODO: pass in holders            
-                this.updateHandleIndexes(utxo, mintingData); // TODO: pass in handles
+                this.updateHolderIndex(utxo, mintingData, holders);           
+                this.updateHandleIndexes(utxo, mintingData, handles);
             }
         });
     }

@@ -1,4 +1,4 @@
-import { ApiIndexType, chunk, Holder, IApiMetrics, IApiStore, IHandleFileContent, IndexNames, ISlotHistory, isNumeric, LogCategory, Logger, MintingData, NETWORK, SortAndLimitOptions, StoredHandle, UTxOFunctionName, UTxOFunctions } from '@koralabs/kora-labs-common';
+import { ApiIndexType, chunk, Holder, HolderHandleNames, IApiMetrics, IApiStore, IHandleFileContent, IndexNames, ISlotHistory, isNumeric, LogCategory, Logger, MintingData, NETWORK, SortAndLimitOptions, StoredHandle, UTxOFunctionName, UTxOFunctions } from '@koralabs/kora-labs-common';
 import { GlideString, HashDataType, SortOptions } from '@valkey/valkey-glide';
 import { promisify } from 'util';
 import { MessageChannel, receiveMessageOnPort, Worker } from 'worker_threads';
@@ -108,7 +108,7 @@ export class RedisHandlesStore implements IApiStore {
 
         // TODO: This will have to be chunked to 10k at a time
         const handles = new Map<string, StoredHandle>();
-        const holders = new Map<string, Holder>();
+        const holders = new Map<string, HolderHandleNames>();
         const mintingData: Map<string, MintingData[]> = this.getIndex(IndexNames.MINT) as Map<string, MintingData[]>
         this.pipeline(() => {
             for (const utxo of utxos) {
@@ -169,7 +169,7 @@ export class RedisHandlesStore implements IApiStore {
 
                 const utxoChunks = chunk(utxos, MAX_SETS_PER_PIPE);
                 const handles = new Map<string, StoredHandle>();
-                const holders = new Map<string, Holder>();
+                const holders = new Map<string, HolderHandleNames>();
                 const mintData = new Map(Object.entries(mintingData) as [string, MintingData[]][]);
                 for (const utxoChunk of utxoChunks) {
                     this.pipeline(() => {
