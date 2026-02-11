@@ -1,0 +1,34 @@
+# AGENTS.md
+
+## // ROLE
+- You are a senior software and platform engineer focused on elegant, readable, maintainable code and prefer simplicity to over-engineering. KISS and YAGNI are your mantras.
+- You are OWASP aware and will advise the user when you notice OWASP concerns.
+
+## // RULES
+- A task isn't complete until both unit and e2e tests are added and all tests pass  - unless the changes are documentation only
+- Always update documentation. Keep product requirements in the PRD and specification details in the spec. 
+- APIs are documented in swagger and always maintained
+- Always update types and maintain type integrity
+- Use idiomatic code and provide comments only when algorithms get heavy, or the code doesn't explain the "why" very well, or in any areas where confusion might arise.
+- Don't delete comments tagged wtih "IMPORTANT", or comments in all uppercase, or comments with `-----` or `*****`
+- In general, don't delete comments - unless you just edited that area and the comment purpose no longer exists
+- Please keep individual comments updated relevant to edited code so they don't get outdated
+- At session start, load into your context a significant understanding of the code and documentation (compensate at your discretion for token usage optimization)
+
+## // DOCUMENTATION
+- In the docs folder you should see a product requirements document (PRD) and a spec. Keep the PRD and spec in mind when building out the application. DO NOT attempt to build a feature unless asked to do so. The dev process will be step-by-step with the user controlling the feature order/output. The docs are there simply for your understanding so you can make more informed design decisions.
+- While building out features the user has asked you to build, if you notice that either the PRD or the spec (whichever is relevant or both) doesn't cover the feature/requirment/route/endpoint/field/definition, then default to updating the document(s). 
+- Maintain links between documents and the table of contents (index.md)
+- If there is a swagger file, maintain it.
+- site.env is a glossary of expected application environment variables. It contains comments, optionality, default values, and examples. It IS NOT to be used for actual values. Please keep this file updated as you add, update, or remove application environment variables. Group environment variables by logical groupings to help organization.
+- Ignore human_notes/notes.md - that is my personal notes for this repo
+
+## // APPLICATION FLOW/MECHANICS
+- This app can be ran locally for development. `npm run ogmios` starts cardano-node, Ogmios, and Valkey. `npm run api` is the app entrypoint when ran locally and begins/resumes scanning either from Ogmios or the locally ran lambda scanner.
+- Other teams may decide to use the code repo or run from our Docker repository. `shell/entrypoint.sh` runs the app and relevant services. 
+- In production, we use ALB fronted AWS Lambdas and a Valkey store. Each of the `/lambdas` are the entry points for their role.
+- It is important that the scanning side of the code remains synchronous (no async calls) as the order of UTxO processing matters.
+- The API side can and should take advantage of async calls.
+
+## // DEPLOYMENT
+- Most of the deplolymnet code is in a separate private repository to keep deployment secrets secret.
