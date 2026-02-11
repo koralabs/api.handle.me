@@ -17,6 +17,9 @@ console.sameLine = function (message) {
     process.stdout.write(message);
 };
 
+// Run locally with (note your .env): 
+// tsx -r dotenv/config ./lambdas/snapshot.ts local
+
 const getRedisItems = async () => {
     const utxos: Map<string, UTxOWithTxInfo | null> = new Map();
     const mints: Map<string, MintingData[] | null> = new Map();
