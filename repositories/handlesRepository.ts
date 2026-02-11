@@ -286,10 +286,8 @@ export class HandlesRepository {
         const mintingData: Map<string, MintingData[]>  = new Map();
         for (const asset of utxo.handles) {
             for (const assetName of asset[1]) {
-                if (assetName === '') {
-                    // Don't process the nameless token.
-                    continue;
-                }
+                // Don't process the nameless token.
+                if (assetName === '') continue;
                 const { isCip67, name, assetLabel } = getHandleNameFromAssetName(assetName);
 
                 const justMinted = isCip67 
@@ -797,8 +795,8 @@ export class HandlesRepository {
 
         const storedHandles = (this.store.pipeline(() => {
             holderHandles.forEach((name) => {
-                    this.store.getHashFromIndex(IndexNames.HANDLE, name)
-                });
+                this.store.getHashFromIndex(IndexNames.HANDLE, name)
+            });
         }) as StoredHandle[]);
         
 
