@@ -679,7 +679,6 @@ describe('Storage tests', () => {
                 bg_image: 'todo',
                 characters: 'letters,special',
                 created_slot_number: updatedTimeStamp2,
-                default_in_wallet: '',
                 last_update_address: '',
                 has_datum: false,
                 hex: Buffer.from('sour-cream').toString('hex'),
@@ -711,7 +710,6 @@ describe('Storage tests', () => {
             });
         });
 
-        // BROKEN
         it('Should update personalization data and save the default handle', async () => {
             const handleName = 'tortilla-soup';
             const handleHex = Buffer.from(handleName).toString('hex');
@@ -729,6 +727,9 @@ describe('Storage tests', () => {
                 resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
                 updated_slot_number: updatedTimeStamp1
             });
+
+            handle.holder = 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70';
+            handle.holder_type = 'wallet';
 
             repo.updateHolder(handle);
             repo.save(handle);
@@ -779,21 +780,16 @@ describe('Storage tests', () => {
             expect(handle?.personalization).toEqual(personalizationUpdates);
 
             // Expect the handles array to have the new handle with defaultHandle and manuallySet true
-            const holderAddress = storeInstance.getIndex(klc.IndexNames.HOLDER, {}).get('stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70');
-            expect(holderAddress).toEqual(
-                expect.objectContaining({
-                    defaultHandle: 'tortilla-soup',
-                    manuallySet: true,
-                    type: 'wallet'
-                })
-            );
-
-            expect([...((holderAddress as klc.Holder)?.handles ?? [])]).toEqual([
-                { name: 'barbacoa', og_number: expect.any(Number), created_slot_number: expect.any(Number) },
-                { name: 'burrito', og_number: expect.any(Number), created_slot_number: expect.any(Number) },
-                { name: 'taco', og_number: expect.any(Number), created_slot_number: expect.any(Number) },
-                { name: 'tortilla-soup', og_number: expect.any(Number), created_slot_number: expect.any(Number) }
+            const holderHandles = storeInstance.getValuesFromIndexedSet(klc.IndexNames.HOLDER, 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70') as klc.HolderHandleNames;
+             expect([...holderHandles]).toEqual([
+                'barbacoa',
+                'burrito',
+                'taco',
+                'tortilla-soup'
             ]);
+
+            const manuallySetDefaultHandle = storeInstance.getValuesFromIndexedSet(klc.IndexNames.DEFAULT_HANDLE, 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70');
+            expect([...manuallySetDefaultHandle ?? []]).toEqual(['tortilla-soup']);
         });
 
         it('Should save default handle and history correctly when saving multiple times', async () => {
@@ -1447,8 +1443,8 @@ describe('Storage tests', () => {
             expect(existingHandle?.resolved_addresses.ada).toEqual(address);
             expect(existingHandle?.holder).toEqual(stakeKey);
 
-            const holderAddress = storeInstance.getIndex(klc.IndexNames.HOLDER, {}).get(stakeKey);
-            expect((holderAddress as klc.Holder)?.handles?.some((h) => h == handleName)).toBeTruthy();
+            const holderHandles = storeInstance.getValuesFromIndexedSet(klc.IndexNames.HOLDER, stakeKey) as klc.HolderHandleNames;
+            expect(holderHandles.has(handleName)).toBeTruthy();
 
             const updatedHandle = repo.Internal.buildHandle({
                 ...existingHandle,

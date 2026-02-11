@@ -209,6 +209,8 @@ class OgmiosService {
                 }
             }
 
+            const utxos: UTxOWithTxInfo[] = []
+
             // Iterate through all the outputs and find asset keys that start with our policyId
             for (let i = 0; i < (txBody?.outputs ?? []).length; i++) {
                 const o = txBody?.outputs[i];
@@ -267,14 +269,27 @@ class OgmiosService {
                         blockNum: txBlock.height
                     }
 
-                    // save UTxO to repo
-                    this.scanningRepo.addUTxOAndMintData(utxo, true);
+                    utxos.push(utxo);
                 }
             }
+
+            // Sort the UTxOs so that Handles with 222 are first. This fixes when we look for mintingData later.
+            utxos.sort(u => u.handles.some(h => h[1].some(a => a.startsWith(AssetNameLabel.LBL_222))) ? -1 : 1);
+
+            for (const utxo of utxos) {
+                this.scanningRepo.addUTxOAndMintData(utxo, true);
+            }
+
             // remove all the utxos that were spent as inputs to this tx
             this.scanningRepo.removeUTxOs(txBody?.inputs.flatMap((x) => `${x.transaction.id}#${x.index}`) ?? []);
         }
     }
+
+    Internal = {
+        processBlock: this.processBlock.bind(this)
+    }
 }
+
+
 
 export default OgmiosService;
