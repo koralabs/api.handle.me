@@ -39,7 +39,6 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context:AWSLambda
 
             builtUTxOs.forEach((utxo) => {
                 // ********** BURNS ************* //
-                // If they are in mint, but aren't in an output, then they were burned
                 const burnHandles: StoredHandle[] = store.pipeline(() => {
                     utxo.burn?.flatMap(b => b[1]).forEach(hex => {
                         handlesRepo.getHandle(getHandleNameFromAssetName(hex).name);

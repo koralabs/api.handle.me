@@ -1,6 +1,6 @@
 set -eu
 
-CARDANO_NODE_VER=${CARDANO_NODE_VER:-10.4.1}
+CARDANO_NODE_VER=${CARDANO_NODE_VER:-10.5.3}
 OGMIOS_VER=${OGMIOS_VER:-6.11.2}
 CONFIG_FILES_BASE_URL=${CONFIG_FILES_BASE_URL:-'https://book.world.dev.cardano.org/environments'}
 SOCKET_PATH=${SOCKET_PATH:-/ipc/node.socket}
