@@ -81,7 +81,7 @@ export class HandlesRepository {
             if (manuallySetDefaultHandle?.size) {
                 handle.default_in_wallet = `${[...manuallySetDefaultHandle][0]}`;
             } else {
-                handle.default_in_wallet = `${this.getDefaultHandle(handleNames).name}`; 
+                handle.default_in_wallet = `${this.getDefaultHandle(handleNames)?.name ?? handle.name}`; 
             }
         }
 
@@ -99,12 +99,12 @@ export class HandlesRepository {
 
         const holder: Holder = {
             handles: [...handles],
-            default_handle: defaultHandle || `${this.getDefaultHandle(handles ?? new Set()).name}`,
+            default_handle: defaultHandle || `${this.getDefaultHandle(handles ?? new Set())?.name ?? ''}`,
             manually_set: defaultHandle ? true : false,
             type: addressDetails.type,
             known_owner_name: addressDetails.knownOwnerName?.name ?? '',
             total_handles: handles.size,
-            address
+            address: addressDetails.address
         }
         return holder;
     }
@@ -375,9 +375,8 @@ export class HandlesRepository {
         this.store.pipeline(() => {
             this.addUTxO(utxo);
             this.addMintData(mintingData);
-            if (updateIndexes) {
-                this.updateHolderIndex(utxo, mintingData, holders);           
-                this.updateHandleIndexes(utxo, mintingData, handles);
+            if (updateIndexes) {         
+                this.updateHandleIndexes(utxo, mintingData, handles, holders);
             }
         });
     }
@@ -560,33 +559,35 @@ export class HandlesRepository {
         }
     }
 
-    public updateHolderIndex(utxo: UTxOWithTxInfo, mintingDataMap?: Map<string, MintingData[]>, holders?: Map<string, HolderHandleNames>) {
-        /* 
-        We need to rethink Holders so updates are atomic and idempotent
-        {root}:holder:stake1111 is an indexed set with just handles
-        {root}:defaulthandle:stake1111 stores default handle (delete if unset)
-        type, knownOwner are set on the fly
-        */
-        for (const asset of utxo.handles) {
-            const policy = asset[0];
-            for (const assetName of asset[1]) {
-                if (assetName === '') {
-                    // Don't process the nameless token.
-                    continue;
-                }
-                const { ownerTokenHex, name } = getHandleNameFromAssetName(assetName);
-                const { address, slot } = utxo
-                const mintingData = mintingDataMap ? mintingDataMap.get(name)! : Array.from(this.store.getValuesFromIndexedSet(IndexNames.MINT, name)!).map<MintingData>(md => JSON.parse(md));
-                const handle = this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData[0].created_slot});
+    // public updateHolderIndex(utxo: UTxOWithTxInfo, mintingDataMap?: Map<string, MintingData[]>, holders?: Map<string, HolderHandleNames>) {
+    //     /* 
+    //     We need to rethink Holders so updates are atomic and idempotent
+    //     {root}:holder:stake1111 is an indexed set with just handles
+    //     {root}:defaulthandle:stake1111 stores default handle (delete if unset)
+    //     type, knownOwner are set on the fly
+    //     */
+    //     for (const asset of utxo.handles) {
+    //         const policy = asset[0];
+    //         for (const assetName of asset[1]) {
+    //             if (assetName === '') {
+    //                 // Don't process the nameless token.
+    //                 continue;
+    //             }
+    //             const { ownerTokenHex, name } = getHandleNameFromAssetName(assetName);
+    //             const { address, slot } = utxo
+    //             const mintingData = mintingDataMap ? mintingDataMap.get(name)! : Array.from(this.store.getValuesFromIndexedSet(IndexNames.MINT, name)!).map<MintingData>(md => JSON.parse(md));
+    //             const handle = this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData[0].created_slot});
 
-                if (!handle) return;
+    //             const holder = buildHolderInfo(handle.resolved_addresses.ada).address;
 
-                // TODO: set default if set in the 100 token
+    //             if (!handle) return;
 
-                this.updateHolder(handle, holders);
-            }
-        }
-    }
+    //             // TODO: set default if set in the 100 token
+
+    //             this.updateHolder(handle, holders);
+    //         }
+    //     }
+    // }
 
     public updateHolder(handle: StoredHandle, holders?: Map<string, HolderHandleNames>) {
         let holderHandles: Set<string> = new Set<string>();
@@ -705,7 +706,7 @@ export class HandlesRepository {
         }
     }
 
-    public updateHandleIndexes(utxo: UTxOWithTxInfo, mintingData?: Map<string, MintingData[]>, handles?: Map<string, StoredHandle>): void {
+    public updateHandleIndexes(utxo: UTxOWithTxInfo, mintingData?: Map<string, MintingData[]>, handles?: Map<string, StoredHandle>, holders?: Map<string, HolderHandleNames>): void {
         for (const asset of utxo.handles) {
             const policy = asset[0];
             for (const assetName of asset[1]) {
@@ -740,6 +741,8 @@ export class HandlesRepository {
                 
                 handle.holder = holder.address
                 handle.holder_type = holder.type
+
+                this.updateHolder(handle, holders);
                 
                 if (existingHandle && existingHandle.holder !== handle.holder) {
                     this._removeHandleFromHolder(existingHandle.holder, name)
@@ -818,7 +821,7 @@ export class HandlesRepository {
         this.store.addValueToOrderedSet(IndexNames.SLOT, updated_slot_number, name);
     }
 
-    public getDefaultHandle(holderHandles: Set<string>): StoredHandle {
+    public getDefaultHandle(holderHandles: Set<string>): StoredHandle | undefined {
         // If we know that the address is from a known owner, e.g. jpg.store, then just return the first handle
         // This is to avoid thousands of handles being iterated through for known owners with massive amounts of handles
         const handles = [...holderHandles];
@@ -1082,7 +1085,7 @@ export class HandlesRepository {
         return groupedHandles[firstKey] ?? [];
     };
 
-    private _sortAlphabetically = (handles: StoredHandle[]): StoredHandle => {
+    private _sortAlphabetically = (handles: StoredHandle[]): StoredHandle | undefined => {
         const sortedHandles = [...handles];
         sortedHandles.sort((a, b) => a.name.localeCompare(b.name));
         return sortedHandles[0];

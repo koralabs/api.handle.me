@@ -112,8 +112,7 @@ export class RedisHandlesStore implements IApiStore {
         const mintingData: Map<string, MintingData[]> = this.getIndex(IndexNames.MINT) as Map<string, MintingData[]>
         this.pipeline(() => {
             for (const utxo of utxos) {
-                utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo, mintingData, handles);
-                utxoFunctions[UTxOFunctionName.UPDATE_HOLDER_INDEX](utxo, mintingData, holders);
+                utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo, mintingData, handles, holders);
                 added++;
             }
         })
@@ -175,8 +174,7 @@ export class RedisHandlesStore implements IApiStore {
                     this.pipeline(() => {
                         utxoChunk.forEach((utxo) => {
                             utxoFunctions[UTxOFunctionName.ADD_UTXO](utxo);
-                            utxoFunctions[UTxOFunctionName.UPDATE_HOLDER_INDEX](utxo, mintData, holders);
-                            utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo, mintData, handles);
+                            utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo, mintData, handles, holders);
                         });
                     });
                 }

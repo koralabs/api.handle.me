@@ -28,7 +28,7 @@ describe('holder index integrity', () => {
                     type: 'wallet'
                 } as unknown as any);
             } else {
-                holder.defaultHandle = handle.default_in_wallet;
+                holder.default_handle = handle.default_in_wallet;
                 holder.handles.push({ name: handle.name, og_number: handle.og_number, created_slot_number: handle.created_slot_number });
             }
         }
@@ -36,7 +36,7 @@ describe('holder index integrity', () => {
         const allHolders = new Map<string, Holder>();
         holdersList.forEach((h) => {
             const holder = storeInstance.getValueFromIndex(IndexNames.HOLDER, h) as Set<string>;
-            holder.defaultHandle = `${holder.defaultHandle}`;
+            holder.default_handle = `${holder.defaultHandle}`;
             allHolders.set(h, holder);
         });
         expect(allHolders).toEqual(testHolderIndex);
