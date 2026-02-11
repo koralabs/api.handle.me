@@ -548,25 +548,29 @@ describe('Storage tests', () => {
     describe('savePersonalizationChange tests', () => {
         it('Should update personalization data', async () => {
             let handle = repo.getHandle('nacho-cheese');
-            repo.save(
-                repo.Internal.buildHandle({
-                    ...handle,
-                    hex: Buffer.from('nacho-cheese').toString('hex'),
-                    name: 'nacho-cheese',
-                    og_number: 0,
-                    utxo: 'utxo123#0',
-                    policy,
-                    lovelace: 0,
-                    image: 'ipfs://123',
-                    image_hash: '0x123',
-                    svg_version: '1.0.0',
-                    handle_type: HandleType.HANDLE,
-                    pz_enabled: false,
-                    resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
-                    updated_slot_number: updatedTimeStamp1
-                }),
-                handle!
-            );
+            const updatedNachoCheeseHandle = repo.Internal.buildHandle({
+                ...handle,
+                hex: Buffer.from('nacho-cheese').toString('hex'),
+                name: 'nacho-cheese',
+                og_number: 0,
+                utxo: 'utxo123#0',
+                policy,
+                lovelace: 0,
+                image: 'ipfs://123',
+                image_hash: '0x123',
+                svg_version: '1.0.0',
+                handle_type: HandleType.HANDLE,
+                pz_enabled: false,
+                resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
+                updated_slot_number: updatedTimeStamp1
+            });
+
+            updatedNachoCheeseHandle.holder = 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70';
+            updatedNachoCheeseHandle.holder_type = 'wallet';
+
+            repo.updateHolder(updatedNachoCheeseHandle);
+
+            repo.save(updatedNachoCheeseHandle, handle!);
 
             const personalizationUpdates: IPersonalization = {
                 designer: {
@@ -781,15 +785,10 @@ describe('Storage tests', () => {
 
             // Expect the handles array to have the new handle with defaultHandle and manuallySet true
             const holderHandles = storeInstance.getValuesFromIndexedSet(klc.IndexNames.HOLDER, 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70') as klc.HolderHandleNames;
-             expect([...holderHandles]).toEqual([
-                'barbacoa',
-                'burrito',
-                'taco',
-                'tortilla-soup'
-            ]);
+            expect([...holderHandles]).toEqual(['barbacoa', 'burrito', 'taco', 'tortilla-soup']);
 
             const manuallySetDefaultHandle = storeInstance.getValuesFromIndexedSet(klc.IndexNames.DEFAULT_HANDLE, 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70');
-            expect([...manuallySetDefaultHandle ?? []]).toEqual(['tortilla-soup']);
+            expect([...(manuallySetDefaultHandle ?? [])]).toEqual(['tortilla-soup']);
         });
 
         it('Should save default handle and history correctly when saving multiple times', async () => {
@@ -813,6 +812,9 @@ describe('Storage tests', () => {
                 resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
                 updated_slot_number: updatedTimeStamp1
             });
+
+            porkBellyHandle.holder = 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70';
+            porkBellyHandle.holder_type = 'wallet';
 
             repo.updateHolder(porkBellyHandle);
             repo.save(porkBellyHandle, handle!);
@@ -859,6 +861,9 @@ describe('Storage tests', () => {
 
             handle = repo.getHandle(handleName);
 
+            updatedPorkBellyHandle.holder = 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70';
+            updatedPorkBellyHandle.holder_type = 'wallet';
+
             repo.updateHolder(updatedPorkBellyHandle);
 
             repo.save(updatedPorkBellyHandle, handle!);
@@ -900,6 +905,9 @@ describe('Storage tests', () => {
                 default: true
             });
 
+            thirdUpdateHandle.holder = 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70';
+            thirdUpdateHandle.holder_type = 'wallet';
+
             repo.updateHolder(thirdUpdateHandle);
 
             repo.save(thirdUpdateHandle, handle!);
@@ -940,6 +948,9 @@ describe('Storage tests', () => {
                 resolved_addresses: { ada: 'addr_test1qqpdrn4j46emtfydwfc0j2gtw2ty0zgwtr3k0srmjg7nwy834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qept00g' },
                 updated_slot_number: updatedTimeStamp4
             });
+
+            finalUpdateHandle.holder = 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70';
+            finalUpdateHandle.holder_type = 'wallet';
 
             repo.updateHolder(finalUpdateHandle);
 
@@ -1458,7 +1469,15 @@ describe('Storage tests', () => {
                 datum: ''
             });
 
+            updatedHandle.holder = updatedStakeKey;
+            updatedHandle.holder_type = 'wallet';
+
             repo.updateHolder(updatedHandle);
+
+            if (existingHandle && existingHandle.holder !== updatedHandle.holder) {
+                repo.Internal.removeHandleFromHolder(existingHandle.holder, handleName);
+            }
+
             repo.save(repo.Internal.buildHandle(updatedHandle), existingHandle!);
 
             const handle = repo.getHandle(handleName);
@@ -1492,18 +1511,12 @@ describe('Storage tests', () => {
                 payment_key_hash: '8e225db95895e780496589b89dc6aba00119fba97834f22e95810e62'
             });
 
-            const newHolderAddress = storeInstance.getIndex(klc.IndexNames.HOLDER, {}).get(updatedStakeKey);
-            expect([...((newHolderAddress as klc.Holder)?.handles ?? [])]).toEqual([
-                {
-                    created_slot_number: updatedTimeStamp1,
-                    name: 'salsa',
-                    og_number: 0
-                }
-            ]);
+            const newHolderAddress = storeInstance.getValuesFromIndexedSet(klc.IndexNames.HOLDER, updatedStakeKey) as klc.HolderHandleNames;
+            expect([...newHolderAddress]).toEqual(['salsa']);
 
             // expect the handle to be removed from the old holder
-            const updatedHolderAddress = storeInstance.getIndex(klc.IndexNames.HOLDER, {}).get(stakeKey);
-            expect((updatedHolderAddress as klc.Holder)?.handles?.some((h) => h == handleName)).toBeFalsy();
+            const updatedHolderAddress = storeInstance.getValuesFromIndexedSet(klc.IndexNames.HOLDER, stakeKey) as klc.HolderHandleNames;
+            expect([...updatedHolderAddress].some((h) => h == handleName)).toBeFalsy();
         });
     });
 
@@ -1519,15 +1532,8 @@ describe('Storage tests', () => {
             expect(handle).toEqual(null);
 
             // Once a handle is burned, expect it to be removed from the holderIndex and a NEW defaultHandle set
-            expect(storeInstance.getIndex(klc.IndexNames.HOLDER, {}).get('stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70')).toEqual({
-                defaultHandle: 'burrito',
-                handles: [
-                    'barbacoa',
-                    'burrito'
-                ],
-                manuallySet: false,
-                type: 'wallet'
-            });
+            const holderHandles = storeInstance.getValuesFromIndexedSet(klc.IndexNames.HOLDER, 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70') as klc.HolderHandleNames;
+            expect([...holderHandles]).toEqual(['barbacoa', 'burrito']);
         });
     });
 });

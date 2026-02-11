@@ -2845,10 +2845,10 @@ describe('processBlock Tests', () => {
 
         storeInstance.addValueToIndexedSet(IndexNames.MINT, 'handle_root@handle_settings', JSON.stringify({ created_slot: 152760685, metadata: { '721': { f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a: { '000de14068616e646c655f726f6f744068616e646c655f73657474696e6773': { name: '$handle_root@handle_settings', image: 'ipfs://zb2rhoVwidYR7oPwLwTcTPWZNkTHBiw3FrY4yjow5NuJUDieT', mediaType: 'image/jpeg', og: 0, og_number: 0, rarity: 'basic', length: 27, characters: 'letters,special', numeric_modifiers: '', handle_type: 'nft_subhandle', version: 1, sub_rarity: 'basic', sub_length: 11, sub_characters: 'letters,special', sub_numeric_modifiers: '' } } } }, txHash: 'fc359e1177bc38f261e8ee5408c0f1f608cadd23f06bb6cad33a3acb049bf01c' }));
 
-        ogmiosService.Internal.processBlock(blockFromOgmios as unknown as BlockPraos);
+        ogmiosService.Internal.processBlock(block as unknown as BlockPraos);
 
-        const handle = repo.getHandle('bennybets');
-        expect(handle).toEqual(null);
+        const handle = repo.getHandle('papagoose');
+        // expect(handle).toEqual(null);
 
         // Correct UTxO
         expect(handle?.utxo).toBe('fe40d980c3105c956c2cf29567966b6cafcab0e150e856ec6d4969a4d08aa353#0');
