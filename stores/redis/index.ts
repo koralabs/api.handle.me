@@ -273,7 +273,6 @@ export class RedisHandlesStore implements IApiStore {
     }
 
     public getKeysFromIndex(index: IndexNames, options?: SortAndLimitOptions): (string | number)[] {
-        if (index == IndexNames.HOLDER) return this.getValuesFromOrderedSet(index, 0, options) as string[];
         const command = options ? 'sort' : 'smembers';
         if (options && options?.isAlpha == undefined) options = { ...options, isAlpha: true };
         return [...this.redisClientCall(command, `{root}:${index}`, options)].map((v) => (isNumeric(v.toString()) && index != IndexNames.HANDLE ? Number(v.toString()) : v.toString()));
@@ -379,7 +378,7 @@ export class RedisHandlesStore implements IApiStore {
     }
 
     public holderCount(): number {
-        return this.redisClientCall('zcount', `{root}:${IndexNames.HOLDER}`, { value: -Infinity }, { value: Infinity });
+        return this.redisClientCall('scard', `{root}:${IndexNames.HOLDER}`, { value: -Infinity }, { value: Infinity });
     }
 
     public getUTxOSchemaVersion(): number {

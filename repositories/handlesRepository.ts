@@ -266,7 +266,7 @@ export class HandlesRepository {
                 const handle = structuredClone(h) as StoredHandle;
                 handle.name = `${handle.name}`
                 handle.hex = `${handle.hex}`
-                handle.default_in_wallet = defaultHandles[i]?.size ? `${[...defaultHandles[i]][0]}` : `${this.getDefaultHandle(holderHandles[i]).name}`;
+                handle.default_in_wallet = defaultHandles[i]?.size ? `${[...defaultHandles[i]][0]}` : `${this.getDefaultHandle(holderHandles[i])?.name ?? handle.name}`;
                 return handle;
             }
         }).filter(h => !!h)
