@@ -381,7 +381,7 @@ describe('helper tests', () => {
                     index: 1,
                     lovelace: 3672120,
                     metadata: {},
-                    mint: [],
+                    mint: [['f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a', []]],
                     slot: 100806855,
                     tx_id: 'fe40d980c3105c956c2cf29567966b6cafcab0e150e856ec6d4969a4d08aa353'
                 }

@@ -95,6 +95,13 @@ describe('Store Tests - RedisHandlesStore', () => {
                 {
                     address: 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70',
                     default_handle: 'taco',
+                    handles: [
+                        'barbacoa',
+                        'burrito',
+                        'taco',
+                        'v@taco'
+                    ],
+                    known_owner_name: '',
                     manually_set: false,
                     total_handles: 4,
                     type: 'wallet'
@@ -280,13 +287,16 @@ describe('Store Tests - RedisHandlesStore', () => {
         it('should get holderAddress details', async () => {
             const result = repo.getHolder('stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70');
             expect(result).toEqual({
-                defaultHandle: 'taco',
-                manuallySet: false,
+                address: 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70',
+                known_owner_name: '',
+                total_handles: 4,
+                default_handle: 'taco',
+                manually_set: false,
                 handles: [
-                    { name: 'barbacoa', og_number: 0, created_slot_number: expect.any(Number) },
-                    { name: 'burrito', og_number: 0, created_slot_number: expect.any(Number) },
-                    { name: 'taco', og_number: 0, created_slot_number: expect.any(Number) },
-                    { name: 'v@taco', og_number: 0, created_slot_number: expect.any(Number) }
+                    'barbacoa',
+                    'burrito',
+                    'taco',
+                    'v@taco'
                 ],
                 type: 'wallet'
             });

@@ -21,7 +21,7 @@ export class RedisHandlesStore implements IApiStore {
     private static _pipeline: [string, any[]][] | undefined = undefined;
 
     // #region SETUP **************************
-    public async initialize(): Promise<IApiStore> {
+    public initialize(): IApiStore {
         if (!RedisHandlesStore._worker) {
             const worker = new Worker('./workers/redisSync.worker.js');
             worker.on('error', (e) => Logger.log({ message: `Error: ${e}`, category: LogCategory.ERROR, event: 'ValkeySyncWorker.Error' }));

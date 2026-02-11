@@ -148,6 +148,9 @@ describe('Storage tests', () => {
                 updated_slot_number: updatedTimeStamp1
             });
 
+            handle.holder = 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70';
+            handle.holder_type = 'wallet';
+
             repo.updateHolder(handle);
             repo.save(handle);
 
@@ -396,7 +399,10 @@ describe('Storage tests', () => {
                 })
             );
 
-            let handle = repo.getHandle('chimichanga');
+            let handle = repo.getHandle('chimichanga')!;
+
+            handle.holder = 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70';
+            handle.holder_type = 'wallet';
 
             repo.save(
                 repo.Internal.buildHandle({
@@ -415,7 +421,7 @@ describe('Storage tests', () => {
                 })
             );
 
-            handle = repo.getHandle('chimichanga');
+            handle = repo.getHandle('chimichanga')!;
             // expect the personalization data to be added to the handle
             expect(handle).toEqual({
                 amount: 1,
@@ -661,6 +667,9 @@ describe('Storage tests', () => {
                 last_update_address: '',
                 resolved_addresses: { ada: '0xaaaa', btc: '2213kjsjkn', eth: 'sad2wsad' }
             });
+
+            sourCreamHandle.holder = '0xaaaa';
+            sourCreamHandle.holder_type = 'other';
 
             repo.updateHolder(sourCreamHandle);
 
@@ -1427,6 +1436,9 @@ describe('Storage tests', () => {
                 updated_slot_number: updatedTimeStamp1
             });
 
+            storedHandle.holder = stakeKey;
+            storedHandle.holder_type = 'wallet';
+
             repo.updateHolder(storedHandle);
 
             repo.save(repo.Internal.buildHandle(storedHandle));
@@ -1436,7 +1448,7 @@ describe('Storage tests', () => {
             expect(existingHandle?.holder).toEqual(stakeKey);
 
             const holderAddress = storeInstance.getIndex(klc.IndexNames.HOLDER, {}).get(stakeKey);
-            expect((holderAddress as klc.Holder)?.handles?.some((h) => h.name == handleName)).toBeTruthy();
+            expect((holderAddress as klc.Holder)?.handles?.some((h) => h == handleName)).toBeTruthy();
 
             const updatedHandle = repo.Internal.buildHandle({
                 ...existingHandle,
@@ -1495,7 +1507,7 @@ describe('Storage tests', () => {
 
             // expect the handle to be removed from the old holder
             const updatedHolderAddress = storeInstance.getIndex(klc.IndexNames.HOLDER, {}).get(stakeKey);
-            expect((updatedHolderAddress as klc.Holder)?.handles?.some((h) => h.name == handleName)).toBeFalsy();
+            expect((updatedHolderAddress as klc.Holder)?.handles?.some((h) => h == handleName)).toBeFalsy();
         });
     });
 
@@ -1514,8 +1526,8 @@ describe('Storage tests', () => {
             expect(storeInstance.getIndex(klc.IndexNames.HOLDER, {}).get('stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70')).toEqual({
                 defaultHandle: 'burrito',
                 handles: [
-                    { name: 'barbacoa', og_number: 0, created_slot_number: expect.any(Number) },
-                    { name: 'burrito', og_number: 0, created_slot_number: expect.any(Number) }
+                    'barbacoa',
+                    'burrito'
                 ],
                 manuallySet: false,
                 type: 'wallet'
