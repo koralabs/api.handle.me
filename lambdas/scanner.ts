@@ -19,8 +19,9 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context:AWSLambda
     }
     
     if (Number(store.getIndexSchemaVersion()) > (handlesRepo.getMetrics().indexSchemaVersion ?? 0)) {
-        // Pause the scanner 
+        // Pause the lambdas 
         // Trigger reindex lambda
+        // unpause the lambdas
         // exit
     }
 
