@@ -554,36 +554,6 @@ export class HandlesRepository {
         }
     }
 
-    // public updateHolderIndex(utxo: UTxOWithTxInfo, mintingDataMap?: Map<string, MintingData[]>, holders?: Map<string, HolderHandleNames>) {
-    //     /* 
-    //     We need to rethink Holders so updates are atomic and idempotent
-    //     {root}:holder:stake1111 is an indexed set with just handles
-    //     {root}:defaulthandle:stake1111 stores default handle (delete if unset)
-    //     type, knownOwner are set on the fly
-    //     */
-    //     for (const asset of utxo.handles) {
-    //         const policy = asset[0];
-    //         for (const assetName of asset[1]) {
-    //             if (assetName === '') {
-    //                 // Don't process the nameless token.
-    //                 continue;
-    //             }
-    //             const { ownerTokenHex, name } = getHandleNameFromAssetName(assetName);
-    //             const { address, slot } = utxo
-    //             const mintingData = mintingDataMap ? mintingDataMap.get(name)! : Array.from(this.store.getValuesFromIndexedSet(IndexNames.MINT, name)!).map<MintingData>(md => JSON.parse(md));
-    //             const handle = this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: mintingData[0].created_slot});
-
-    //             const holder = buildHolderInfo(handle.resolved_addresses.ada).address;
-
-    //             if (!handle) return;
-
-    //             // TODO: set default if set in the 100 token
-
-    //             this.updateHolder(handle, holders);
-    //         }
-    //     }
-    // }
-
     public updateHolder(handle: StoredHandle, holders?: Map<string, HolderHandleNames>) {
         let holderHandles: Set<string> = new Set<string>();
 

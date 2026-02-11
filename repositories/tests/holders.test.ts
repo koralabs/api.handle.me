@@ -1,4 +1,4 @@
-import { HandlePaginationModel, Holder, IndexNames, StoredHandle } from '@koralabs/kora-labs-common';
+import { HandlePaginationModel, HolderHandleNames, IndexNames, StoredHandle } from '@koralabs/kora-labs-common';
 import { RedisHandlesStore } from '../../stores/redis';
 import { HandlesRepository } from '../handlesRepository';
 import { createRandomHandles, performRandomHandleUpdates } from './fixtures/handles';
@@ -13,31 +13,24 @@ describe('holder index integrity', () => {
     it('holder index should be accurate', async () => {
         await createRandomHandles(storeInstance, 1000, true);
         await performRandomHandleUpdates(storeInstance, 1000, 1001);
-        const testHolderIndex = new Map<string, Holder>();
+        const testHolderIndex = new Map<string, HolderHandleNames>();
         console.time("repo-search")
         const handles = (repo.search({ handlesPerPage: 1000 } as HandlePaginationModel).handles as StoredHandle[]).sort((a, b) => a.updated_slot_number - b.updated_slot_number);
         console.timeEnd("repo-search")
         for (let i = 0; i < handles.length; i++) {
             const handle = handles[i];
-            const holder = testHolderIndex.get(handle.holder);
-            if (!holder) {
-                testHolderIndex.set(handle.holder, {
-                    defaultHandle: handle.default_in_wallet,
-                    handles: [{ name: handle.name, og_number: handle.og_number, created_slot_number: handle.created_slot_number }],
-                    manuallySet: false,
-                    type: 'wallet'
-                } as unknown as any);
+            const handleNames = testHolderIndex.get(handle.holder);
+            if (!handleNames) {
+                testHolderIndex.set(handle.holder, new Set([handle.name]));
             } else {
-                holder.default_handle = handle.default_in_wallet;
-                holder.handles.push({ name: handle.name, og_number: handle.og_number, created_slot_number: handle.created_slot_number });
+                handleNames.add(handle.name);
             }
         }
         const holdersList = storeInstance.getKeysFromIndex(IndexNames.HOLDER) as string[];
-        const allHolders = new Map<string, Holder>();
+        const allHolders = new Map<string, HolderHandleNames>();
         holdersList.forEach((h) => {
-            const holder = storeInstance.getValueFromIndex(IndexNames.HOLDER, h) as Set<string>;
-            holder.default_handle = `${holder.defaultHandle}`;
-            allHolders.set(h, holder);
+            const handleNames = storeInstance.getValuesFromIndexedSet(IndexNames.HOLDER, h) as Set<string>;
+            allHolders.set(h, nope);
         });
         expect(allHolders).toEqual(testHolderIndex);
     });

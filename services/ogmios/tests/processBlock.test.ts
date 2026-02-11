@@ -1004,6 +1004,10 @@ describe('processBlock Tests', () => {
         jest.spyOn(HandlesRepository.prototype, 'getMetrics').mockReturnValue({});
 
         const handle = repo.Internal.buildHandle({ name: handleName, hex: handleHexName, policy: policyId, resolved_addresses: { ada: defaultAddress } });
+
+        handle.holder = 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70';
+        handle.holder_type = 'wallet';
+
         repo.updateHolder(handle);
         repo.save(handle);
 

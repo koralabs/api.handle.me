@@ -99,8 +99,8 @@ export const ogHandles: IHandle[] = [
 
 export const handlesWithDifferentLengths: IHandle[] = [
     {
-        hex: '100-hex',
-        name: '100',
+        hex: '100-length-hex',
+        name: '100-length',
         holder: 'stake-key1',
         image: '',
         standard_image: '',
@@ -129,14 +129,14 @@ export const handlesWithDifferentLengths: IHandle[] = [
         policy
     },
     {
-        hex: '10-hex',
-        name: '10',
+        hex: '10-length-hex',
+        name: '10-length',
         holder: 'stake-key1',
         image: '',
         standard_image: '',
         length: 2,
         og_number: 0,
-        utxo: '10-hex#0',
+        utxo: '10-length-hex#0',
         lovelace: 0,
         rarity: Rarity.ultra_rare,
         characters: 'numbers',
@@ -159,14 +159,14 @@ export const handlesWithDifferentLengths: IHandle[] = [
         policy
     },
     {
-        hex: '1000-hex',
-        name: '1000',
+        hex: '1000-length-hex',
+        name: '1000-length',
         holder: 'stake-key1',
         image: '',
         standard_image: '',
         length: 4,
         og_number: 0,
-        utxo: '1000-hex#0',
+        utxo: '1000-length-hex#0',
         lovelace: 0,
         rarity: Rarity.rare,
         characters: 'numbers',
@@ -192,14 +192,14 @@ export const handlesWithDifferentLengths: IHandle[] = [
 
 export const handlesWithDifferentSlotNumbers: IHandle[] = [
     {
-        hex: '10-hex',
-        name: '10',
+        hex: '10-diff-slot-hex',
+        name: '10-diff-slot',
         holder: 'stake-key1',
         image: '',
         standard_image: '',
         length: 2,
         og_number: 0,
-        utxo: '10-hex#0',
+        utxo: '10-diff-slot-hex#0',
         lovelace: 0,
         rarity: Rarity.rare,
         characters: 'numbers',
@@ -222,14 +222,14 @@ export const handlesWithDifferentSlotNumbers: IHandle[] = [
         policy
     },
     {
-        hex: '11-hex',
-        name: '11',
+        hex: '11-diff-slot-hex',
+        name: '11-diff-slot',
         holder: 'stake-key1',
         image: '',
         standard_image: '',
         length: 2,
         og_number: 0,
-        utxo: '11-hex#0',
+        utxo: '11-diff-slot-hex#0',
         lovelace: 0,
         rarity: Rarity.ultra_rare,
         characters: 'numbers',
@@ -252,14 +252,14 @@ export const handlesWithDifferentSlotNumbers: IHandle[] = [
         policy
     },
     {
-        hex: '12-hex',
-        name: '12',
+        hex: '12-diff-slot-hex',
+        name: '12-diff-slot',
         holder: 'stake-key1',
         image: '',
         standard_image: '',
         length: 2,
         og_number: 0,
-        utxo: '12-hex#0',
+        utxo: '12-diff-slot-hex#0',
         lovelace: 0,
         rarity: Rarity.rare,
         characters: 'numbers',
@@ -513,21 +513,25 @@ export const holdersFixture = new Map<string, Holder>([
     [
         'addr1',
         {
-            handles: [{name:'', og_number: 0, created_slot_number: 0}],
-            defaultHandle: 'burritos',
-            manuallySet: false,
+            handles: ['burritos'],
+            default_handle: 'burritos',
+            manually_set: false,
             type: 'script',
-            knownOwnerName: 'funnable.token'
+            known_owner_name: 'funnable.token',
+            total_handles: 1,
+            address: 'addr_test1qqq9v5l5j6s4k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q'
         }
     ],
     [
         'addr2',
         {
-            handles: [{name: '7461636F73', og_number: 0, created_slot_number: 0}, {name: '66616A69746173', og_number: 0, created_slot_number: 0}],
-            defaultHandle: 'tacos',
-            manuallySet: false,
+            handles: ['tacos', 'fajitas'],
+            default_handle: 'tacos',
+            manually_set: false,
             type: 'wallet',
-            knownOwnerName: ''
+            known_owner_name: '',
+            total_handles: 2,
+            address: 'addr_test1qqq9v5l5j6s4k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q'
         }
     ]
 ]);
