@@ -2,7 +2,10 @@
 openapi: 3.0.3
 info:
   title: Handles Public API
-  description: ADA Handle Public API
+  description: |-
+    ADA Handle Public API.
+
+    Requests do not require authentication by default. If rate limiting is enabled, whitelisted clients may provide an `api-key` header to bypass the limiter.
   termsOfService: https://handle.me/#tou
   contact:
     email: hello@koralabs.io
@@ -20,6 +23,14 @@ tags:
 - name: utils
   description: Handle utility endpoints
 paths:
+  "/":
+    get:
+      tags:
+      - utils
+      summary: API liveness endpoint
+      responses:
+        '200':
+          description: API is reachable
   "/handles":
     get:
       tags:
@@ -170,8 +181,6 @@ paths:
                   $ref: "#/components/schemas/Handle"
         '400':
           description: Invalid filter
-      security:
-      - api-key: []
   "/handles/list":
     post:
       tags:
@@ -246,8 +255,6 @@ paths:
                   $ref: "#/components/schemas/Handle"
         '400':
           description: Invalid filter
-      security:
-      - api-key: []
   "/handles/{handle}":
     get:
       tags:
@@ -282,8 +289,6 @@ paths:
           description: Invalid Handle format
         '404':
           description: Handle not found
-      security:
-      - api-key: []
   "/handles/{handle}/utxo":
     get:
       tags:
@@ -318,8 +323,6 @@ paths:
           description: Invalid Handle format
         '404':
           description: Handle not found
-      security:
-      - api-key: []
   "/handles/{handle}/personalized":
     get:
       tags:
@@ -354,8 +357,6 @@ paths:
           description: Invalid Handle format
         '404':
           description: Handle not found
-      security:
-      - api-key: []
   "/handles/{handle}/personalized/utxo":
     get:
       tags:
@@ -390,8 +391,6 @@ paths:
           description: Invalid Handle format
         '404':
           description: Handle not found
-      security:
-      - api-key: []
   "/handles/{handle}/subhandle-settings":
     get:
       tags:
@@ -426,8 +425,6 @@ paths:
           description: Invalid Handle format
         '404':
           description: Handle not found
-      security:
-      - api-key: []
   "/handles/{handle}/subhandle-settings/utxo":
     get:
       tags:
@@ -462,10 +459,11 @@ paths:
           description: Invalid Handle format
         '404':
           description: Handle not found
-      security:
-      - api-key: []
-  "/handles/{handle}/public_datum":
+  # *** OBSOLETE `/handles` endpoint *** #
+  "/handles/{handle}/subhandle_settings":
     get:
+      deprecated: true
+      description: Use `/handles/{handle}/subhandle-settings` instead.
       tags:
       - handles
       parameters:
@@ -488,20 +486,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SubHandleSettings"
+            text/plain; charset=utf-8:
+              schema:
+                type: string
         '202':
           description: Successful, but scanning is still catching up to the tip of the blockchain
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/SubHandleSettings"
+            text/plain; charset=utf-8:
+              schema:
+                type: string
         '400':
           description: Invalid Handle format
         '404':
-          description: Handle not found
-      security:
-      - api-key: []
-  "/handles/{handle}/public_datum/utxo":
+          description: Handle or subhandle settings not found
+  # *** OBSOLETE `/handles` endpoint *** #
+  "/handles/{handle}/subhandle_settings/utxo":
     get:
+      deprecated: true
+      description: Use `/handles/{handle}/subhandle-settings/utxo` instead.
       tags:
       - handles
       parameters:
@@ -533,9 +538,7 @@ paths:
         '400':
           description: Invalid Handle format
         '404':
-          description: Handle not found
-      security:
-      - api-key: []
+          description: Handle or subhandle settings not found
   "/handles/{handle}/subhandles":
     get:
       tags:
@@ -553,6 +556,15 @@ paths:
         required: false
         schema:
           type: boolean
+      - name: type
+        in: query
+        description: Filter subhandles by type
+        required: false
+        schema:
+          type: string
+          enum:
+          - virtual
+          - nft
       responses:
         '200':
           description: Successful operation
@@ -574,8 +586,6 @@ paths:
           description: Invalid Handle format
         '404':
           description: Handle not found
-      security:
-      - api-key: []
   # *** OBSOLETE `/handles` endpoint *** #
   "/handles/{handle}/reference_token":
     get:
@@ -613,8 +623,6 @@ paths:
           description: Invalid Handle format
         '404':
           description: Handle not found
-      security:
-      - api-key: []
   "/handles/{handle}/datum":
     get:
       deprecated: true
@@ -682,8 +690,6 @@ paths:
           description: If Cbor to JSON conversion fails or the Handle is an invalid format
         '404':
           description: Datum not found
-      security:
-      - api-key: []
   "/handles/{handle}/script":
     get:
       deprecated: true
@@ -724,8 +730,6 @@ paths:
           description: If Handle is an invalid format
         '404':
           description: Script not found
-      security:
-      - api-key: []
   
   "/root-handles":
     get:
@@ -821,15 +825,13 @@ paths:
                 $ref: "#/components/schemas/Holder"
         '400':
           description: Invalid filter
-      security:
-      - api-key: []
-  "/holders/{holder_address}":
+  "/holders/{address}":
     description: Holder details
     get:
       tags:
       - holders
       parameters:
-      - name: holder_address
+      - name: address
         in: path
         description: The stake/enterprise/script/other address of the Holder
         required: true
@@ -852,8 +854,6 @@ paths:
           description: Invalid Holder format
         '404':
           description: Holder not found
-      security:
-      - api-key: []
   "/stats":
     get:
       tags:
@@ -865,6 +865,86 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Stats"
+  "/scripts":
+    get:
+      tags:
+      - utils
+      summary: List script metadata by network
+      parameters:
+      - name: latest
+        in: query
+        description: If true, return only the latest script for the requested `type` (or latest `pz_contract` when `type` is omitted)
+        required: false
+        schema:
+          type: boolean
+      - name: type
+        in: query
+        description: Filter scripts by script type
+        required: false
+        schema:
+          $ref: "#/components/schemas/ScriptType"
+      responses:
+        '200':
+          description: Script metadata
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Latest script not found
+  "/deployment":
+    get:
+      tags:
+      - utils
+      summary: Deployment metadata
+      responses:
+        '200':
+          description: Deployment metadata from deployment_info.json
+          content:
+            application/json:
+              schema:
+                type: object
+  "/mint":
+    post:
+      tags:
+      - handles
+      summary: Mint relay endpoint for subhandles
+      description: Used by `api.handle.me` for subhandle mints.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - handle
+              - tx_hash
+              - handle_type
+              - auth_client
+              - access_token
+              - send_address
+              properties:
+                handle:
+                  type: string
+                tx_hash:
+                  type: string
+                handle_type:
+                  $ref: "#/components/schemas/HandleType"
+                auth_client:
+                  type: string
+                access_token:
+                  type: string
+                send_address:
+                  type: string
+      responses:
+        '200':
+          description: Mint relay accepted
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: Invalid mint request (for example `handle_type=handle`)
   "/swagger":
     get:
       tags:
@@ -900,6 +980,15 @@ paths:
         required: true
         schema:
           $ref: "#/components/schemas/DatumType"
+      - name: default_key_type
+        in: query
+        description: Default key encoding when converting CBOR maps to JSON
+        required: false
+        schema:
+          type: string
+          enum:
+          - utf8
+          - hex
       - name: numeric_keys
         in: query
         description: JavaScript doesn't support numeric object keys. CBOR does. If JSON keys can be converted to CBOR integers, then do so
@@ -1285,6 +1374,24 @@ components:
       - handle
       - nft_subhandle
       - virtual_subhandle
+    ScriptType:
+      type: string
+      description: Script categories returned by `/scripts`
+      enum:
+      - pz_contract
+      - sub_handle_settings
+      - marketplace_contract
+      - demi_mint_proxy
+      - demi_mint
+      - demi_minting_data
+      - demi_orders
+      - hal_mint_proxy
+      - hal_mint
+      - hal_minting_data
+      - hal_orders_spend
+      - hal_ref_spend_proxy
+      - hal_ref_spend
+      - hal_royalty_spend
     HexString:
       type: string
       example: "0x1a3dfb"
@@ -1422,7 +1529,7 @@ components:
           type: string
         type:
           type: string
-          $ref: "#/components/schemas/HandleType"
+          $ref: "#/components/schemas/ScriptType"
         cbor:
           type: string
         unoptimizedCbor:
@@ -1492,5 +1599,6 @@ components:
   securitySchemes:
     api-key:
       type: apiKey
+      description: Optional header used to bypass rate limiting when enabled (see `RATE_LIMITER_ENABLED` and `WHITELISTED_API_KEYS`).
       name: api-key
       in: header
