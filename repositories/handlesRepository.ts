@@ -77,12 +77,8 @@ export class HandlesRepository {
         const handleNames = this.store.getValuesFromIndexedSet(IndexNames.HOLDER, handle.holder) as HolderHandleNames | undefined;
         if (handleNames) {
             const manuallySetDefaultHandle = this.store.getValuesFromIndexedSet(IndexNames.DEFAULT_HANDLE, handle.holder);
-            // Converts numeric handles to a string
-            if (manuallySetDefaultHandle?.size) {
-                handle.default_in_wallet = `${[...manuallySetDefaultHandle][0]}`;
-            } else {
-                handle.default_in_wallet = `${this.getDefaultHandle(handleNames)?.name ?? handle.name}`; 
-            }
+            //                                                                                                   Converts numeric handles to a string
+            handle.default_in_wallet = manuallySetDefaultHandle?.size ? `${[...manuallySetDefaultHandle][0]}` : `${this.getDefaultHandle(handleNames)?.name ?? handle.name}`;
         }
 
         // Workaround for numeric handles names
@@ -239,7 +235,7 @@ export class HandlesRepository {
                     break;
             }
         }
-        
+    
         const startIndex = ((pagination?.page ?? 1) - 1) * (pagination?.handlesPerPage ?? 100);
         handleNames = handleNames.slice(startIndex, startIndex + (pagination?.handlesPerPage ?? 100));
 
@@ -261,9 +257,8 @@ export class HandlesRepository {
             }
         }) as (Set<string> | undefined)[])
 
-        handles = handles.map((h,i) => {
-            if (h) {
-                const handle = structuredClone(h) as StoredHandle;
+        handles = handles.map((handle,i) => {
+            if (handle) {
                 handle.name = `${handle.name}`
                 handle.hex = `${handle.hex}`
                 handle.default_in_wallet = defaultHandles[i]?.size ? `${[...defaultHandles[i]][0]}` : `${this.getDefaultHandle(holderHandles[i])?.name ?? handle.name}`;
@@ -450,7 +445,7 @@ export class HandlesRepository {
         }) as StoredHandle[]
         
         holderAddresses.forEach((holderAddresses, index) => {
-            const holder = this.buildHolder(holderHandleNames[index], storedHandles[index].resolved_addresses.ada, [...(defaultHandles[index] ?? [])]?.[0]);
+            const holder = this.buildHolder(holderHandleNames[index], storedHandles[index]?.resolved_addresses.ada, [...(defaultHandles[index] ?? [])]?.[0]);
             if (holder) holders.push(holder);
         });
 
@@ -727,7 +722,7 @@ export class HandlesRepository {
                 // however, metadata can.
                 const metadata: { [handleName: string]: HandleOnChainMetadata } | undefined = (firstMintingData.metadata?.[MetadataLabel.NFT] as any)?.[policy];
                 const data = metadata && (metadata[isCip67 ? ownerTokenHex : name] as unknown as IHandleMetadata);
-                const existingHandle = handles?.get(name) ?? this.prepareHandle(this.store.getHashFromIndex(IndexNames.HANDLE, name) as StoredHandle) ?? undefined;
+                const existingHandle = handles?.get(name) ?? (this.store.getHashFromIndex(IndexNames.HANDLE, name) as StoredHandle) ?? undefined;
 
                 const { address, slot } = utxo
                 const handle = structuredClone(existingHandle) ?? this._buildHandle({name, hex: ownerTokenHex, policy, resolved_addresses: {ada: address}, updated_slot_number: slot, created_slot_number: firstMintingData.created_slot}, data);
@@ -826,19 +821,16 @@ export class HandlesRepository {
         // This is to avoid thousands of handles being iterated through for known owners with massive amounts of handles
         const handles = [...holderHandles];
 
+        // This is a performance workaround. It effecttively filters out marketplaces where default doesn't matter
+        // Marketplaces make up about 25% of Handle holders, so every paginated result is slowed down by them
+        if (handles.length > 1000) return this.store.getHashFromIndex(IndexNames.HANDLE, handles[0]) as StoredHandle;
+
         const storedHandles = (this.store.pipeline(() => {
             holderHandles.forEach((name) => {
-                this.store.getHashFromIndex(IndexNames.HANDLE, name)
-            });
+                    this.store.getHashFromIndex(IndexNames.HANDLE, name)
+                });
         }) as StoredHandle[]);
         
-        // We don't need to check manually set because that should happen before this function is called.
-        // if (holder.manuallySet) {
-        //     const defaultHandle = handles.find(h => h.name == holder.defaultHandle);
-        //     if (defaultHandle) return defaultHandle;
-        // }
-
-        if (handles.length > 2000) return storedHandles[0];
 
         // OG if no default set
         const ogHandle = this._sortOGHandle(storedHandles);
@@ -918,7 +910,6 @@ export class HandlesRepository {
         handle.image_hash = handle.image_hash ?? '';
         handle.holder = handle.holder ?? '';
         handle.holder_type = handle.holder_type ?? '';
-        handle.default_in_wallet = handle.default_in_wallet ?? '';
         handle.utxo = handle.utxo ?? '';
         handle.lovelace = Number(handle.lovelace ?? 0);
         handle.has_datum = handle.has_datum ?? false;

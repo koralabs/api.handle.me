@@ -34,7 +34,6 @@ class OgmiosService {
         // attempt ogmios resume (see if starting point exists or errors)
         const firstStartingPoint = await this.scanningRepo.getStartingPoint({
             [UTxOFunctionName.ADD_UTXO]: this.scanningRepo.addUTxO.bind(this.scanningRepo),
-            [UTxOFunctionName.UPDATE_HOLDER_INDEX]: this.scanningRepo.updateHolderIndex.bind(this.scanningRepo),
             [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: this.scanningRepo.updateHandleIndexes.bind(this.scanningRepo)
         });
         // const firstStartingPoint = {id: 'eca47c4fb9ca7f8eb2c524b975da3db1d05ced0a9ef0c4ee2c40c4cf2fcb3ea5', slot: 134281477} as Point
@@ -61,7 +60,6 @@ class OgmiosService {
                         Logger.log({ message: `Error initializing Handles: ${error.message} code: ${error.code}`, category: LogCategory.ERROR, event: 'initializeStorage.firstFileFailed' });
                         const secondStartingPoint = await this.scanningRepo.getStartingPoint({
                             [UTxOFunctionName.ADD_UTXO]: this.scanningRepo.addUTxO.bind(this.scanningRepo),
-                            [UTxOFunctionName.UPDATE_HOLDER_INDEX]: this.scanningRepo.updateHolderIndex.bind(this.scanningRepo),
                             [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: this.scanningRepo.updateHandleIndexes.bind(this.scanningRepo)
                         }, true);
                         // If error, try the other file's starting point
