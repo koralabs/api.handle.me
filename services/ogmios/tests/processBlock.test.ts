@@ -826,50 +826,10 @@ describe('processBlock Tests', () => {
 
         expect(saveSpy).toHaveBeenNthCalledWith(
             2,
-            {
-                amount: 1,
-                bg_image: '',
-                pfp_image: '',
-                characters: 'letters',
-                created_slot_number: 0,
-                handle_type: 'virtual_subhandle',
-                has_datum: false,
-                holder: 'addr_test1xccnsefjxg6kgc3ex5urjdt9xuurqdpexc6nswtz8qukfgekv93xzvpsxycnjenzvyunwwpnx3nryvn98y6nsvfsv5mryzpe4qc',
-                holder_type: 'script',
-                image: 'ipfs://QmV9e3NnXHKq8nmzB3zLrPexNgrR4kzEheAYiV6Hueb6qA',
-                image_hash: '0xabcd',
-                last_update_address: '0xabcd',
-                lovelace: 0,
-                name: 'virtual@hndl',
-                payment_key_hash: '313865323235646239353839356537383034393635383962383964a3',
-                hex: '000000007669727475616c40686e646c',
-                length: 12,
-                numeric_modifiers: '',
-                og_number: 0,
-                policy: 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a',
-                rarity: 'basic',
-                reference_utxo: 'some_id#0',
-                resolved_addresses: {
-                    ada: 'addr_test1xccnsefjxg6kgc3ex5urjdt9xuurqdpexc6nswtz8qukfgekv93xzvpsxycnjenzvyunwwpnx3nryvn98y6nsvfsv5mryzpe4qc'
-                },
-                standard_image: 'ipfs://QmV9e3NnXHKq8nmzB3zLrPexNgrR4kzEheAYiV6Hueb6qA',
-                standard_image_hash: '0xabcd',
-                sub_characters: 'letters',
-                sub_length: 7,
-                sub_numeric_modifiers: '',
-                sub_rarity: 'common',
-                svg_version: '1.0.0',
-                updated_slot_number: 0,
-                utxo: 'some_id#0',
-                version: 1,
-                virtual: {
-                    expires_time: 1,
-                    public_mint: false
-                }
-            },
-            undefined
+            { amount: 1, bg_asset: undefined, bg_image: '', characters: 'letters', created_slot_number: 0, drep: undefined, handle_type: 'virtual_subhandle', has_datum: false, hex: '000000007669727475616c40686e646c', holder: 'addr1xccnsefjxg6kgc3ex5urjdt9xuurqdpexc6nswtz8qukfgekv93xzvpsxycnjenzvyunwwpnx3nryvn98y6nsvfsv5mryy3hsyx', holder_type: 'script', id_hash: undefined, image: 'ipfs://QmV9e3NnXHKq8nmzB3zLrPexNgrR4kzEheAYiV6Hueb6qA', image_hash: '0xabcd', last_edited_time: undefined, last_update_address: '0xabcd', length: 12, lovelace: 0, name: 'virtual@hndl', numeric_modifiers: '', og_number: 0, original_address: undefined, payment_key_hash: '313865323235646239353839356537383034393635383962383964a3', pfp_asset: undefined, pfp_image: '', policy: 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a', pz_enabled: undefined, rarity: 'basic', reference_utxo: 'some_id#0', resolved_addresses: { ada: 'addr1xccnsefjxg6kgc3ex5urjdt9xuurqdpexc6nswtz8qukfgekv93xzvpsxycnjenzvyunwwpnx3nryvn98y6nsvfsv5mryy3hsyx' }, standard_image: 'ipfs://QmV9e3NnXHKq8nmzB3zLrPexNgrR4kzEheAYiV6Hueb6qA', standard_image_hash: '0xabcd', sub_characters: 'letters', sub_length: 7, sub_numeric_modifiers: '', sub_rarity: 'common', svg_version: '1.0.0', updated_slot_number: 0, utxo: 'some_id#0', version: 1, virtual: { expires_time: 1, public_mint: false } },
+            { amount: 1, bg_image: '', characters: 'letters', created_slot_number: 0, handle_type: 'virtual_subhandle', has_datum: false, hex: '000000007669727475616c40686e646c', holder: 'addr1v9jxgu33w9uxv6r8w4hrydrkden8zdnpwsergemrd358smfhw4axcdmdw9kx6dme89e8jem5d4hxxmpewdckc7nnddek6df50p3kw734de3nqetrvumxx6mjv9khwurcvvuxcwf5vdknwumexf3kx6nrwaehw7r3v34qymvzv0', holder_type: 'enterprise', image: 'ipfs://QmV9e3NnXHKq8nmzB3zLrPexNgrR4kzEheAYiV6Hueb6qA', image_hash: '0xabcd', last_update_address: '0xabcd', length: 12, lovelace: 0, name: 'virtual@hndl', numeric_modifiers: '', og_number: 0, payment_key_hash: '646472317178666867756e3234766e6671366174323467636c68786d', pfp_image: '', policy: 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a', rarity: 'basic', reference_utxo: 'some_id#0', resolved_addresses: { ada: 'addr1v9jxgu33w9uxv6r8w4hrydrkden8zdnpwsergemrd358smfhw4axcdmdw9kx6dme89e8jem5d4hxxmpewdckc7nnddek6df50p3kw734de3nqetrvumxx6mjv9khwurcvvuxcwf5vdknwumexf3kx6nrwaehw7r3v34qymvzv0' }, standard_image: 'ipfs://QmV9e3NnXHKq8nmzB3zLrPexNgrR4kzEheAYiV6Hueb6qA', standard_image_hash: '0xabcd', sub_characters: 'letters', sub_length: 7, sub_numeric_modifiers: '', sub_rarity: 'common', svg_version: '1.0.0', updated_slot_number: 0, utxo: 'some_id#0', version: 1, virtual: { expires_time: 1, public_mint: false } }
         );
-        
+
         const handle = repo.getHandle('virtual@hndl');
 
         expect(handle).toEqual({
@@ -878,11 +838,10 @@ describe('processBlock Tests', () => {
             characters: 'letters',
             created_slot_number: 0,
             default_in_wallet: 'virtual@hndl',
-            default: false,
             handle_type: 'virtual_subhandle',
             has_datum: false,
             hex: '000000007669727475616c40686e646c',
-            holder: 'addr_test1xccnsefjxg6kgc3ex5urjdt9xuurqdpexc6nswtz8qukfgekv93xzvpsxycnjenzvyunwwpnx3nryvn98y6nsvfsv5mryzpe4qc',
+            holder: 'addr1xccnsefjxg6kgc3ex5urjdt9xuurqdpexc6nswtz8qukfgekv93xzvpsxycnjenzvyunwwpnx3nryvn98y6nsvfsv5mryy3hsyx',
             holder_type: 'script',
             image: 'ipfs://QmV9e3NnXHKq8nmzB3zLrPexNgrR4kzEheAYiV6Hueb6qA',
             image_hash: '0xabcd',
@@ -898,7 +857,7 @@ describe('processBlock Tests', () => {
             rarity: 'basic',
             reference_utxo: 'some_id#0',
             resolved_addresses: {
-                ada: 'addr_test1xccnsefjxg6kgc3ex5urjdt9xuurqdpexc6nswtz8qukfgekv93xzvpsxycnjenzvyunwwpnx3nryvn98y6nsvfsv5mryzpe4qc'
+                ada: 'addr1xccnsefjxg6kgc3ex5urjdt9xuurqdpexc6nswtz8qukfgekv93xzvpsxycnjenzvyunwwpnx3nryvn98y6nsvfsv5mryy3hsyx'
             },
             standard_image: 'ipfs://QmV9e3NnXHKq8nmzB3zLrPexNgrR4kzEheAYiV6Hueb6qA',
             standard_image_hash: '0xabcd',
@@ -977,7 +936,7 @@ describe('processBlock Tests', () => {
         expect(loggerSpy).toHaveBeenCalledWith({
             category: 'ERROR',
             event: 'processScannedHandleInfo.referenceToken.noDatum',
-            message: 'No datum for reference token 000643b06275727269746f73'
+            message: 'No datum for reference token burritos'
         });
     });
 

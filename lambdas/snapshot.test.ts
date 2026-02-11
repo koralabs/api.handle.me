@@ -1,6 +1,6 @@
 import { BlockPraos } from "@cardano-ogmios/schema";
 import { HandlesRepository } from "../repositories/handlesRepository";
-import { processBlock } from "../services/processBlock";
+import OgmiosService from "../services/ogmios/ogmios.service";
 import { RedisHandlesStore } from "../stores/redis";
 
 const lambda = require("./snapshot");
@@ -9,6 +9,8 @@ const storeInstance = new RedisHandlesStore();
 const repo = new HandlesRepository(storeInstance);
 repo.initialize();
 repo.rollBackToGenesis();
+
+const ogmiosService = new OgmiosService(repo);
 
 const block = {
     "id": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -130,7 +132,7 @@ describe("lambda tests", () => {
     mockedS3Instance = new AWS.S3Client();
 
     // we need to process block first then we can run the snapthot
-    await processBlock(block as unknown as BlockPraos, repo);
+    ogmiosService.Internal.processBlock(block as unknown as BlockPraos);
 
     repo.setMetrics({ currentSlot: block.slot + 100, currentBlockHash: block.id, utxoSchemaVersion: 7})
   });
