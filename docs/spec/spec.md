@@ -113,6 +113,8 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - Missing minting data during handle index updates is treated as a hard failure (scanner invariant), not a soft fallback.
 - Rollback lambda reconciles provider/store gaps over short and periodic long rollback windows.
 - Snapshot lambda can emit compressed UTxO snapshots for fast restore.
+- Reindex lock behavior is fail-safe: reindex attempts must always clear `lockLambdas` in both success and error paths to avoid deadlocking scanner/lambda flows.
+- Valkey pipeline execution must always clear pipeline state on errors; queue state is reset even when pipeline callbacks throw.
 
 ## Environment Variables
 See `site.env` for the operator-facing glossary. Commonly used ones include:

@@ -1,7 +1,7 @@
 import { IndexNames, Logger, UTxOFunctionName } from '@koralabs/kora-labs-common';
 import { deflateSync } from 'zlib';
-import { RedisHandlesStore } from './index';
 import { ORDERED_SLOTS } from '../../config/constants';
+import { RedisHandlesStore } from './index';
 
 describe('RedisHandlesStore critical path tests', () => {
     const originalFetch = global.fetch;
@@ -429,5 +429,17 @@ describe('RedisHandlesStore critical path tests', () => {
                 message: 'GlideClient get failed'
             })
         );
+    });
+
+    it('always clears pipeline state when a pipeline callback throws', () => {
+        const store = new RedisHandlesStore();
+
+        expect(() => {
+            store.pipeline(() => {
+                throw new Error('pipeline failure');
+            });
+        }).toThrow('pipeline failure');
+
+        expect((RedisHandlesStore as any)._pipeline).toBeUndefined();
     });
 });

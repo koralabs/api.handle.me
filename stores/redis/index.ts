@@ -41,19 +41,23 @@ export class RedisHandlesStore implements IApiStore {
      */
     public pipeline(commands: CallableFunction) {
         RedisHandlesStore._pipeline = [];
-        commands();
-        //console.log('PIPELINE', RedisHandlesStore._pipeline)
-        const results = this.redisClientCall('batch', RedisHandlesStore._pipeline);
-        for (let i = 0; i < results.length; i++) {
-            // All results are returned
-            // Only used to rehydrate the hgetall
-            if (RedisHandlesStore._pipeline[i][0] == 'hgetall') {
-                //console.log(RedisHandlesStore._pipeline[i][1][0], results[i])
-                results[i] = this.rehydrateObject(RedisHandlesStore._pipeline[i][1][0], results[i]);
+        try {
+            commands();
+            //console.log('PIPELINE', RedisHandlesStore._pipeline)
+            const pipelineCommands = RedisHandlesStore._pipeline;
+            const results = this.redisClientCall('batch', pipelineCommands);
+            for (let i = 0; i < results.length; i++) {
+                // All results are returned
+                // Only used to rehydrate the hgetall
+                if (pipelineCommands[i][0] == 'hgetall') {
+                    //console.log(pipelineCommands[i][1][0], results[i])
+                    results[i] = this.rehydrateObject(pipelineCommands[i][1][0], results[i]);
+                }
             }
+            return results;
+        } finally {
+            RedisHandlesStore._pipeline = undefined;
         }
-        RedisHandlesStore._pipeline = undefined;
-        return results;
     }
 
     public destroy(): void {
@@ -100,7 +104,7 @@ export class RedisHandlesStore implements IApiStore {
 
         // iterate through UTXO_SLOT and grab the UTxOs using the slot.
         const utxoIds = (this.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 0) ?? []) as string[];
-        Logger.log(`Repopulating indexes from ${utxoIds.length.toLocaleString()} UTxOs, ${utxoIds[0]}`);
+        Logger.log(`Repopulating indexes from ${utxoIds.length.toLocaleString()} UTxOs Ids`);
         
         const utxos = this.pipeline(() => {
             utxoIds.map(utxoId => this.getHashFromIndex(IndexNames.UTXO, utxoId)).filter(Boolean)

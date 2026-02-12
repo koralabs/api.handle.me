@@ -56,6 +56,7 @@ do \
     curl -sL ${BASE_URL}/${net}/config.json -o tmp/${net}/config.json
     curl -sL ${BASE_URL}/${net}/topology.json -o tmp/${net}/topology.json
     curl -sL ${BASE_URL}/${net}/peer-snapshot.json -o tmp/${net}/peer-snapshot.json
+    curl -sL ${BASE_URL}/${net}/checkpoints.json -o tmp/${net}/checkpoints.json
     for era in "${ERAS[@]}"; \
     do \
         curl -sL ${BASE_URL}/${net}/${era}-genesis.json -o tmp/${net}/${era}-genesis.json; \
