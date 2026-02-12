@@ -71,5 +71,58 @@ describe('Mint Routes Test', () => {
             });
             expect(response.status).toHaveBeenCalledWith(200);
         });
+
+        it('Should map nft_subhandle to nft minting type', async () => {
+            const mintController = new MintController();
+            const response = mockResponse();
+            const body =  {
+                handle: 'test@handle',
+                tx_hash: 'tx_456',
+                handle_type: HandleType.NFT_SUBHANDLE,
+                auth_client: 'client-id',
+                access_token: 'access-token',
+                send_address: 'abc123'
+            }
+            await mintController.mint(
+                // @ts-expect-error
+                {body},
+                response,
+                () => {}
+            );
+            expect(mintMySubHandle).toHaveBeenCalledWith({
+                access_token: 'access-token',
+                auth_client: 'client-id',
+                handle: 'test@handle',
+                send_address: 'abc123',
+                subhandle_type: 'nft',
+                tx_hash: 'tx_456'
+            });
+            expect(response.status).toHaveBeenCalledWith(200);
+        });
+
+        it('Should pass service errors to next middleware', async () => {
+            const mintController = new MintController();
+            const response = mockResponse();
+            const next = jest.fn();
+            const error = new Error('minting failed');
+            (mintMySubHandle as jest.Mock).mockRejectedValueOnce(error);
+            const body =  {
+                handle: 'test@handle',
+                tx_hash: 'tx_err',
+                handle_type: HandleType.VIRTUAL_SUBHANDLE,
+                auth_client: 'client-id',
+                access_token: 'access-token',
+                send_address: 'abc123'
+            }
+
+            await mintController.mint(
+                // @ts-expect-error
+                {body},
+                response,
+                next
+            );
+
+            expect(next).toHaveBeenCalledWith(error);
+        });
     });
 });

@@ -311,4 +311,40 @@ describe('HandlesRepository lifecycle e2e', () => {
         expect(repo.getHandle(handleName)).toBeNull();
         expect((store.getValuesFromIndexedSet(IndexNames.HOLDER, movedHolder) as Set<string>).has(handleName)).toBe(false);
     });
+
+    it('persists cross-chain resolved addresses for handle resolution consumers', () => {
+        const handleName = 'crosschain';
+        const crossChainHandle = repo.Internal.buildHandle({
+            hex: Buffer.from(handleName).toString('hex'),
+            name: handleName,
+            og_number: 0,
+            utxo: 'utxo_cross#0',
+            policy,
+            image: 'ipfs://cross',
+            handle_type: HandleType.HANDLE,
+            resolved_addresses: {
+                ada: address,
+                btc: 'bc1qdemo',
+                eth: '0xabc'
+            } as any,
+            updated_slot_number: slot()
+        });
+        crossChainHandle.holder = holder;
+        crossChainHandle.holder_type = 'wallet';
+
+        repo.updateHolder(crossChainHandle);
+        repo.save(crossChainHandle);
+
+        expect(repo.getHandle(handleName)).toEqual(
+            expect.objectContaining({
+                name: handleName,
+                resolved_addresses: expect.objectContaining({
+                    ada: address,
+                    btc: 'bc1qdemo',
+                    eth: '0xabc'
+                }),
+                holder
+            })
+        );
+    });
 });

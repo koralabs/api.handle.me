@@ -54,7 +54,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
         }) as Set<string>[];
 
         // gets Handles and remove mints that happened in this range
-        const handlesPipelineResult = store.pipeline(() => {
+        store.pipeline(() => {
             handles.forEach((handleName, index) => {
                 const mintingDataSet = handlesMintingData[index];
                 if (mintingDataSet) {
@@ -65,12 +65,14 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
                         }
                     });
                 }
-
-                handlesRepo.getHandle(handleName);
             });
         });
 
-        const storedHandles = handlesPipelineResult.filter(Boolean) as StoredHandle[];
+        const storedHandles = store.pipeline(() => {
+            handles.forEach((handleName) => {
+                handlesRepo.getHandle(handleName);
+            });
+        }).filter(Boolean) as StoredHandle[];
         const stakeAddresses = storedHandles.map((h) => buildHolderInfo(h.resolved_addresses.ada).address);
 
         // get a full list of holders so we can pass it into the updateHolder function later
@@ -91,13 +93,12 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
         });
 
         // delete all UTxOs after that slot and replay them all
-        store.pipeline(() => {
-            utxos.forEach((utxo) => {
-                if (utxo && utxo.slot >= firstBlock.slot) {
-                    handlesRepo.removeUTxOs([utxo.id]);
-                }
-            });
-        });
+        const utxoIdsToRemove = utxos
+            .filter((utxo): utxo is UTxOWithTxInfo => !!utxo && utxo.slot >= firstBlock.slot)
+            .map((utxo) => utxo.id);
+        if (utxoIdsToRemove.length) {
+            handlesRepo.removeUTxOs(utxoIdsToRemove);
+        }
 
         // repopulate utxo store and minting data from Bf/Ko
         for (const block of blockList) {
@@ -157,6 +158,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
         let batchesIndex = 0;
         let txHashesArray: string[] = [];
         while (batchesIndex < txHashes.length) {
+            txHashesArray.push(txHashes[batchesIndex]);
             if (JSON.stringify({ _tx_hashes: txHashesArray, _metadata: true, _assets: true, _bytecode: true, _scripts: true }).length >= 4900) {
                 // Max possible ",[policy,handle]" length is 96
                 batchedTxHashes.push(txHashesArray);
@@ -210,18 +212,20 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context: AWSLambd
 
     handlesRepo.setMetrics({ lockLambdas: true });
 
-    // if it is time to run the 2160 then we don't have to run the 20
-    if (Date.now() - lastMaxRollbackCheck > 60 * 60 * 1000) {
-        // Get "2160 ago block" (Blockfrost supports get by height/number)
-        await processRollback({ currentSlot, rollbackOffset: 2160 });
-        // Update last2160check
-        handlesRepo.setMetrics({ lastMaxRollbackCheck: Date.now() });
-    } else {
-        // 20 confirmation range once a minute
-        // Get "20 ago block" (Blockfrost supports get by height/number)
-        await processRollback({ currentSlot, rollbackOffset: 20 });
+    try {
+        // if it is time to run the 2160 then we don't have to run the 20
+        if (Date.now() - lastMaxRollbackCheck > 60 * 60 * 1000) {
+            // Get "2160 ago block" (Blockfrost supports get by height/number)
+            await processRollback({ currentSlot, rollbackOffset: 2160 });
+            // Update last2160check
+            handlesRepo.setMetrics({ lastMaxRollbackCheck: Date.now() });
+        } else {
+            // 20 confirmation range once a minute
+            // Get "20 ago block" (Blockfrost supports get by height/number)
+            await processRollback({ currentSlot, rollbackOffset: 20 });
+        }
+    } finally {
+        handlesRepo.setMetrics({ lockLambdas: false });
     }
-
-    handlesRepo.setMetrics({ lockLambdas: false });
     // 2160 confirmation range once an hour
 };

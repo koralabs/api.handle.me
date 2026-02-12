@@ -232,6 +232,7 @@ class HandlesController {
                     datum = await decodeCborToJson({ cborString: datum, schema: {}, defaultKeyType: req.query.default_key_type as DefaultTextFormat });
                 } catch {
                     res.status(400).send({ message: 'Unable to decode datum to json' });
+                    return;
                 }
             }
 

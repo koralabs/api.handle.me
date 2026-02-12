@@ -90,5 +90,19 @@ describe('Scripts Routes Test', () => {
                 scriptAddress: key
             });
         });
+
+        it('Should return 404 when latest script is requested for unknown type', async () => {
+            const scriptsController = new ScriptsController();
+            const response = mockResponse();
+            await scriptsController.index(
+                // @ts-expect-error
+                {query: {latest: true, type: 'unknown'}},
+                response,
+                () => {}
+            );
+
+            expect(response.status).toHaveBeenCalledWith(404);
+            expect(response.send).toHaveBeenCalledWith({ message: 'Latest script not found' });
+        });
     });
 });

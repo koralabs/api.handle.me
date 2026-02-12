@@ -44,6 +44,21 @@ describe('OgmiosService lifecycle tests', () => {
         expect(resumeSpy).toHaveBeenCalledWith(handleEraBoundaries.preview);
     });
 
+    it('initializes genesis from preview fallback when NETWORK is unset', async () => {
+        delete process.env.NETWORK;
+        const repo = createRepoMock();
+        repo.getStartingPoint.mockResolvedValue(null);
+        const service = new OgmiosService(repo);
+        const client = { readyState: WebSocket.OPEN, close: jest.fn(), on: jest.fn(), send: jest.fn() } as any;
+        const resumeSpy = jest.spyOn(service as any, '_resume').mockResolvedValue(undefined);
+        jest.spyOn(service as any, '_createWebSocketClient').mockReturnValue(client);
+
+        await service.initialize();
+
+        expect(repo.rollBackToGenesis).toHaveBeenCalled();
+        expect(resumeSpy).toHaveBeenCalledWith(handleEraBoundaries.preview);
+    });
+
     it('resumes from stored starting point when available', async () => {
         const repo = createRepoMock();
         const startingPoint = { slot: 123, id: 'block_hash' };

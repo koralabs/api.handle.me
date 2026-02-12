@@ -139,6 +139,7 @@ describe('RootHandlesController tests', () => {
 
         expect(res.set).toHaveBeenCalledWith('Content-Type', 'text/plain; charset=utf-8');
         expect(res.send).toHaveBeenCalledWith('root1\nroot2');
+        expect(res.json).not.toHaveBeenCalled();
     });
 
     it('should call next when search throws', async () => {

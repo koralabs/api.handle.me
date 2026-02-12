@@ -2,6 +2,19 @@ import { IndexNames, Logger, UTxOFunctionName } from '@koralabs/kora-labs-common
 import { deflateSync } from 'zlib';
 import { ORDERED_SLOTS } from '../../config/constants';
 import { RedisHandlesStore } from './index';
+import { Worker } from 'worker_threads';
+
+jest.mock('worker_threads', () => {
+    const actual = jest.requireActual('worker_threads');
+    return {
+        ...actual,
+        Worker: jest.fn().mockImplementation(() => ({
+            on: jest.fn(),
+            terminate: jest.fn(),
+            postMessage: jest.fn()
+        }))
+    };
+});
 
 describe('RedisHandlesStore critical path tests', () => {
     const originalFetch = global.fetch;
@@ -10,7 +23,84 @@ describe('RedisHandlesStore critical path tests', () => {
     afterEach(() => {
         global.fetch = originalFetch;
         ORDERED_SLOTS.splice(0, ORDERED_SLOTS.length, ...originalOrderedSlots);
+        (RedisHandlesStore as any)._worker = undefined;
+        (RedisHandlesStore as any)._pipeline = undefined;
         jest.restoreAllMocks();
+    });
+
+    it('initializes a worker once and handles worker lifecycle hooks', () => {
+        const store = new RedisHandlesStore();
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation(jest.fn());
+        const loggerSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
+        const workerCtor = Worker as unknown as jest.Mock;
+
+        expect(store.initialize()).toBe(store);
+        expect(workerCtor).toHaveBeenCalledWith('./workers/redisSync.worker.js');
+
+        const worker = (RedisHandlesStore as any)._worker;
+        const errorHandler = worker.on.mock.calls.find((call: any[]) => call[0] === 'error')?.[1];
+        const exitHandler = worker.on.mock.calls.find((call: any[]) => call[0] === 'exit')?.[1];
+
+        errorHandler('boom');
+        exitHandler(1);
+        expect(loggerSpy).toHaveBeenCalledWith(expect.objectContaining({ event: 'ValkeySyncWorker.Error' }));
+        expect(loggerSpy).toHaveBeenCalledWith(expect.objectContaining({ event: 'ValkeySyncWorker.Exit' }));
+
+        store.initialize();
+        expect(workerCtor).toHaveBeenCalledTimes(1);
+
+        store.rollBackToGenesis();
+        store.destroy();
+        expect(redisSpy).toHaveBeenCalledWith('flushdb');
+        expect(redisSpy).toHaveBeenCalledWith('close');
+        expect(worker.terminate).toHaveBeenCalled();
+        expect((RedisHandlesStore as any)._worker).toBeUndefined();
+    });
+
+    it('returns empty results when a pipeline has no commands', () => {
+        const store = new RedisHandlesStore();
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation(jest.fn());
+
+        const results = store.pipeline(() => {});
+
+        expect(results).toEqual([]);
+        expect(redisSpy).not.toHaveBeenCalled();
+    });
+
+    it('falls back to an empty command list when pipeline queue is cleared mid-call', () => {
+        const store = new RedisHandlesStore();
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation(jest.fn());
+
+        const result = store.pipeline(() => {
+            (RedisHandlesStore as any)._pipeline = undefined;
+        });
+
+        expect(result).toEqual([]);
+        expect(redisSpy).not.toHaveBeenCalled();
+    });
+
+    it('rehydrates hgetall results returned from batch pipeline calls', () => {
+        const store = new RedisHandlesStore();
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'batch') {
+                return [[{ key: { toString: () => 'name' }, value: { toString: () => '"alpha"' } }], 'ok'];
+            }
+            return undefined;
+        });
+        const rehydrateSpy = jest.spyOn(store as any, 'rehydrateObject').mockReturnValue({ name: 'alpha' });
+
+        const result = store.pipeline(() => {
+            (RedisHandlesStore as any)._pipeline.push(['hgetall', ['{root}:handle:alpha']]);
+            (RedisHandlesStore as any)._pipeline.push(['set', ['x', '1']]);
+        });
+
+        expect(redisSpy).toHaveBeenCalledWith('batch', [
+            ['hgetall', ['{root}:handle:alpha']],
+            ['set', ['x', '1']]
+        ]);
+        expect(rehydrateSpy).toHaveBeenCalledWith('{root}:handle:alpha', expect.any(Array));
+        expect(result).toEqual([{ name: 'alpha' }, 'ok']);
     });
 
     it('repopulates indexes from stored UTxOs', () => {
@@ -52,6 +142,34 @@ describe('RedisHandlesStore critical path tests', () => {
                 txHash: 'txhash'
             })
         ]);
+    });
+
+    it('repopulates indexes when mint data lookup returns undefined values', () => {
+        const store = new RedisHandlesStore();
+        jest.spyOn(store as any, 'redisClientCall').mockImplementation((cmd: any) => {
+            if (cmd === 'scan') return ['0', []];
+            return undefined;
+        });
+        jest.spyOn(store, 'getValuesFromOrderedSet').mockReturnValue(['utxo#0'] as any);
+
+        let callCount = 0;
+        jest.spyOn(store, 'pipeline').mockImplementation((commands: CallableFunction) => {
+            callCount += 1;
+            commands();
+            if (callCount === 1) {
+                return [{ id: 'utxo#0', slot: 1, handles: [['policy', [Buffer.from('alpha').toString('hex')]]] }];
+            }
+            if (callCount === 2) return [undefined];
+            return [];
+        });
+
+        const updateHandleIndexes = jest.fn();
+        store.repopulateIndexesFromUTxOs({
+            [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: updateHandleIndexes
+        } as any);
+
+        const mintingDataArg = updateHandleIndexes.mock.calls[0][1] as Map<string, any[]>;
+        expect(mintingDataArg.get('alpha')).toEqual([]);
     });
 
     it('populates from S3 snapshot and replays UTxOs through callbacks', async () => {
@@ -131,6 +249,21 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(startingPoint).toEqual({ id: 'snapshot_hash', slot: 25 });
     });
 
+    it('getStartingPoint uses default failed=false and schema fallback values', async () => {
+        const store = new RedisHandlesStore();
+        jest.spyOn(store, 'getMetrics').mockReturnValue({
+            currentSlot: 5,
+            currentBlockHash: 'existing_hash'
+        } as any);
+        jest.spyOn(store, 'getUTxOSchemaVersion').mockReturnValue(1);
+        const snapshotSpy = jest.spyOn(store, 'tryPopulateFromS3UTxOs').mockResolvedValue({ id: 'snapshot_hash', slot: 25 });
+
+        const startingPoint = await store.getStartingPoint({} as any);
+
+        expect(snapshotSpy).toHaveBeenCalled();
+        expect(startingPoint).toEqual({ id: 'snapshot_hash', slot: 25 });
+    });
+
     it('getStartingPoint repopulates indexes when only index schema changed', async () => {
         const store = new RedisHandlesStore();
         jest.spyOn(store, 'getMetrics').mockReturnValue({
@@ -151,11 +284,57 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(startingPoint).toEqual({ id: 'current_hash', slot: 99 });
     });
 
+    it('repopulates indexes when index schema fallback defaults to zero', async () => {
+        const store = new RedisHandlesStore();
+        jest.spyOn(store, 'getMetrics').mockReturnValue({
+            utxoSchemaVersion: 2,
+            currentSlot: 99,
+            currentBlockHash: 'current_hash'
+        } as any);
+        jest.spyOn(store, 'getUTxOSchemaVersion').mockReturnValue(2);
+        jest.spyOn(store, 'getIndexSchemaVersion').mockReturnValue(1);
+        const repopulateSpy = jest.spyOn(store, 'repopulateIndexesFromUTxOs').mockImplementation(jest.fn());
+        const setMetricsSpy = jest.spyOn(store, 'setMetrics').mockImplementation(jest.fn());
+
+        const startingPoint = await store.getStartingPoint({} as any);
+
+        expect(repopulateSpy).toHaveBeenCalled();
+        expect(setMetricsSpy).toHaveBeenCalledWith({ indexSchemaVersion: 1 });
+        expect(startingPoint).toEqual({ id: 'current_hash', slot: 99 });
+    });
+
     it('getStartingPoint returns null on failed retry snapshot error', async () => {
         const store = new RedisHandlesStore();
         jest.spyOn(store, 'tryPopulateFromS3UTxOs').mockRejectedValue(new Error('network down'));
 
         const startingPoint = await store.getStartingPoint({} as any, true);
+
+        expect(startingPoint).toBeNull();
+    });
+
+    it('getStartingPoint returns retry snapshot point when failed path succeeds', async () => {
+        const store = new RedisHandlesStore();
+        jest.spyOn(store, 'tryPopulateFromS3UTxOs').mockResolvedValue({ id: 'retry_hash', slot: 123 });
+
+        const startingPoint = await store.getStartingPoint({} as any, true);
+
+        expect(startingPoint).toEqual({ id: 'retry_hash', slot: 123 });
+    });
+
+    it('getStartingPoint returns null on failed path when snapshots are disabled', async () => {
+        let startingPoint: { id: string; slot: number } | null = { id: 'unexpected', slot: -1 };
+
+        await jest.isolateModulesAsync(async () => {
+            jest.doMock('../../config', () => ({
+                ...jest.requireActual('../../config'),
+                NODE_ENV: 'test',
+                DISABLE_HANDLES_SNAPSHOT: 'true'
+            }));
+            const { RedisHandlesStore: IsolatedStore } = await import('./index');
+            const isolatedStore = new IsolatedStore();
+            startingPoint = await isolatedStore.getStartingPoint({} as any, true);
+            jest.dontMock('../../config');
+        });
 
         expect(startingPoint).toBeNull();
     });
@@ -206,6 +385,20 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(redisSpy).toHaveBeenCalledWith('set', '{root}:rarity:basic', '1');
     });
 
+    it('uses smembers and keeps string values for handle keys without sort options', () => {
+        const store = new RedisHandlesStore();
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'smembers') return ['1', 'alpha'];
+            return [];
+        });
+
+        const keys = store.getKeysFromIndex(IndexNames.HANDLE);
+
+        expect(keys).toEqual(['1', 'alpha']);
+        expect(redisSpy).toHaveBeenCalledWith('smembers', '{root}:handle', undefined);
+    });
+
     it('handles ordered-set add/remove and schema-version getters', () => {
         const store = new RedisHandlesStore();
         ORDERED_SLOTS.push(IndexNames.SLOT);
@@ -225,11 +418,86 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(redisSpy).toHaveBeenCalledWith('zrem', '{root}:holder', 'holder');
     });
 
+    it('rehydrates hash objects with json and non-json values', () => {
+        const store = new RedisHandlesStore();
+        jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'hgetall') {
+                return [
+                    { field: { toString: () => 'name' }, value: { toString: () => 'alpha' } },
+                    { field: { toString: () => 'enabled' }, value: { toString: () => 'true' } },
+                    { field: { toString: () => 'raw' }, value: { toString: () => 'plain-value' } }
+                ];
+            }
+            return undefined;
+        });
+
+        const value = store.getHashFromIndex(IndexNames.HANDLE, 'alpha');
+
+        expect(value).toEqual({ name: 'alpha', enabled: true, raw: 'plain-value' });
+    });
+
+    it('formats metrics and primitive hash fields before saving', () => {
+        const store = new RedisHandlesStore();
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd, key] = args as [string, string];
+            if (cmd === 'scard' && key === '{root}:handle') return 9;
+            if (cmd === 'scard' && key === '{root}:holder') return 4;
+            return undefined;
+        });
+
+        store.setMetrics({ currentSlot: 1, currentBlockHash: 'abc' });
+        (store as any).saveObjectToCache('custom:key', { count: 1, active: true, label: 'x' });
+        expect(store.count()).toBe(9);
+        expect(store.holderCount()).toBe(4);
+        expect(redisSpy).toHaveBeenCalledWith('hset', 'metrics', { currentSlot: '1', currentBlockHash: 'abc' });
+        expect(redisSpy).toHaveBeenCalledWith('hset', 'custom:key', { count: '1', active: 'true', label: 'x' });
+    });
+
     it('throws when trying to save non-object values into hash cache', () => {
         const store = new RedisHandlesStore();
         jest.spyOn(store as any, 'redisClientCall').mockImplementation(jest.fn());
 
         expect(() => (store as any).saveObjectToCache('bad:key', ['not', 'object'])).toThrow('saveObjectToCache only supports plain objects');
+    });
+
+    it('removes set values and prunes meta indexes when sets are emptied', () => {
+        const store = new RedisHandlesStore();
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'scard') return 0;
+            return undefined;
+        });
+
+        store.removeValueFromIndexedSet(IndexNames.HANDLE, 'alpha', 'handle-id');
+
+        expect(redisSpy).toHaveBeenCalledWith('srem', '{root}:handle:alpha', ['handle-id']);
+        expect(redisSpy).toHaveBeenCalledWith('srem', '{root}:handle', ['alpha']);
+    });
+
+    it('adds meta keys when writing to indexed sets under meta indexes', () => {
+        const store = new RedisHandlesStore();
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation(jest.fn());
+
+        store.addValueToIndexedSet(IndexNames.HANDLE, 'alpha', 'alpha-id');
+
+        expect(redisSpy).toHaveBeenCalledWith('sadd', '{root}:handle:alpha', ['alpha-id']);
+        expect(redisSpy).toHaveBeenCalledWith('sadd', '{root}:handle', ['alpha']);
+    });
+
+    it('prunes meta index in pipeline mode when one value remains', () => {
+        const store = new RedisHandlesStore();
+        (RedisHandlesStore as any)._pipeline = [];
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'scard') return 1;
+            return undefined;
+        });
+
+        store.removeKeyFromIndex(IndexNames.HANDLE, 'alpha');
+
+        expect(redisSpy).toHaveBeenCalledWith('del', ['{root}:handle:alpha']);
+        expect(redisSpy).toHaveBeenCalledWith('srem', '{root}:handle', ['alpha']);
     });
 
     it('repopulates indexes when scan returns deletable keys', () => {
@@ -258,6 +526,36 @@ describe('RedisHandlesStore critical path tests', () => {
 
         expect(redisSpy).toHaveBeenCalledWith('del', scannedKeys);
         expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Deleted: 100,000 keys'));
+    });
+
+    it('logs scan deletion progress when modulo threshold is crossed by key batch size', () => {
+        const store = new RedisHandlesStore();
+        const keysA = Array.from({ length: 99999 }, (_, index) => `{root}:character:${index}`);
+        const keysB = Array.from({ length: 5 }, (_, index) => `{root}:character:b${index}`);
+        const consoleSpy = jest.spyOn(console, 'log').mockImplementation(jest.fn());
+        let scanCount = 0;
+        jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'scan') {
+                scanCount += 1;
+                if (scanCount === 1) return ['1', keysA];
+                if (scanCount === 2) return ['0', keysB];
+                return ['0', []];
+            }
+            return undefined;
+        });
+        jest.spyOn(store, 'getValuesFromOrderedSet').mockReturnValue([] as any);
+        jest.spyOn(store, 'getKeysFromIndex').mockReturnValue([] as any);
+        jest.spyOn(store, 'pipeline').mockImplementation((commands: CallableFunction) => {
+            commands();
+            return [];
+        });
+
+        store.repopulateIndexesFromUTxOs({
+            [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: jest.fn()
+        } as any);
+
+        expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Deleted: 100,004 keys'));
     });
 
     it('handles repopulation with no indexed UTxO slots', () => {
@@ -356,6 +654,21 @@ describe('RedisHandlesStore critical path tests', () => {
         );
     });
 
+    it('converts numeric ordered-set values and supports numeric zrem keys', () => {
+        const store = new RedisHandlesStore();
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'zrange') return ['42'];
+            return undefined;
+        });
+
+        const values = store.getValuesFromOrderedSet(IndexNames.HOLDER, 0);
+        store.removeValuesFromOrderedSet(IndexNames.HOLDER, 7);
+
+        expect(values).toEqual([42]);
+        expect(redisSpy).toHaveBeenCalledWith('zrem', '{root}:holder', '7');
+    });
+
     it('builds metrics from defaults when cache is empty', () => {
         const store = new RedisHandlesStore();
         jest.spyOn(store as any, 'rehydrateObjectFromCache').mockReturnValue(undefined);
@@ -383,6 +696,31 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(result).toEqual({ child: { nested: true } });
     });
 
+    it('handles missing hash fields and key-based field names during rehydration', () => {
+        const store = new RedisHandlesStore();
+
+        expect((store as any).rehydrateObject('missing:key', undefined)).toBeUndefined();
+        expect(
+            (store as any).rehydrateObject('parent', [
+                {
+                    key: { toString: () => 'alt' },
+                    value: { toString: () => '1' }
+                }
+            ])
+        ).toEqual({ alt: 1 });
+    });
+
+    it('stringifies nested bigint values when saving objects', () => {
+        const store = new RedisHandlesStore();
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation(jest.fn());
+
+        (store as any).saveObjectToCache('bigint:key', { details: { total: BigInt(2) } });
+
+        expect(redisSpy).toHaveBeenCalledWith('hset', 'bigint:key', {
+            details: '{"total":"2"}'
+        });
+    });
+
     it('handles redis worker timeout and reply error branches', () => {
         const store = new RedisHandlesStore();
         const loggerSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
@@ -408,6 +746,26 @@ describe('RedisHandlesStore critical path tests', () => {
         };
         expect(() => store.redisClientCall('get', 'key')).toThrow('worker-failed');
         expect(loggerSpy).toHaveBeenCalledWith(expect.objectContaining({ event: 'redisClientCall.errorFromPostMessage' }));
+    });
+
+    it('queues calls during pipeline mode and returns successful worker results', () => {
+        const store = new RedisHandlesStore();
+        (RedisHandlesStore as any)._pipeline = [];
+
+        const queuedResult = store.redisClientCall('get', 'queued-key');
+        expect(queuedResult).toBeUndefined();
+        expect((RedisHandlesStore as any)._pipeline).toEqual([['get', ['queued-key']]]);
+
+        (RedisHandlesStore as any)._pipeline = undefined;
+        jest.spyOn(Atomics, 'wait').mockReturnValue('ok' as never);
+        (RedisHandlesStore as any)._worker = {
+            postMessage: ({ id, reply }: any) => {
+                reply.postMessage({ id, ok: true, result: 'ok-value' });
+            }
+        };
+
+        const result = store.redisClientCall('get', 'live-key');
+        expect(result).toBe('ok-value');
     });
 
     it('throws default worker failure message when postMessage error payload is missing', () => {

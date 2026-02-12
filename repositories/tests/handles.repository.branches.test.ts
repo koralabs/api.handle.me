@@ -1,6 +1,8 @@
 import { AssetNameLabel, decodeAddress, EMPTY, IndexNames, Logger } from '@koralabs/kora-labs-common';
+import * as common from '@koralabs/kora-labs-common';
 import * as crypto from 'crypto';
-import { HandlesRepository } from '../handlesRepository';
+import * as config from '../../config';
+import { HandlesRepository, RewoundHandle, UpdatedOwnerHandle } from '../handlesRepository';
 import * as ogmiosUtils from '../../services/ogmios/utils';
 import * as ipfs from '../../utils/ipfs';
 
@@ -237,6 +239,104 @@ describe('HandlesRepository branch tests', () => {
             })
         );
         expect(saveSpy).not.toHaveBeenCalled();
+    });
+
+    it('applies virtual subhandle resolved addresses from datum payload', () => {
+        const repo = new HandlesRepository(buildStoreMock());
+        const saveSpy = jest.spyOn(repo, 'save').mockImplementation(jest.fn());
+        jest.spyOn(repo, 'updateHolder').mockImplementation(jest.fn());
+        const ownerTokenHex = `${AssetNameLabel.LBL_000}${Buffer.from('tiny@root').toString('hex')}`;
+        const adaHex = `0x${decodeAddress(address)}`;
+
+        jest.spyOn(ogmiosUtils, 'getHandleNameFromAssetName').mockReturnValue({
+            name: 'tiny@root',
+            ownerTokenHex,
+            isCip67: true,
+            assetLabel: AssetNameLabel.LBL_000
+        });
+        jest.spyOn(repo, 'buildPersonalizationData').mockReturnValue({
+            nftAttributes: null,
+            projectAttributes: {
+                resolved_addresses: {
+                    ada: adaHex,
+                    btc: 'bc1qdemo',
+                    eth: '0xabc'
+                },
+                virtual: {
+                    expires_time: 123,
+                    public_mint: 1
+                }
+            } as any
+        });
+
+        repo.updateHandleIndexes(
+            {
+                ...buildUtxo(ownerTokenHex, 100, 'd87980'),
+                mint: [[policy, [ownerTokenHex]]]
+            } as any,
+            new Map([['tiny@root', [{ created_slot: 1, metadata: {}, txHash: 'tx' } as any]]]),
+            new Map(),
+            new Map()
+        );
+
+        expect(saveSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                name: 'tiny@root',
+                handle_type: 'virtual_subhandle',
+                resolved_addresses: expect.objectContaining({
+                    ada: expect.stringMatching(/^addr/),
+                    btc: 'bc1qdemo',
+                    eth: '0xabc'
+                }),
+                virtual: {
+                    expires_time: 123,
+                    public_mint: true
+                }
+            }),
+            undefined
+        );
+    });
+
+    it('keeps has_datum true while hiding datum payload when datum endpoint is disabled', () => {
+        const repo = new HandlesRepository(buildStoreMock());
+        const saveSpy = jest.spyOn(repo, 'save').mockImplementation(jest.fn());
+        jest.spyOn(repo, 'updateHolder').mockImplementation(jest.fn());
+        jest.spyOn(config, 'isDatumEndpointEnabled').mockReturnValue(false);
+        const assetHex = Buffer.from('alpha').toString('hex');
+
+        jest.spyOn(ogmiosUtils, 'getHandleNameFromAssetName').mockReturnValue({
+            name: 'alpha',
+            ownerTokenHex: assetHex,
+            isCip67: false,
+            assetLabel: null as any
+        });
+
+        repo.updateHandleIndexes(
+            {
+                ...buildUtxo(assetHex, 110, 'd87980'),
+                script: {
+                    type: 'PlutusScriptV2',
+                    cbor: 'a247'
+                },
+                mint: [[policy, [assetHex]]]
+            } as any,
+            new Map([['alpha', [{ created_slot: 1, metadata: {}, txHash: 'tx' } as any]]]),
+            new Map(),
+            new Map()
+        );
+
+        expect(saveSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                name: 'alpha',
+                has_datum: true,
+                datum: undefined,
+                script: {
+                    type: 'PlutusScriptV2',
+                    cbor: 'a247'
+                }
+            }),
+            undefined
+        );
     });
 
     it('normalizes mint data from block utxos before index updates', () => {
@@ -822,5 +922,323 @@ describe('HandlesRepository branch tests', () => {
 
         expect(buildPersonalizationSpy).toHaveBeenCalled();
         expect(personalization).toEqual({ validated_by: 'validator' });
+    });
+
+    it('covers lifecycle wrapper methods and handle wrapper constructors', async () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+
+        const baseHandle = { name: 'alpha', hex: Buffer.from('alpha').toString('hex'), policy } as any;
+        expect(new RewoundHandle(baseHandle)).toEqual(expect.objectContaining({ name: 'alpha' }));
+        expect(new UpdatedOwnerHandle(baseHandle)).toEqual(expect.objectContaining({ name: 'alpha' }));
+
+        await expect(repo.initialize()).resolves.toBe(repo);
+        repo.destroy();
+        repo.setMetrics({ currentSlot: 12 });
+        repo.rollBackToGenesis();
+        store.getHashFromIndex.mockReturnValue({ id: 'tx#0' });
+        expect(repo.getUTxO('tx#0')).toEqual({ id: 'tx#0' });
+        expect(repo.getMetrics()).toEqual({});
+
+        expect(store.initialize).toHaveBeenCalled();
+        expect(store.destroy).toHaveBeenCalled();
+        expect(store.setMetrics).toHaveBeenCalledWith({ currentSlot: 12 });
+        expect(store.rollBackToGenesis).toHaveBeenCalled();
+    });
+
+    it('searches by slot pagination and hydrates defaults', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        const getDefaultSpy = jest.spyOn(repo, 'getDefaultHandle').mockReturnValue({ name: 'fallback' } as any);
+        store.getKeysFromIndex.mockReturnValue(['alpha', 'beta']);
+        store.getMetrics.mockReturnValue({
+            firstSlot: 1,
+            lastSlot: 500000,
+            handleCount: 2
+        });
+        store.getValuesFromOrderedSet.mockImplementation((index: IndexNames) => {
+            if (index === IndexNames.SLOT) return ['alpha', 'beta'];
+            return [];
+        });
+
+        let callCount = 0;
+        store.pipeline.mockImplementation((commands: () => void) => {
+            callCount += 1;
+            commands();
+            if (callCount === 1) {
+                return [
+                    { name: 'alpha', hex: Buffer.from('alpha').toString('hex'), holder, resolved_addresses: { ada: address } },
+                    { name: 'beta', hex: Buffer.from('beta').toString('hex'), holder, resolved_addresses: { ada: address } }
+                ];
+            }
+            if (callCount === 2) return [new Set(['alpha', 'beta']), new Set(['alpha', 'beta'])];
+            if (callCount === 3) return [new Set(['alpha']), undefined];
+            return [];
+        });
+
+        const result = repo.search({ page: 1, handlesPerPage: 2, sort: 'asc', slotNumber: 10 } as any);
+
+        expect(result.searchTotal).toBe(2);
+        expect((result.handles[0] as any).default_in_wallet).toBe('alpha');
+        expect((result.handles[1] as any).default_in_wallet).toBe('fallback');
+        expect(getDefaultSpy).toHaveBeenCalled();
+        expect(store.getValuesFromOrderedSet).toHaveBeenCalledWith(
+            IndexNames.SLOT,
+            0,
+            expect.objectContaining({
+                start: 10,
+                end: 50010,
+                orderBy: 'ASC'
+            })
+        );
+    });
+
+    it('builds index info from UTxO and conditionally updates indexes', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        const assetHex = Buffer.from('alpha').toString('hex');
+        let callCount = 0;
+        store.pipeline.mockImplementation((commands: () => void) => {
+            callCount += 1;
+            commands();
+            if (callCount === 1) return [new Set(['alpha']), { name: 'alpha' }];
+            return [];
+        });
+        const mintingSpy = jest.spyOn(repo, 'buildMintingDataFromUTxO').mockReturnValue(new Map([['alpha', [{ created_slot: 1, metadata: {}, txHash: 'tx' } as any]]]));
+
+        const info = repo.buildIndexInfoFromUTxO({
+            ...buildUtxo(assetHex, 42),
+            handles: [[policy, [assetHex]]]
+        } as any);
+
+        expect(mintingSpy).toHaveBeenCalled();
+        expect(info.holders.get(holder)).toEqual(new Set(['alpha']));
+        expect(info.handles.get('alpha')).toEqual({ name: 'alpha' });
+
+        const addUTxOSpy = jest.spyOn(repo, 'addUTxO').mockImplementation(jest.fn());
+        const addMintSpy = jest.spyOn(repo, 'addMintData').mockImplementation(jest.fn());
+        const updateSpy = jest.spyOn(repo, 'updateHandleIndexes').mockImplementation(jest.fn());
+        jest.spyOn(repo, 'buildIndexInfoFromUTxO').mockReturnValue({
+            mintingData: new Map(),
+            holders: new Map(),
+            handles: new Map()
+        } as any);
+
+        repo.addUTxOAndMintData(buildUtxo(assetHex, 43) as any, false);
+        repo.addUTxOAndMintData(buildUtxo(assetHex, 44) as any, true);
+
+        expect(addUTxOSpy).toHaveBeenCalledTimes(2);
+        expect(addMintSpy).toHaveBeenCalledTimes(2);
+        expect(updateSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('adds and removes UTxOs through slot and hash indexes', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        const utxo = buildUtxo(Buffer.from('alpha').toString('hex'), 50);
+
+        repo.addUTxO(utxo);
+        repo.removeUTxOs(['tx_a#0', 'tx_b#1']);
+
+        expect(store.addValueToOrderedSet).toHaveBeenCalledWith(IndexNames.UTXO_SLOT, 50, utxo.id);
+        expect(store.setHashOnIndex).toHaveBeenCalledWith(IndexNames.UTXO, utxo.id, utxo);
+        expect(store.removeValuesFromOrderedSet).toHaveBeenCalledWith(IndexNames.UTXO_SLOT, 'tx_a#0');
+        expect(store.removeKeyFromIndex).toHaveBeenCalledWith(IndexNames.UTXO, 'tx_b#1');
+    });
+
+    it('builds all holders from paginated holder indexes', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        store.getKeysFromIndex.mockReturnValue([holder]);
+
+        let callCount = 0;
+        store.pipeline.mockImplementation((commands: () => void) => {
+            callCount += 1;
+            commands();
+            if (callCount === 1) return [new Set(['alpha'])];
+            if (callCount === 2) return [new Set(['alpha'])];
+            if (callCount === 3) return [{ resolved_addresses: { ada: address } }];
+            return [];
+        });
+
+        const holders = repo.getAllHolders({ pagination: { page: 1, recordsPerPage: 1, sort: 'asc' } as any });
+
+        expect(holders).toHaveLength(1);
+        expect(holders[0]).toEqual(
+            expect.objectContaining({
+                address: holder,
+                default_handle: 'alpha',
+                total_handles: 1
+            })
+        );
+    });
+
+    it('saves handles and maintains slot/address/payment/subhandle indexes', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        const name = 'tiny@root';
+        const handle = repo.Internal.buildHandle({
+            name,
+            hex: Buffer.from(name).toString('hex'),
+            policy,
+            updated_slot_number: 123,
+            resolved_addresses: { ada: address },
+            image_hash: 'new_hash',
+            standard_image_hash: 'old_hash',
+            personalization: { validated_by: '', trial: true, nsfw: true, designer: { alias: 'd' } } as any
+        });
+        handle.holder = holder;
+        handle.holder_type = 'wallet';
+
+        const oldHandle = {
+            ...handle,
+            resolved_addresses: { ada: 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746' }
+        } as any;
+
+        repo.save(handle, oldHandle);
+
+        expect(store.setHashOnIndex).toHaveBeenCalledWith(IndexNames.HANDLE, name, handle);
+        expect(store.addValueToIndexedSet).toHaveBeenCalledWith(IndexNames.SUBHANDLE, 'root', name);
+        expect(store.removeValueFromIndexedSet).toHaveBeenCalledWith(IndexNames.ADDRESS, oldHandle.resolved_addresses.ada, name);
+        expect(store.addValueToIndexedSet).toHaveBeenCalledWith(IndexNames.ADDRESS, address, name);
+        expect(store.addValueToOrderedSet).toHaveBeenCalledWith(IndexNames.SLOT, 123, name);
+    });
+
+    it('selects default handle from OG and deterministic fallback sorters', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+
+        store.pipeline.mockReturnValueOnce([
+            { name: 'beta', og_number: 4, created_slot_number: 10 },
+            { name: 'alpha', og_number: 1, created_slot_number: 9 }
+        ]);
+        expect(repo.getDefaultHandle(new Set(['alpha', 'beta']) as any)?.name).toBe('alpha');
+
+        store.pipeline.mockReturnValueOnce([
+            { name: 'zeta', og_number: 0, created_slot_number: 10 },
+            { name: 'beta', og_number: 0, created_slot_number: 10 }
+        ]);
+        expect(repo.getDefaultHandle(new Set(['zeta', 'beta']) as any)?.name).toBe('beta');
+
+        expect(repo.Internal.sortOGHandle([{ name: 'x', og_number: 5 }, { name: 'y', og_number: 2 }] as any)?.name).toBe('y');
+        expect(repo.Internal.sortedByLength([{ name: 'long' }, { name: 'a' }] as any)).toEqual([{ name: 'a' }]);
+        expect(repo.Internal.sortByCreatedSlotNumber([{ created_slot_number: 2 }, { created_slot_number: 1 }] as any)).toEqual([{ created_slot_number: 1 }]);
+        expect(repo.Internal.sortAlphabetically([{ name: 'z' }, { name: 'a' }] as any)?.name).toBe('a');
+    });
+
+    it('buildPersonalizationData updates handle fields for valid datum payload', () => {
+        const repo = new HandlesRepository(buildStoreMock());
+        const handle = repo.Internal.buildHandle({
+            name: 'alpha',
+            hex: Buffer.from('alpha').toString('hex'),
+            policy,
+            resolved_addresses: { ada: address }
+        } as any);
+        jest.spyOn(common, 'decodeCborToJson').mockReturnValue({
+            constructor_0: [
+                {
+                    name: 'alpha',
+                    image: 'ipfs://img',
+                    mediaType: 'image/svg+xml',
+                    og: 0,
+                    og_number: 9,
+                    rarity: 'basic',
+                    length: 5,
+                    characters: 'letters',
+                    numeric_modifiers: '',
+                    version: 3
+                },
+                {},
+                {
+                    standard_image: 'ipfs://std',
+                    default: true,
+                    last_update_address: address,
+                    validated_by: 'validator',
+                    image_hash: 'img_hash',
+                    standard_image_hash: 'std_hash',
+                    svg_version: '2',
+                    agreed_terms: 'terms',
+                    migrate_sig_required: 1,
+                    trial: 0,
+                    nsfw: 1,
+                    bg_image: 'bg',
+                    bg_asset: 'asset',
+                    pfp_image: 'pfp',
+                    pfp_asset: 'pfp_asset',
+                    original_address: address,
+                    id_hash: '0x123',
+                    pz_enabled: true,
+                    last_edited_time: 100,
+                    resolved_addresses: { ada: '0x00' }
+                }
+            ]
+        } as any);
+
+        const result = repo.buildPersonalizationData(handle, 'd87980');
+
+        expect(result.nftAttributes?.og_number).toBe(9);
+        expect(result.projectAttributes?.standard_image).toBe('ipfs://std');
+        expect(handle.default).toBe(true);
+        expect(handle.image).toBe('ipfs://img');
+        expect(handle.standard_image_hash).toBe('std_hash');
+        expect(handle.id_hash).toBe('0x123');
+    });
+
+    it('buildPersonalizationData logs invalid datum payloads and returns null objects', () => {
+        const repo = new HandlesRepository(buildStoreMock());
+        const loggerSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
+        const handle = repo.Internal.buildHandle({
+            name: 'alpha',
+            hex: Buffer.from('alpha').toString('hex'),
+            policy,
+            resolved_addresses: { ada: address }
+        } as any);
+        jest.spyOn(common, 'decodeCborToJson').mockReturnValue({ constructor_0: ['invalid'] } as any);
+
+        const result = repo.buildPersonalizationData(handle, 'd87980');
+
+        expect(result).toEqual({ nftAttributes: null, projectAttributes: null });
+        expect(loggerSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                event: 'buildValidDatum.invalidMetadata'
+            })
+        );
+    });
+
+    it('parses valid subhandle settings datum shape', () => {
+        const repo = new HandlesRepository(buildStoreMock());
+        jest.spyOn(common, 'decodeCborToJson').mockReturnValue([
+            [true, false, [[1, 2]], { bg_image: '' }, true],
+            [false, true, [[3, 4]], { bg_image: 'x' }, false],
+            100,
+            1,
+            5,
+            'https://terms',
+            false,
+            'addr_test1'
+        ] as any);
+
+        expect(repo.parseSubHandleSettingsDatum('d87980')).toEqual({
+            nft: {
+                public_minting_enabled: true,
+                pz_enabled: false,
+                tier_pricing: [[1, 2]],
+                default_styles: { bg_image: '' },
+                save_original_address: true
+            },
+            virtual: {
+                public_minting_enabled: false,
+                pz_enabled: true,
+                tier_pricing: [[3, 4]],
+                default_styles: { bg_image: 'x' },
+                save_original_address: false
+            },
+            buy_down_price: 100,
+            buy_down_paid: 1,
+            buy_down_percent: 5,
+            agreed_terms: 'https://terms',
+            migrate_sig_required: false,
+            payment_address: 'addr_test1'
+        });
     });
 });

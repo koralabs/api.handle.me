@@ -22,6 +22,7 @@ class RootHandlesController {
                 res.set('Content-Type', 'text/plain; charset=utf-8');
                 res.set('x-handles-search-total', handleNames.length.toString());
                 res.status(handleRepo.currentHttpStatus()).send(handleNames.join('\n'));
+                return;
             }
 
             res.set('x-handles-search-total', handleResults.searchTotal.toString())

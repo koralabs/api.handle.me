@@ -14,6 +14,7 @@
 - In general, don't delete comments - unless you just edited that area and the comment purpose no longer exists
 - Please keep individual comments updated relevant to edited code so they don't get outdated
 - At session start, load into your context a significant understanding of the code and documentation (compensate at your discretion for token usage optimization)
+- Don't make writes to Valkey/Redis on the default port `(6379)`. Use a different `REDIS_PORT` if you need to troubleshoot writes. You're free to read the default port all you want for troubleshooting though.
 
 ## // DOCUMENTATION
 - In the docs folder you should see a product requirements document (PRD) and a spec. Keep the PRD and spec in mind when building out the application. DO NOT attempt to build a feature unless asked to do so. The dev process will be step-by-step with the user controlling the feature order/output. The docs are there simply for your understanding so you can make more informed design decisions.

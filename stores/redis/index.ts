@@ -45,7 +45,10 @@ export class RedisHandlesStore implements IApiStore {
         try {
             commands();
             //console.log('PIPELINE', RedisHandlesStore._pipeline)
-            const pipelineCommands = RedisHandlesStore._pipeline;
+            const pipelineCommands = RedisHandlesStore._pipeline ?? [];
+            if (pipelineCommands.length === 0) {
+                return [];
+            }
             const results = this.redisClientCall('batch', pipelineCommands);
             for (let i = 0; i < results.length; i++) {
                 // All results are returned
