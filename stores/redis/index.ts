@@ -131,7 +131,7 @@ export class RedisHandlesStore implements IApiStore {
                 );
             });
         }
-        Logger.log(`MintingData size ${mintingData.get(handleNames[0])?.length ?? 0} for first handle ${handleNames[0]}`);
+        Logger.log(`Built mint data for ${mintingData.size.toLocaleString()} handles`);
 
         this.pipeline(() => {
             for (const utxo of utxos) {
