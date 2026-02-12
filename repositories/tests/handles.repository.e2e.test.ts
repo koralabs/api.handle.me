@@ -113,6 +113,29 @@ describe('HandlesRepository query e2e', () => {
         expect((searchByName.handles as StoredHandle[])[0].name).toBe('burrito');
     });
 
+    it('supports names-only output, random sort, and slot-range boundary short-circuits', () => {
+        const namesOnly = repo.search(new HandlePaginationModel({ sort: 'random', handlesPerPage: '3' }), new HandleSearchModel(), true);
+        expect(namesOnly.searchTotal).toBeGreaterThan(0);
+        expect(namesOnly.handles.every((name) => typeof name === 'string')).toBe(true);
+
+        const noRangeMatches = repo.search(new HandlePaginationModel(), new HandleSearchModel({ length: '27-28' }), true);
+        expect(noRangeMatches.searchTotal).toBe(0);
+        expect(noRangeMatches.handles).toEqual([]);
+
+        const { firstSlot = 0, lastSlot = 0 } = repo.getMetrics();
+        const ascBeyondTip = repo.search(
+            new HandlePaginationModel({ slotNumber: `${lastSlot + 10_000}`, handlesPerPage: '1', sort: 'asc' }),
+            new HandleSearchModel()
+        );
+        expect(ascBeyondTip.handles).toEqual([]);
+
+        const descBeforeGenesis = repo.search(
+            new HandlePaginationModel({ slotNumber: `${firstSlot - 10_000}`, handlesPerPage: '1', sort: 'desc' }),
+            new HandleSearchModel()
+        );
+        expect(descBeforeGenesis.handles).toEqual([]);
+    });
+
     it('returns datum only for handles that have datum', () => {
         expect(repo.getHandleDatumByName('barbacoa')).toBe('datum_0');
         expect(repo.getHandleDatumByName('burrito')).toBeNull();

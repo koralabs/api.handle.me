@@ -376,6 +376,27 @@ describe('processBlock Tests', () => {
         expect(saveSpy).toHaveBeenCalledWith(savedHandle, undefined);
     });
 
+    it('logs and continues when datum cannot be stringified', async () => {
+        const loggerSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
+        const saveSpy = jest.spyOn(HandlesRepository.prototype, 'save');
+        jest.spyOn(HandlesRepository.prototype, 'getMetrics').mockReturnValue({});
+
+        const circularDatum: any = {};
+        circularDatum.self = circularDatum;
+
+        const block = txBlock({ policy: policyId, datum: undefined }) as BlockPraos;
+        const tx = block.transactions![0] as any;
+        tx.outputs[0].datum = circularDatum;
+
+        expect(() => ogmios['processBlock'](block)).not.toThrow();
+        expect(loggerSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                event: 'processBlock.decodingDatum'
+            })
+        );
+        expect(saveSpy).toHaveBeenCalled();
+    });
+
     it('Should update a handle when it is not a mint', async () => {
         const newAddress = 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc98p';
         const saveHandleUpdateSpy = jest.spyOn(HandlesRepository.prototype, 'save');
@@ -644,6 +665,184 @@ describe('processBlock Tests', () => {
             utxo: 'some_id#0',
             version: 0
         });
+    });
+
+    it('should process split outputs even when 100 output appears before 222 output in the same tx', async () => {
+        const handleName = 'split-order';
+        const hex = Buffer.from(handleName).toString('hex');
+        const asset100 = `${AssetNameLabel.LBL_100}${hex}`;
+        const asset222 = `${AssetNameLabel.LBL_222}${hex}`;
+        const cbor = 'd8799faa426f6700496f675f6e756d62657200446e616d654c746573745f73635f3030303145696d6167655835697066733a2f2f516d563965334e6e58484b71386e6d7a42337a4c725065784e677252346b7a456865415969563648756562367141466c656e6774680c467261726974794562617369634776657273696f6e01496d65646961547970654a696d6167652f6a7065674a63686172616374657273576c6574746572732c6e756d626572732c7370656369616c516e756d657269635f6d6f646966696572734001b24e7374616e646172645f696d6167655835697066733a2f2f516d563965334e6e58484b71386e6d7a42337a4c725065784e677252346b7a4568654159695636487565623671414862675f696d61676540497066705f696d6167654046706f7274616c404864657369676e65725835697066733a2f2f516d636b79584661486e51696375587067527846564b353251784d524e546d364e686577465055564e5a7a3148504676656e646f72404764656661756c7400536c6173745f7570646174655f6164647265737342abcd47736f6369616c735835697066733a2f2f516d566d3538696f5555754a7367534c474c357a6d635a62714d654d6355583251385056787742436e53544244764a696d6167655f6861736842abcd537374616e646172645f696d6167655f6861736842abcd4b7376675f76657273696f6e45312e302e304c76616c6964617465645f6279404c6167726565645f7465726d7340546d6967726174655f7369675f726571756972656400527265736f6c7665645f616464726573736573a34361646142abcd436274634f7133736b64736b6a6b656a326b6e644365746849333234656b646a6b3345747269616c00446e73667700ff';
+        jest.spyOn(HandlesRepository.prototype, 'getMetrics').mockReturnValue({});
+        jest.spyOn(ipfs, 'decodeCborFromIPFSFile').mockResolvedValue({ test: 'data' });
+
+        const block = txBlock({ policy: policyId, handleHexName: asset100, handleName, isMint: true, datum: cbor }) as BlockPraos;
+        const tx = block.transactions![0]! as any;
+        tx.id = 'split_tx';
+        tx.outputs = [
+            {
+                address: defaultAddress,
+                datum: cbor,
+                value: {
+                    ada: { lovelace: BigInt(1) },
+                    [policyId]: { [asset100]: BigInt(1) }
+                }
+            },
+            {
+                address: defaultAddress,
+                value: {
+                    ada: { lovelace: BigInt(1) },
+                    [policyId]: { [asset222]: BigInt(1) }
+                }
+            }
+        ];
+        tx.mint = {
+            [policyId]: {
+                [asset100]: BigInt(1),
+                [asset222]: BigInt(1)
+            }
+        };
+
+        expect(() => ogmios['processBlock'](block)).not.toThrow();
+
+        const saved = repo.getHandle(handleName);
+        expect(saved?.utxo).toBe('split_tx#1');
+        expect(saved?.reference_utxo).toBe('split_tx#0');
+    });
+
+    it('should not throw when a 100-token tx arrives before 222-token tx in the same block', async () => {
+        const handleName = 'tx-order';
+        const hex = Buffer.from(handleName).toString('hex');
+        const asset100 = `${AssetNameLabel.LBL_100}${hex}`;
+        const asset222 = `${AssetNameLabel.LBL_222}${hex}`;
+        const cbor = 'd8799faa426f6700496f675f6e756d62657200446e616d654c746573745f73635f3030303145696d6167655835697066733a2f2f516d563965334e6e58484b71386e6d7a42337a4c725065784e677252346b7a456865415969563648756562367141466c656e6774680c467261726974794562617369634776657273696f6e01496d65646961547970654a696d6167652f6a7065674a63686172616374657273576c6574746572732c6e756d626572732c7370656369616c516e756d657269635f6d6f646966696572734001b24e7374616e646172645f696d6167655835697066733a2f2f516d563965334e6e58484b71386e6d7a42337a4c725065784e677252346b7a4568654159695636487565623671414862675f696d61676540497066705f696d6167654046706f7274616c404864657369676e65725835697066733a2f2f516d636b79584661486e51696375587067527846564b353251784d524e546d364e686577465055564e5a7a3148504676656e646f72404764656661756c7400536c6173745f7570646174655f6164647265737342abcd47736f6369616c735835697066733a2f2f516d566d3538696f5555754a7367534c474c357a6d635a62714d654d6355583251385056787742436e53544244764a696d6167655f6861736842abcd537374616e646172645f696d6167655f6861736842abcd4b7376675f76657273696f6e45312e302e304c76616c6964617465645f6279404c6167726565645f7465726d7340546d6967726174655f7369675f726571756972656400527265736f6c7665645f616464726573736573a34361646142abcd436274634f7133736b64736b6a6b656a326b6e644365746849333234656b646a6b3345747269616c00446e73667700ff';
+        jest.spyOn(HandlesRepository.prototype, 'getMetrics').mockReturnValue({});
+        jest.spyOn(ipfs, 'decodeCborFromIPFSFile').mockResolvedValue({ test: 'data' });
+
+        const firstTx = txBlock({ policy: policyId, handleHexName: asset100, handleName, isMint: true, datum: cbor }).transactions![0]! as any;
+        firstTx.id = 'order_tx_100';
+        firstTx.outputs = [
+            {
+                address: defaultAddress,
+                datum: cbor,
+                value: {
+                    ada: { lovelace: BigInt(1) },
+                    [policyId]: { [asset100]: BigInt(1) }
+                }
+            }
+        ];
+        firstTx.mint = {
+            [policyId]: {
+                [asset100]: BigInt(1)
+            }
+        };
+
+        const secondTx = txBlock({ policy: policyId, handleHexName: asset222, handleName, isMint: true }).transactions![0]! as any;
+        secondTx.id = 'order_tx_222';
+        secondTx.outputs = [
+            {
+                address: defaultAddress,
+                value: {
+                    ada: { lovelace: BigInt(1) },
+                    [policyId]: { [asset222]: BigInt(1) }
+                }
+            }
+        ];
+        secondTx.mint = {
+            [policyId]: {
+                [asset222]: BigInt(1)
+            }
+        };
+
+        const block = txBlock({ policy: policyId }) as BlockPraos;
+        block.transactions = [firstTx, secondTx];
+
+        expect(() => ogmios['processBlock'](block)).not.toThrow();
+
+        const saved = repo.getHandle(handleName);
+        expect(saved?.utxo).toBe('order_tx_222#0');
+        expect(saved?.reference_utxo).toBe('order_tx_100#0');
+    });
+
+    it('should hard fail when mint data is missing for a handle update', async () => {
+        const handleName = 'missing-mint';
+        const hex = Buffer.from(handleName).toString('hex');
+        const asset100 = `${AssetNameLabel.LBL_100}${hex}`;
+        const cbor = 'd8799faa426f6700496f675f6e756d62657200446e616d654c746573745f73635f3030303145696d6167655835697066733a2f2f516d563965334e6e58484b71386e6d7a42337a4c725065784e677252346b7a456865415969563648756562367141466c656e6774680c467261726974794562617369634776657273696f6e01496d65646961547970654a696d6167652f6a7065674a63686172616374657273576c6574746572732c6e756d626572732c7370656369616c516e756d657269635f6d6f646966696572734001b24e7374616e646172645f696d6167655835697066733a2f2f516d563965334e6e58484b71386e6d7a42337a4c725065784e677252346b7a4568654159695636487565623671414862675f696d61676540497066705f696d6167654046706f7274616c404864657369676e65725835697066733a2f2f516d636b79584661486e51696375587067527846564b353251784d524e546d364e686577465055564e5a7a3148504676656e646f72404764656661756c7400536c6173745f7570646174655f6164647265737342abcd47736f6369616c735835697066733a2f2f516d566d3538696f5555754a7367534c474c357a6d635a62714d654d6355583251385056787742436e53544244764a696d6167655f6861736842abcd537374616e646172645f696d6167655f6861736842abcd4b7376675f76657273696f6e45312e302e304c76616c6964617465645f6279404c6167726565645f7465726d7340546d6967726174655f7369675f726571756972656400527265736f6c7665645f616464726573736573a34361646142abcd436274634f7133736b64736b6a6b656a326b6e644365746849333234656b646a6b3345747269616c00446e73667700ff';
+
+        jest.spyOn(HandlesRepository.prototype, 'getMetrics').mockReturnValue({});
+        jest.spyOn(ipfs, 'decodeCborFromIPFSFile').mockResolvedValue({ test: 'data' });
+
+        const block = txBlock({ policy: policyId, handleHexName: asset100, handleName, isMint: true, datum: cbor }) as BlockPraos;
+        const tx = block.transactions![0]! as any;
+        tx.id = 'missing_tx_100';
+        tx.outputs = [
+            {
+                address: defaultAddress,
+                datum: cbor,
+                value: {
+                    ada: { lovelace: BigInt(1) },
+                    [policyId]: { [asset100]: BigInt(1) }
+                }
+            }
+        ];
+        tx.mint = {
+            [policyId]: {
+                [asset100]: BigInt(1)
+            }
+        };
+
+        expect(() => ogmios['processBlock'](block)).toThrow('No minting data found for missing-mint while processing missing_tx_100#0');
+    });
+
+    it('should recover when 222 mint data arrives after a failed 100-only block', async () => {
+        const handleName = 'delayed-mint-data';
+        const hex = Buffer.from(handleName).toString('hex');
+        const asset100 = `${AssetNameLabel.LBL_100}${hex}`;
+        const asset222 = `${AssetNameLabel.LBL_222}${hex}`;
+        jest.spyOn(HandlesRepository.prototype, 'getMetrics').mockReturnValue({});
+
+        const firstBlock = txBlock({ policy: policyId, handleHexName: asset100, handleName, isMint: true }) as BlockPraos;
+        const firstTx = firstBlock.transactions![0]! as any;
+        firstTx.id = 'delayed_tx_100';
+        firstTx.outputs = [
+            {
+                address: defaultAddress,
+                value: {
+                    ada: { lovelace: BigInt(1) },
+                    [policyId]: { [asset100]: BigInt(1) }
+                }
+            }
+        ];
+        firstTx.mint = {
+            [policyId]: {
+                [asset100]: BigInt(1)
+            }
+        };
+
+        expect(() => ogmios['processBlock'](firstBlock)).toThrow('No minting data found for delayed-mint-data while processing delayed_tx_100#0');
+        expect(repo.getHandle(handleName)).toBeNull();
+
+        const secondBlock = txBlock({ policy: policyId, handleHexName: asset222, handleName, isMint: true }) as BlockPraos;
+        const secondTx = secondBlock.transactions![0]! as any;
+        secondTx.id = 'delayed_tx_222';
+        secondTx.outputs = [
+            {
+                address: defaultAddress,
+                value: {
+                    ada: { lovelace: BigInt(1) },
+                    [policyId]: { [asset222]: BigInt(1) }
+                }
+            }
+        ];
+        secondTx.mint = {
+            [policyId]: {
+                [asset222]: BigInt(1)
+            }
+        };
+
+        expect(() => ogmios['processBlock'](secondBlock)).not.toThrow();
+        expect(repo.getHandle(handleName)?.utxo).toBe('delayed_tx_222#0');
     });
 
     it('Should process 001 SubHandle settings token', async () => {

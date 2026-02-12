@@ -109,6 +109,8 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 
 ## Scanner and Rollback
 - Ogmios scanner processes each block transaction synchronously, updating UTxOs and indexes in order.
+- Before any per-UTxO handle updates, scanners normalize and preload minting data for the full block/scan batch so Handle (`222`) and Virtual SubHandle (`000`) mint records are available regardless of tx/output ordering.
+- Missing minting data during handle index updates is treated as a hard failure (scanner invariant), not a soft fallback.
 - Rollback lambda reconciles provider/store gaps over short and periodic long rollback windows.
 - Snapshot lambda can emit compressed UTxO snapshots for fast restore.
 
