@@ -10,7 +10,7 @@ const blackListedIpfsCids: string[] = [];
 const isTestnet = NETWORK.toLowerCase() !== 'mainnet';
 const magicSlotsRange = 50_000; // This is arbitrary and should be adjusted if not enough or too many slots come back from queries.
 
-process.env.INDEX_SCHEMA_VERSION = '51'
+process.env.INDEX_SCHEMA_VERSION = '1'
 process.env.UTXO_SCHEMA_VERSION = '1'
 
 /********** RewoundHandle IS USED TO FLAG THE HANDLE TO AVOID SAVING SLOT HISTORY ********************/
@@ -389,6 +389,16 @@ export class HandlesRepository {
             handles.set(keys[i + 1] as string, storedHandle);
         }
 
+        const existingHolderAddresses = [...new Set([...handles.values()].map((handle) => handle?.holder).filter((holderAddress): holderAddress is string => !!holderAddress && !holders.has(holderAddress)))];
+        if (existingHolderAddresses.length > 0) {
+            const existingHolderSets = this.store.pipeline(() => {
+                for (const holderAddress of existingHolderAddresses) this.store.getValuesFromIndexedSet(IndexNames.HOLDER, holderAddress);
+            }) as HolderHandleNames[];
+            existingHolderAddresses.forEach((holderAddress, index) => {
+                holders.set(holderAddress, existingHolderSets[index] ?? new Set<string>());
+            });
+        }
+
         return {
             mintingData,
             holders,
@@ -473,10 +483,12 @@ export class HandlesRepository {
 
     public getAllHolders(params: { pagination: HolderPaginationModel; }): Holder[] {
         const pagination = params.pagination;
-        const startRecord = (pagination.page - 1) * pagination.recordsPerPage
-        const holderAddresses = this.store.getKeysFromIndex(IndexNames.HOLDER,
-            { limit: { offset: startRecord, count: startRecord + pagination.recordsPerPage}, orderBy: pagination.sort }
-        ) as string[];
+        const startRecord = (pagination.page - 1) * pagination.recordsPerPage;
+        const holderAddresses = (this.store.getValuesFromOrderedSet(
+            IndexNames.HOLDER_COUNT,
+            0,
+            { orderBy: pagination.sort, limit: { offset: startRecord, count: pagination.recordsPerPage } }
+        ) ?? []).map((holderAddress) => `${holderAddress}`);
         const holders: Holder[] = [];
 
         const holderHandleNames: HolderHandleNames[] = (this.store.pipeline(() => {
@@ -627,6 +639,7 @@ export class HandlesRepository {
         holders?.set(handle.holder, holderHandles.add(handle.name));
 
         this.store.addValueToIndexedSet(IndexNames.HOLDER, handle.holder, handle.name);
+        this.store.addValueToOrderedSet(IndexNames.HOLDER_COUNT, holderHandles.size, handle.holder);
     }
 
     public updateHandleIndexes(utxo: UTxOWithTxInfo, mintingData?: Map<string, MintingData[]>, handles?: Map<string, StoredHandle>, holders?: Map<string, HolderHandleNames>): void {
@@ -780,7 +793,7 @@ export class HandlesRepository {
                 this.updateHolder(handle, holders);
                 
                 if (existingHandle && existingHandle.holder !== handle.holder) {
-                    this._removeHandleFromHolder(existingHandle.holder, name)
+                    this._removeHandleFromHolder(existingHandle.holder, name, holders)
                 }
                 
                 handles?.set(handle.name, handle);
@@ -1058,9 +1071,19 @@ export class HandlesRepository {
         };
     };
 
-    private _removeHandleFromHolder(holderAddress: string, handleName: string) {
+    private _removeHandleFromHolder(holderAddress: string, handleName: string, holders?: Map<string, HolderHandleNames>) {
+        holders?.get(holderAddress)?.delete(handleName)
         this.store.removeValueFromIndexedSet(IndexNames.HOLDER, holderAddress, handleName);
         this.store.removeValueFromIndexedSet(IndexNames.DEFAULT_HANDLE, holderAddress, handleName);
+
+        const remainingHandles = holders ? holders.get(holderAddress) : this.store.getValuesFromIndexedSet(IndexNames.HOLDER, holderAddress)
+        if (remainingHandles?.size) {
+            this.store.addValueToOrderedSet(IndexNames.HOLDER_COUNT, remainingHandles.size, holderAddress);
+        } else {
+            holders?.delete(holderAddress);
+            this.store.removeValuesFromOrderedSet(IndexNames.HOLDER_COUNT, holderAddress);
+        }
+        
         const oldDecodedAddress = decodeAddress(holderAddress);
         if (oldDecodedAddress) {
             // if there is an old stake key hash, remove it from the index

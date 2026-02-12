@@ -808,6 +808,14 @@ paths:
         required: false
         schema:
           type: integer
+      - name: sort
+        in: query
+        description: Sort holders by `total_handles` count (`desc` by default, `asc` for smallest-first).
+        required: false
+        schema:
+          type: string
+          enum: [asc, desc]
+          default: desc
       responses:
         '200':
           description: List of Handle holders and some simple stats

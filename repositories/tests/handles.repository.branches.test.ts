@@ -103,6 +103,7 @@ describe('HandlesRepository branch tests', () => {
 
         expect(store.addValueToIndexedSet).toHaveBeenCalledWith(IndexNames.DEFAULT_HANDLE, holder, 'alpha');
         expect(store.addValueToIndexedSet).toHaveBeenCalledWith(IndexNames.HOLDER, holder, 'alpha');
+        expect(store.addValueToOrderedSet).toHaveBeenCalledWith(IndexNames.HOLDER_COUNT, 1, holder);
         expect(holderMap.get(holder)?.has('alpha')).toBe(true);
         expect((handle as any).default).toBeUndefined();
 
@@ -113,6 +114,9 @@ describe('HandlesRepository branch tests', () => {
         } as any;
         repo.updateHolder(removeDefault);
         expect(store.removeValueFromIndexedSet).toHaveBeenCalledWith(IndexNames.DEFAULT_HANDLE, holder, 'alpha');
+
+        repo.Internal.removeHandleFromHolder(holder, 'alpha');
+        expect(store.removeValuesFromOrderedSet).toHaveBeenCalledWith(IndexNames.HOLDER_COUNT, holder);
     });
 
     it('logs unknown asset labels while still saving handle state', () => {
@@ -1049,7 +1053,7 @@ describe('HandlesRepository branch tests', () => {
     it('builds all holders from paginated holder indexes', () => {
         const store = buildStoreMock();
         const repo = new HandlesRepository(store);
-        store.getKeysFromIndex.mockReturnValue([holder]);
+        store.getValuesFromOrderedSet.mockReturnValueOnce([holder]);
 
         let callCount = 0;
         store.pipeline.mockImplementation((commands: () => void) => {
@@ -1061,7 +1065,7 @@ describe('HandlesRepository branch tests', () => {
             return [];
         });
 
-        const holders = repo.getAllHolders({ pagination: { page: 1, recordsPerPage: 1, sort: 'asc' } as any });
+        const holders = repo.getAllHolders({ pagination: { page: 1, recordsPerPage: 1, sort: 'desc' } as any });
 
         expect(holders).toHaveLength(1);
         expect(holders[0]).toEqual(
@@ -1071,6 +1075,25 @@ describe('HandlesRepository branch tests', () => {
                 total_handles: 1
             })
         );
+        expect(store.getValuesFromOrderedSet).toHaveBeenNthCalledWith(
+            1,
+            IndexNames.HOLDER_COUNT,
+            0,
+            expect.objectContaining({
+                orderBy: 'desc',
+                limit: { offset: 0, count: 1 }
+            })
+        );
+    });
+
+    it('returns no holders when holder count ranking is empty', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        store.getValuesFromOrderedSet.mockReturnValueOnce([]);
+
+        const holders = repo.getAllHolders({ pagination: { page: 1, recordsPerPage: 2, sort: 'desc' } as any });
+
+        expect(holders).toEqual([]);
     });
 
     it('saves handles and maintains slot/address/payment/subhandle indexes', () => {

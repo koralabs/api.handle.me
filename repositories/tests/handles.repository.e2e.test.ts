@@ -1,4 +1,4 @@
-import { HandlePaginationModel, HandleSearchModel, HandleType, HolderPaginationModel, Rarity, StoredHandle } from '@koralabs/kora-labs-common';
+import { buildHolderInfo, HandlePaginationModel, HandleSearchModel, HandleType, HolderPaginationModel, Rarity, StoredHandle } from '@koralabs/kora-labs-common';
 import { RedisHandlesStore } from '../../stores/redis';
 import { HandlesRepository } from '../handlesRepository';
 import { handlesFixture } from './fixtures/handles';
@@ -6,6 +6,7 @@ import { handlesFixture } from './fixtures/handles';
 const policy = 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a';
 const holder = 'stake_test1urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70';
 const address = 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q';
+const secondAddress = 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746';
 
 describe('HandlesRepository query e2e', () => {
     const store = new RedisHandlesStore();
@@ -83,6 +84,30 @@ describe('HandlesRepository query e2e', () => {
             })
         );
         expect(mainHolder?.handles).toEqual(expect.arrayContaining(['barbacoa', 'burrito', 'taco', 'v@taco']));
+    });
+
+    it('orders holders by total handle count with desc default and asc override', () => {
+        const secondHolder = buildHolderInfo(secondAddress);
+        const tiny = repo.Internal.buildHandle({
+            hex: Buffer.from('tiny-second').toString('hex'),
+            name: 'tiny-second',
+            policy,
+            handle_type: HandleType.HANDLE,
+            utxo: 'utxo_second#0',
+            lovelace: 1,
+            resolved_addresses: { ada: secondAddress },
+            updated_slot_number: Date.now()
+        });
+        tiny.holder = secondHolder.address;
+        tiny.holder_type = secondHolder.type;
+        repo.updateHolder(tiny);
+        repo.save(tiny);
+
+        const desc = repo.getAllHolders({ pagination: new HolderPaginationModel({ recordsPerPage: '10' }) });
+        const asc = repo.getAllHolders({ pagination: new HolderPaginationModel({ recordsPerPage: '10', sort: 'asc' }) });
+
+        expect(desc[0].total_handles).toBeGreaterThanOrEqual(desc[1].total_handles);
+        expect(asc[0].total_handles).toBeLessThanOrEqual(asc[1].total_handles);
     });
 
     it('filters handles by rarity, holder and type', () => {

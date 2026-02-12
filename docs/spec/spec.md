@@ -87,6 +87,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - `GET /holders`
 - `GET /holders/:address`
 - `GET /root-handles` (supports handle search filters and `minting_type` filter)
+- `GET /holders` defaults to `sort=desc` by `total_handles` (highest holder counts first); `sort=asc` returns smallest holder counts first.
 
 ### Utility & Internal
 - `POST /datum` CBOR/JSON encode/decode utility
