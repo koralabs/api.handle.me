@@ -58,6 +58,8 @@ npm test
 ```sh
 npm run test:critical
 ```
+- Test isolation:
+  - `test:e2e` and `test:critical` run against a dedicated local Valkey instance on `127.0.0.1:6380` by default (`REDIS_HOST` / `REDIS_PORT`), so they do not wipe a live scan running on `6379`.
 
 &nbsp;
 

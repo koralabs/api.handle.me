@@ -1,14 +1,53 @@
 #!/bin/bash
 set -eu
 set -a && source .env && set +a
-if ! pgrep -x "valkey-server" > /dev/null
+REDIS_PORT=${REDIS_PORT:-6380}
+REDIS_HOST=${REDIS_HOST:-127.0.0.1}
+VALKEY_BIN=$(command -v valkey-server || true)
+
+if [ -z "${VALKEY_BIN}" ]
 then
     if [ "$(printf '%s\n' 24.04 "$(lsb_release -rs)" | sort -V | head -n1)" = "24.04" ]
     then
-        echo "Starting Valkey - connecting to 6379"
-        sudo apt install valkey
-        sudo systemctl enable valkey-server
+        echo "Installing Valkey"
+        sudo apt install -y valkey
+        VALKEY_BIN=$(command -v valkey-server || true)
     else
         echo "You need to update your version of Ubuntu to at least 24.04 to install and run Valkey"
+        exit 1
     fi
 fi
+
+if ! ss -lnt | grep -q ":${REDIS_PORT} "
+then
+    mkdir -p tmp
+    VALKEY_PIDFILE="${PWD}/tmp/valkey-${REDIS_PORT}.pid"
+    VALKEY_LOGFILE="${PWD}/tmp/valkey-${REDIS_PORT}.log"
+    echo "Starting test Valkey instance - connecting to ${REDIS_HOST}:${REDIS_PORT}"
+    "${VALKEY_BIN}" \
+        --bind "${REDIS_HOST}" \
+        --port "${REDIS_PORT}" \
+        --save "" \
+        --appendonly no \
+        --daemonize yes \
+        --dir "${PWD}/tmp" \
+        --pidfile "${VALKEY_PIDFILE}" \
+        --logfile "${VALKEY_LOGFILE}"
+
+    for _ in $(seq 1 30)
+    do
+        if ss -lnt | grep -q ":${REDIS_PORT} "
+        then
+            break
+        fi
+        sleep 0.1
+    done
+fi
+
+if ! ss -lnt | grep -q ":${REDIS_PORT} "
+then
+    echo "Unable to start Valkey on ${REDIS_HOST}:${REDIS_PORT}"
+    exit 1
+fi
+
+echo "Valkey ready on ${REDIS_HOST}:${REDIS_PORT}"

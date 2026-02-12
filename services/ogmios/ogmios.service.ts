@@ -156,7 +156,7 @@ class OgmiosService {
                     }
                     break;
             }
-            this._rpcRequest('nextBlock', {}, 'next-block');
+                            this._rpcRequest('nextBlock', {}, 'next-block');
         }, 1).push)
         client.on('error', (error) => {
             Logger.log({ message: `OgmiosClient Error: ${error}`, category: LogCategory.ERROR, event: 'OgmiosClient.Error' });
@@ -186,30 +186,13 @@ class OgmiosService {
     private processBlock = (txBlock: BlockPraos) => {
         
         const currentSlot = txBlock?.slot ?? this.scanningRepo.getMetrics().currentSlot ?? 0;
+        const transactionsWithUtxos: { txBody: NonNullable<BlockPraos['transactions']>[number], utxos: UTxOWithTxInfo[] }[] = [];
+
         for (let b = 0; b < (txBlock?.transactions ?? []).length; b++) {
             const txBody = txBlock?.transactions?.[b];
+            if (!txBody) continue;
             const txId = txBody?.id;
-
-            // Look for burn transactions
-            //const assetNameInMintAssets = txBody?.mint?.[policyId]?.[assetName] !== undefined;
-            const mintAssets = Object.entries(txBody?.mint ?? {});
-            for (let i = 0; i < mintAssets.length; i++) {
-                const [policy, assetInfo] = mintAssets[i];
-                if (HANDLE_POLICIES.contains(NETWORK as Network, policy)) {
-                    for (const [assetName, quantity] of Object.entries(assetInfo)) {
-                        if (quantity == BigInt(-1)) {
-                            const { name, isCip67 } = getHandleNameFromAssetName(assetName);
-                            if (!isCip67 || assetName.startsWith(AssetNameLabel.LBL_222) || assetName.startsWith(AssetNameLabel.LBL_000)) {
-                                const handle = this.scanningRepo.getHandle(name);
-                                if (!handle) continue;
-                                this.scanningRepo.removeHandle(handle);
-                            }
-                        }
-                    }
-                }
-            }
-
-            const utxos: UTxOWithTxInfo[] = []
+            const utxos: UTxOWithTxInfo[] = [];
 
             // Iterate through all the outputs and find asset keys that start with our policyId
             for (let i = 0; i < (txBody?.outputs ?? []).length; i++) {
@@ -270,6 +253,30 @@ class OgmiosService {
                     }
 
                     utxos.push(utxo);
+                }
+            }
+
+            transactionsWithUtxos.push({ txBody, utxos });
+        }
+
+        this.scanningRepo.addMintDataFromUTxOs(transactionsWithUtxos.flatMap((entry) => entry.utxos));
+
+        for (const { txBody, utxos } of transactionsWithUtxos) {
+            // Look for burn transactions
+            const mintAssets = Object.entries(txBody?.mint ?? {});
+            for (let i = 0; i < mintAssets.length; i++) {
+                const [policy, assetInfo] = mintAssets[i];
+                if (HANDLE_POLICIES.contains(NETWORK as Network, policy)) {
+                    for (const [assetName, quantity] of Object.entries(assetInfo)) {
+                        if (quantity == BigInt(-1)) {
+                            const { name, isCip67 } = getHandleNameFromAssetName(assetName);
+                            if (!isCip67 || assetName.startsWith(AssetNameLabel.LBL_222) || assetName.startsWith(AssetNameLabel.LBL_000)) {
+                                const handle = this.scanningRepo.getHandle(name);
+                                if (!handle) continue;
+                                this.scanningRepo.removeHandle(handle);
+                            }
+                        }
+                    }
                 }
             }
 

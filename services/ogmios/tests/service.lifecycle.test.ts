@@ -213,4 +213,37 @@ describe('OgmiosService lifecycle tests', () => {
 
         expect(rpcSpy).toHaveBeenCalledWith('findIntersection', { points: [{ slot: 1, id: 'tip_hash' }] }, 'find-intersection');
     });
+
+    it('stop closes websocket immediately when idle', async () => {
+        const repo = createRepoMock();
+        const service = new OgmiosService(repo);
+        const close = jest.fn();
+        (service as any).client = {
+            readyState: WebSocket.OPEN,
+            close
+        };
+
+        await service.stop();
+
+        expect(close).toHaveBeenCalled();
+        expect((service as any).stopRequested).toBe(true);
+    });
+
+    it('stop waits for active block processing before resetting client', async () => {
+        jest.useFakeTimers();
+        const repo = createRepoMock();
+        const service = new OgmiosService(repo);
+        const resetSpy = jest.spyOn(service as any, '_resetClient').mockImplementation(jest.fn());
+        (service as any).isProcessingBlock = true;
+
+        const stopPromise = service.stop();
+        await Promise.resolve();
+        expect(resetSpy).not.toHaveBeenCalled();
+
+        (service as any).isProcessingBlock = false;
+        await jest.advanceTimersByTimeAsync(50);
+        await stopPromise;
+
+        expect(resetSpy).toHaveBeenCalled();
+    });
 });

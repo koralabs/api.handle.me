@@ -406,11 +406,11 @@ describe('RedisHandlesStore critical path tests', () => {
         (RedisHandlesStore as any)._worker.postMessage = ({ id, reply }: any) => {
             reply.postMessage({ id, ok: false, result: 'fallback', error: { message: 'worker-failed' } });
         };
-        expect(store.redisClientCall('get', 'key')).toBe('fallback');
+        expect(() => store.redisClientCall('get', 'key')).toThrow('worker-failed');
         expect(loggerSpy).toHaveBeenCalledWith(expect.objectContaining({ event: 'redisClientCall.errorFromPostMessage' }));
     });
 
-    it('logs default worker failure message when postMessage error payload is missing', () => {
+    it('throws default worker failure message when postMessage error payload is missing', () => {
         const store = new RedisHandlesStore();
         const loggerSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
         const atomicsSpy = jest.spyOn(Atomics, 'wait');
@@ -422,7 +422,7 @@ describe('RedisHandlesStore critical path tests', () => {
         };
 
         atomicsSpy.mockReturnValueOnce('ok' as never);
-        expect(store.redisClientCall('get', 'key')).toBe('fallback');
+        expect(() => store.redisClientCall('get', 'key')).toThrow('GlideClient get failed');
         expect(loggerSpy).toHaveBeenCalledWith(
             expect.objectContaining({
                 event: 'redisClientCall.errorFromPostMessage',

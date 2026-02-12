@@ -37,6 +37,7 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context:AWSLambda
             const txList = await fetchTxList(b.hash);
             
             const builtUTxOs = buildUTxOsFromKoiosTxs(txList ?? []);
+            handlesRepo.addMintDataFromUTxOs(builtUTxOs);
 
             builtUTxOs.forEach((utxo) => {
                 // ********** BURNS ************* //
@@ -74,4 +75,3 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context:AWSLambda
         body: ''
     };
 }
-
