@@ -10,6 +10,9 @@ const blackListedIpfsCids: string[] = [];
 const isTestnet = NETWORK.toLowerCase() !== 'mainnet';
 const magicSlotsRange = 50_000; // This is arbitrary and should be adjusted if not enough or too many slots come back from queries.
 
+process.env.INDEX_SCHEMA_VERSION = '51'
+process.env.UTXO_SCHEMA_VERSION = '1'
+
 /********** RewoundHandle IS USED TO FLAG THE HANDLE TO AVOID SAVING SLOT HISTORY ********************/
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export interface RewoundHandle extends StoredHandle {}
