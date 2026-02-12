@@ -7,8 +7,8 @@ process.env.NODE_ENV = 'test';
 const config = {
     'preset': 'ts-jest/presets/default-esm',
     'testEnvironment': 'node',
-    'globalTeardown': './repositories/tests/globalTeardown.ts',
-    'silent': true
+    'silent': true,
+    'testPathIgnorePatterns': ['\\.e2e\\.test\\.ts$']
 
 }
 export default config

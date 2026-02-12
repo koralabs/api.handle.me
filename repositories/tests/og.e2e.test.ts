@@ -3,14 +3,20 @@ import { RedisHandlesStore } from '../../stores/redis';
 import { HandlesRepository } from '../handlesRepository';
 import { handles, handlesWithDifferentLengths, handlesWithDifferentSlotNumbers, ogHandles } from './fixtures/handles';
 
-const storeInstance = new RedisHandlesStore().initialize();
+const storeInstance = new RedisHandlesStore();
 const repo = new HandlesRepository(storeInstance);
 
 describe('getDefaultHandle', () => {
-    beforeAll(() => {
+    beforeAll(async () => {
+        await repo.initialize();
+        repo.rollBackToGenesis();
         for (const handle of [...ogHandles, ...handlesWithDifferentLengths, ...handlesWithDifferentSlotNumbers, ...handles]) {
             storeInstance.setHashOnIndex(IndexNames.HANDLE, handle.name, handle as unknown as ApiIndexType);
         }
+    });
+
+    afterAll(() => {
+        repo.destroy();
     });
 
     it('should sort OGs', () => {
@@ -34,8 +40,16 @@ describe('getDefaultHandle', () => {
     });
 
     it('should sort alphabetically', () => {
-        const handle = repo.getDefaultHandle(new Set<string>(handles.map(h => h.name)));
-        expect(handle).toEqual(handles[1]);
+        const sameSlotHandles = handles.map((handle) => ({
+            ...handle,
+            created_slot_number: 1,
+            updated_slot_number: 1
+        }));
+        sameSlotHandles.forEach((handle) => {
+            storeInstance.setHashOnIndex(IndexNames.HANDLE, handle.name, handle as unknown as ApiIndexType);
+        });
+        const defaultHandle = repo.getDefaultHandle(new Set<string>(sameSlotHandles.map((handle) => handle.name)));
+        expect(defaultHandle?.name).toEqual('10');
     });
 
     it('should sort by OG when new handle has OG', () => {

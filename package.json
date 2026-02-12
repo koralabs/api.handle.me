@@ -17,13 +17,15 @@
     "ogmios": "chmod +x ./shell/start_local.sh && ./shell/start_local.sh",
     "api": "tsx -r tsconfig-paths/register -r dotenv/config express.ts",
     "readonly": "READ_ONLY_STORE=true PORT=3142 tsx -r tsconfig-paths/register -r dotenv/config express.ts",
-    "test": "chmod +x ./shell/local_valkey.sh && ./shell/local_valkey.sh && (export NETWORK=preview; jest --forceExit --coverage --runInBand)",
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "jest -c jest.config.ts --runInBand",
+    "test:e2e": "chmod +x ./shell/local_valkey.sh && ./shell/local_valkey.sh && (export NETWORK=preview; jest -c jest.e2e.config.ts --forceExit --runInBand)",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint --ext=.js,.ts --fix --max-warnings=0 ."
   },
   "dependencies": {
     "@cardano-ogmios/client": "^6.11.0",
     "@cardano-ogmios/schema": "^6.11.0",
-    "@koralabs/kora-labs-common": "6.4.9",
+    "@koralabs/kora-labs-common": "6.4.10",
     "@stricahq/cardano-codec": "^2.0.4",
     "@valkey/valkey-glide": "^2.0.1",
     "@vendia/serverless-express": "^4.12.6",

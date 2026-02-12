@@ -4,7 +4,7 @@ import { HandlesRepository } from '../handlesRepository';
 module.exports = async () => {
     for (const store of [RedisHandlesStore]) {
         const repo = new HandlesRepository(new store());
-        repo.initialize();
+        await repo.initialize();
         repo.destroy();
     }
 }

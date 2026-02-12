@@ -1,4 +1,5 @@
 import * as cbor from '@koralabs/kora-labs-common/utils/cbor';
+import { Logger } from '@koralabs/kora-labs-common';
 import * as config from '../../config';
 import { decodeCborFromIPFSFile } from './index';
 import * as ipfs from './requestIpfs';
@@ -41,6 +42,83 @@ describe('decodeCborFromIPFSFile tests', () => {
         const result = await decodeCborFromIPFSFile(cid);
         expect(result).toEqual({ test: 'test' });
         expect(requestIpfsSpy).toBeCalledTimes(2);
-        expect(requestIpfsSpy).nthCalledWith(2, `https://ipfs.io/ipfs/${cid}?pinataGatewayToken=undefined`);
+        expect(requestIpfsSpy).nthCalledWith(2, expect.stringMatching(new RegExp(`https://ipfs\\.io/ipfs/${cid}\\?pinataGatewayToken=`)));
+    });
+
+    it('should unwrap constructor_0 encoded payloads', async () => {
+        jest.spyOn(config, 'getIpfsGateway').mockReturnValue('https://ipfs.io/ipfs/');
+        jest.spyOn(ipfs, 'requestIpfs').mockResolvedValue({
+            statusCode: 200,
+            cbor: 'd879'
+        });
+        jest.spyOn(cbor, 'decodeCborToJson').mockReturnValue({
+            constructor_0: [{ fromConstructor: true }]
+        } as any);
+
+        const result = await decodeCborFromIPFSFile('zb2constructor');
+        expect(result).toEqual({ fromConstructor: true });
+    });
+
+    it('should log and return undefined when request result contains error', async () => {
+        jest.spyOn(config, 'getIpfsGateway').mockReturnValue('https://ipfs.io/ipfs/');
+        jest.spyOn(ipfs, 'requestIpfs').mockResolvedValue({
+            statusCode: 200,
+            error: 'upstream error',
+            cbor: undefined
+        });
+        const logSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
+
+        const result = await decodeCborFromIPFSFile('zb2error');
+
+        expect(result).toBeUndefined();
+        expect(logSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                event: 'decodeCborFromIPFSFile.error'
+            })
+        );
+    });
+
+    it('should log parse errors when cbor decoding fails', async () => {
+        jest.spyOn(config, 'getIpfsGateway').mockReturnValue('https://ipfs.io/ipfs/');
+        jest.spyOn(ipfs, 'requestIpfs').mockResolvedValue({
+            statusCode: 200,
+            cbor: 'd879'
+        });
+        jest.spyOn(cbor, 'decodeCborToJson').mockImplementation(() => {
+            throw new Error('bad cbor');
+        });
+        const logSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
+
+        const result = await decodeCborFromIPFSFile('zb2badcbor');
+
+        expect(result).toBeUndefined();
+        expect(logSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                event: 'decodeCborFromIPFSFile.parseJSON.error'
+            })
+        );
+    });
+
+    it('should log and return undefined when backup gateway is invalid', async () => {
+        const getGatewaySpy = jest
+            .spyOn(config, 'getIpfsGateway')
+            .mockReturnValueOnce('https://ipfs.io/ipfs/')
+            .mockReturnValueOnce('invalid');
+        jest.spyOn(ipfs, 'requestIpfs').mockResolvedValue({
+            statusCode: 500,
+            cbor: undefined
+        });
+        const logSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
+
+        const result = await decodeCborFromIPFSFile('zb2invalidbackup');
+
+        expect(result).toBeUndefined();
+        expect(getGatewaySpy).toBeCalledTimes(2);
+        expect(logSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                event: 'decodeCborFromIPFSFile.error',
+                message: expect.stringContaining('Backup gateway')
+            })
+        );
     });
 });

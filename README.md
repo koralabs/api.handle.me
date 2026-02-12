@@ -41,6 +41,22 @@ docker run -p 3141:3141 -v <path_to_node.socket_folder>:/ipc -v handles:/app/han
 
 &nbsp;
 
+## Running Automated Tests
+- Unit tests:
+```sh
+npm run test:unit
+```
+- E2E tests (Valkey-backed):
+```sh
+npm run test:e2e
+```
+- Full suite:
+```sh
+npm test
+```
+
+&nbsp;
+
 ## TESTNET ENVIRONMENTS
 To use Preview or PreProd environments just add `-e NETWORK=preview` or `-e NETWORK=preprod` to either of the `docker run...` commands.
 
