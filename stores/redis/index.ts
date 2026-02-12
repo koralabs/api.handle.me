@@ -109,7 +109,20 @@ export class RedisHandlesStore implements IApiStore {
         // TODO: This will have to be chunked to 10k at a time
         const handles = new Map<string, StoredHandle>();
         const holders = new Map<string, HolderHandleNames>();
-        const mintingData: Map<string, MintingData[]> = this.getIndex(IndexNames.MINT) as Map<string, MintingData[]>
+        const mintingData = new Map<string, MintingData[]>();
+        const mintHandles = this.getKeysFromIndex(IndexNames.MINT) as string[];
+        if (mintHandles.length) {
+            const mintValues = this.pipeline(() => {
+                mintHandles.forEach((handleName) => this.getValuesFromIndexedSet(IndexNames.MINT, handleName));
+            }) as Set<string>[];
+
+            mintHandles.forEach((handleName, index) => {
+                mintingData.set(
+                    handleName,
+                    Array.from(mintValues[index] ?? []).map((md) => JSON.parse(md))
+                );
+            });
+        }
         this.pipeline(() => {
             for (const utxo of utxos) {
                 utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo, mintingData, handles, holders);
@@ -488,7 +501,9 @@ export class RedisHandlesStore implements IApiStore {
 
         const { ok, result, error } = msg.message;
         if (!ok) {
-            Logger.log({ message: error?.message || `GlideClient ${cmd} failed`, category: LogCategory.ERROR, event: 'redisClientCall.errorFromPostMessage' });
+            const message = error?.message || `GlideClient ${cmd} failed`;
+            Logger.log({ message, category: LogCategory.ERROR, event: 'redisClientCall.errorFromPostMessage' });
+            throw new Error(message);
         }
         return result;
     }
