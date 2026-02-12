@@ -54,6 +54,10 @@ npm run test:e2e
 ```sh
 npm test
 ```
+- Critical processing coverage gate (UTxO + handle + holder paths):
+```sh
+npm run test:critical
+```
 
 &nbsp;
 

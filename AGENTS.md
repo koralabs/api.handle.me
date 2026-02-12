@@ -29,6 +29,12 @@
 - In production, we use ALB fronted AWS Lambdas and a Valkey store. Each of the `/lambdas` are the entry points for their role.
 - It is important that the scanning side of the code remains synchronous (no async calls) as the order of UTxO processing matters.
 - The API side can and should take advantage of async calls.
+- The store pipeline is a way to batch many valkey calls, but can be tricky with code that expects an imnmediate result (since the call will be queued and batched later). Keep this in mind when troubleshooting or designing a new feature.
 
 ## // DEPLOYMENT
 - Most of the deplolymnet code is in a separate private repository to keep deployment secrets secret.
+
+## // CRITICAL UNDERSTANDING
+- A Handle address has to be correct 100% of the time. There are NO exceptions. If a single address is wrong, the whole protocol, project, and business is a failure. 
+- Handles can NEVER double mint. If a double mint ever happens and isn't immediately remedied (duplicate is burned), the whole protocol, project, and business is a failure.
+- All other Handle properties MUST be accurate. It's a blockchain, Handles are first class resolvers - accuracy is demanded.
