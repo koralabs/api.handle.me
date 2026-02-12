@@ -1,10 +1,11 @@
-import { ApiIndexType, chunk, Holder, HolderHandleNames, IApiMetrics, IApiStore, IHandleFileContent, IndexNames, ISlotHistory, isNumeric, LogCategory, Logger, MintingData, NETWORK, SortAndLimitOptions, StoredHandle, UTxOFunctionName, UTxOFunctions } from '@koralabs/kora-labs-common';
+import { ApiIndexType, chunk, Holder, HolderHandleNames, IApiMetrics, IApiStore, IHandleFileContent, IndexNames, ISlotHistory, isNumeric, LogCategory, Logger, MintingData, NETWORK, SortAndLimitOptions, StoredHandle, UTxOFunctionName, UTxOFunctions, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { GlideString, HashDataType, SortOptions } from '@valkey/valkey-glide';
 import { promisify } from 'util';
 import { MessageChannel, receiveMessageOnPort, Worker } from 'worker_threads';
 import { inflate } from 'zlib';
 import { DISABLE_HANDLES_SNAPSHOT, NODE_ENV } from '../../config';
 import { handleEraBoundaries, MAX_SETS_PER_PIPE, META_INDEXES, ORDERED_SLOTS } from '../../config/constants';
+import { getHandleNameFromAssetName } from '../../services/ogmios/utils';
 
 // const glideClient = await GlideClient.createClient({
 //       addresses: [{ host: 'https://localhost', port: 6379 }],
@@ -108,25 +109,30 @@ export class RedisHandlesStore implements IApiStore {
         
         const utxos = this.pipeline(() => {
             utxoIds.map(utxoId => this.getHashFromIndex(IndexNames.UTXO, utxoId)).filter(Boolean)
-        });
+        }) as UTxOWithTxInfo[];
+
+        const handleNames = utxos.flatMap(u => u.handles.flatMap(h => h[1]).map(h => getHandleNameFromAssetName(h).name));
 
         // TODO: This will have to be chunked to 10k at a time
         const handles = new Map<string, StoredHandle>();
         const holders = new Map<string, HolderHandleNames>();
         const mintingData = new Map<string, MintingData[]>();
-        const mintHandles = this.getKeysFromIndex(IndexNames.MINT) as string[];
-        if (mintHandles.length) {
+
+        Logger.log(`Building mint data for ${handleNames.length.toLocaleString()} handles`);
+        if (handleNames.length) {
             const mintValues = this.pipeline(() => {
-                mintHandles.forEach((handleName) => this.getValuesFromIndexedSet(IndexNames.MINT, handleName));
+                handleNames.forEach((handleName) => this.getValuesFromIndexedSet(IndexNames.MINT, handleName));
             }) as Set<string>[];
 
-            mintHandles.forEach((handleName, index) => {
+            mintValues.forEach((mintData, index) => {
                 mintingData.set(
-                    handleName,
-                    Array.from(mintValues[index] ?? []).map((md) => JSON.parse(md))
+                    handleNames[index],
+                    Array.from(mintData ?? []).map((md) => JSON.parse(md))
                 );
             });
         }
+        Logger.log(`MintingData size ${mintingData.get(handleNames[0])?.length ?? 0} for first handle ${handleNames[0]}`);
+
         this.pipeline(() => {
             for (const utxo of utxos) {
                 utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo, mintingData, handles, holders);
