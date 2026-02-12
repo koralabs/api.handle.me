@@ -25,6 +25,7 @@ const setup = () => {
     };
 
     const handlesRepo = {
+        initialize: jest.fn(),
         getMetrics: jest.fn(),
         setMetrics: jest.fn(),
         addUTxO: jest.fn(),

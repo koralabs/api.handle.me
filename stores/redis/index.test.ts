@@ -27,7 +27,7 @@ describe('RedisHandlesStore critical path tests', () => {
         jest.spyOn(store, 'pipeline').mockImplementation((commands: CallableFunction) => {
             callCount += 1;
             commands();
-            if (callCount === 1) return [{ id: 'utxo#0', slot: 1 }];
+            if (callCount === 1) return [{ id: 'utxo#0', slot: 1, handles: [['policy', ['616c706861']]] }];
             if (callCount === 2) return [new Set([JSON.stringify({ created_slot: 1, metadata: {}, txHash: 'txhash' })])];
             return [];
         });
