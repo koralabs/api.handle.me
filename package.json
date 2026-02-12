@@ -15,7 +15,7 @@
     "build:lambda": "npm run copy-dist-files && (cd dist && npm install) && npm exec -c 'rollup -c rollup.lambda.config.js'",
     "build:docker": "npm run build:production && docker build -t koralabs/handles-api .",
     "ogmios": "chmod +x ./shell/start_local.sh && ./shell/start_local.sh",
-    "api": "cp docs/swagger.yml dist/swagger.yml && tsx -r tsconfig-paths/register -r dotenv/config express.ts",
+    "api": "tsx -r tsconfig-paths/register -r dotenv/config express.ts",
     "readonly": "READ_ONLY_STORE=true PORT=3142 tsx -r tsconfig-paths/register -r dotenv/config express.ts",
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "jest -c jest.config.ts --runInBand",

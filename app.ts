@@ -1,4 +1,4 @@
-import { Logger } from '@koralabs/kora-labs-common';
+import { IS_LOCAL, Logger } from '@koralabs/kora-labs-common';
 import cors from 'cors';
 import express from 'express';
 import fs from 'fs';
@@ -126,7 +126,8 @@ class App {
         };
 
         try {
-            const swaggerDoc = parse(fs.readFileSync('./swagger.yml').toString());
+            const swaggerFile = IS_LOCAL ? './docs/swagger.yml' : './swagger.yml';
+            const swaggerDoc = parse(fs.readFileSync(swaggerFile).toString());
             this.app.use('/swagger', swaggerUi.serve, swaggerUi.setup(swaggerDoc, options));
         } catch (error: any) {
             Logger.log(`Unable to load swagger with error: ${error}`);
