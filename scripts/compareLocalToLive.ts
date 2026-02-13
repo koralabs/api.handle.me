@@ -11,6 +11,8 @@ import { Color, colorString } from './colors';
     jq -r '.[] | select(.[0] == "papagoose")' localHandles.json
 */
 let NETWORK: string = 'preview';
+const apiDelay: any = 2000
+const apiPageSize = 250;
 declare global {
   interface Console {
     sameLine(msg: string): void;
@@ -89,28 +91,27 @@ const counts: Record<string, {page:number, total:number}> = {};
 
 const getApiHandles = async (host: string) => {
     let handles = new Map<string, any>();
-    const pageSize = 1000;
     console.log();
     console.sameLine(`Getting Handles count from ${host}...`);
     const handlesCount = parseInt((await apiRequest(`${host}/handles?records_per_page=1&page=1`)).headers!['x-handles-search-total']!.toString())
-    const totalPages = Math.ceil(handlesCount / pageSize);
+    const totalPages = Math.ceil(handlesCount / apiPageSize);
     console.sameLine(`${Color.FgBlue}Handles count on ${host} is: ${handlesCount}${Color.Reset}`)
     console.log();
     await asyncForEach(
         [...Array(totalPages).keys()],
         async (i) => {
-            const apiRes = await apiRequest(`${host}/handles?records_per_page=${pageSize}&page=${i + 1}`);
+            const apiRes = await apiRequest(`${host}/handles?records_per_page=${apiPageSize}&page=${i + 1}`);
             counts[host] = {page: i + 1, total: totalPages}
             console.sameLine(Object.entries(counts).map(([key, { page, total }]) => `${key} is on ${page} of ${total}`).join(' | '));
             if (apiRes.error || !apiRes.statusCode || apiRes.statusCode > 299) {
                 console.log();
-                console.error(`ERROR: ${apiRes.statusCode}`, apiRes.error);
+                console.error(`ERROR: ${apiRes.statusCode}`, host, apiRes.error ?? apiRes.body);
                 process.exit(1);
             }
 
             handles = new Map([...handles, ...new Map<string, any>(JSON.parse(apiRes.body!).map((h: any) => [h.name, h]))]);
         },
-        750
+        apiDelay
     );
     console.log(); // Needed to break the same line above
     return handles;
@@ -147,7 +148,7 @@ const getApiHandles = async (host: string) => {
         localHandles = new Map<string, HandleViewModel>(JSON.parse(fs.readFileSync('localHandles.json').toString()));
     }
     else {
-        localHandles = getApiHandles('http://localhost:3141');
+        localHandles = getApiHandles('http://localhost:3142');
     }
 
     liveHandles = await liveHandles;

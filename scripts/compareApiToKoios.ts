@@ -11,7 +11,9 @@ import { Color, colorString } from './colors';
 */
 
 let NETWORK: string = 'preview';
-const networkDelay: any = {"preview": 101, "preprod": 101, "mainnet": 50}
+const providerDelay: any = {"preview": 101, "preprod": 101, "mainnet": 100}
+const apiDelay: any = 2000
+const apiPageSize = 250;
 const POLICIES: any[] = [ 
     { id: "f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a", supply: 0},
     { id: "6c32db33a422e0bc2cb535bb850b5a6e9a9572222056d6ddc9cbc26e", supply: 0}
@@ -140,7 +142,7 @@ export const fetchPolicyAssets = async (policyId: string, policySupply: number):
             for (const item of items) {
                 results.add(item.asset_name);
             }
-        }, networkDelay[NETWORK]);
+        }, providerDelay[NETWORK]);
         console.log(); // Needed to break the same line above
         console.log(colorString(Color.FgBlue, `Finished receiving ${results.size} policy assets`))
     } catch (error) {
@@ -211,7 +213,7 @@ const fetchAssetData = async (assets: string[], policyId: string) => {
             }
         }
         console.sameLine(`Received ${allResults.size} handle UTxOs out of ${handles.length}`);
-    }, networkDelay[NETWORK]);
+    }, providerDelay[NETWORK]);
     console.log(); // Needed to break the same line above
     return allResults;
 };
@@ -262,12 +264,11 @@ await (async () => {
         localHandles = new Map<string, any>(JSON.parse(fs.readFileSync('localHandles.json').toString()));
     }
     else {
-        const pageSize = 250;
-        const totalPages = Math.ceil(parseInt((await apiRequest(`http://localhost:3141/handles?records_per_page=${pageSize}&page=1`)).headers!['x-handles-search-total']!.toString()) / pageSize);
+        const totalPages = Math.ceil(parseInt((await apiRequest(`http://localhost:3141/handles?records_per_page=${apiPageSize}&page=1`)).headers!['x-handles-search-total']!.toString()) / apiPageSize);
         await asyncForEach(
             [...Array(totalPages).keys()],
             async (i) => {
-                const local = await apiRequest(`http://localhost:3141/handles?records_per_page=${pageSize}&page=${i + 1}`);
+                const local = await apiRequest(`http://localhost:3141/handles?records_per_page=${apiPageSize}&page=${i + 1}`);
                 console.sameLine(Object.entries(counts).map(([key, { page, total }]) => `${key} is on ${page} of ${total}`).join(' | '));
                 if (local.error || !local.statusCode || local.statusCode > 299) {
                     console.error(`ERROR: ${local.statusCode}`, local.error);
@@ -276,7 +277,7 @@ await (async () => {
 
                 localHandles = new Map([...localHandles, ...new Map<string, any>(JSON.parse(local.body!).map((h: any) => [h.name, h]))]);
             },
-            75
+            apiDelay
         );
         console.log(); // Needed to break the same line above
         fs.writeFileSync('tmp/localHandles.json', JSON.stringify(Array.from(localHandles.entries())));

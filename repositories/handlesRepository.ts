@@ -1082,6 +1082,7 @@ export class HandlesRepository {
         } else {
             holders?.delete(holderAddress);
             this.store.removeValuesFromOrderedSet(IndexNames.HOLDER_COUNT, holderAddress);
+            this.store.removeValuesFromOrderedSet(IndexNames.HOLDER, holderAddress);
         }
         
         const oldDecodedAddress = decodeAddress(holderAddress);
