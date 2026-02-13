@@ -1,4 +1,4 @@
-import { IndexNames, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { IndexNames, LockedLambdaReason, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { RedisHandlesStore } from '../stores/redis';
 
@@ -66,12 +66,12 @@ describe('Snapshot lambda e2e', () => {
 
     beforeEach(() => {
         repo.rollBackToGenesis();
-        repo.addUTxOAndMintData(buildMintedUTxO());
+        repo.addUTxOsWithMintDataAndUpdateIndexes([buildMintedUTxO()]);
         repo.setMetrics({
             currentSlot: 105,
             currentBlockHash: 'snapshot_block',
             utxoSchemaVersion: 7,
-            lockLambdas: false
+            lockLambdas: LockedLambdaReason.UNLOCKED
         });
         jest.clearAllMocks();
     });

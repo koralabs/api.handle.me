@@ -25,7 +25,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - `HandlesRepository` reads/writes indexed state in `RedisHandlesStore`.
 - Scanning mode:
   - Default: Ogmios WebSocket scanner (`services/ogmios/ogmios.service.ts`)
-  - Optional local fallback in dev/test: lambda scanner/rollback loops (`USE_LAMBDA_SCANNER=true`)
+  - Optional local fallback in dev/test: scanner lambda loop (`USE_LAMBDA_SCANNER=true`)
 - Lambda mode (`lambdas/api.ts`) forces `READ_ONLY_STORE=true` and serves API only.
 
 ## Data Freshness Contract
@@ -111,11 +111,14 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 ## Scanner and Rollback
 - Ogmios scanner processes each block transaction synchronously, updating UTxOs and indexes in order.
 - Before any per-UTxO handle updates, scanners normalize and preload minting data for the full block/scan batch so Handle (`222`) and Virtual SubHandle (`000`) mint records are available regardless of tx/output ordering.
+- Minting data is persisted once per batch and then reused during per-UTxO updates to avoid duplicate mint writes while keeping the same ordering guarantees.
 - Missing minting data during handle index updates is treated as a hard failure (scanner invariant), not a soft fallback.
-- Rollback lambda reconciles provider/store gaps over short and periodic long rollback windows.
+- Scanner lambda now also owns rollback/reconciliation and reindex checks.
+- Rollback reconciliation runs in short and periodic long windows and remains intentionally two-phase:
+  first persist replayed UTxOs + mint history without index updates, then run index updates from provider `tx_info`.
 - Rollback lock behavior is fail-safe: rollback attempts always clear `lockLambdas` in a `finally` path so scanner cron loops do not deadlock after provider/API failures.
 - Snapshot lambda can emit compressed UTxO snapshots for fast restore.
-- Reindex lock behavior is fail-safe: reindex attempts must always clear `lockLambdas` in both success and error paths to avoid deadlocking scanner/lambda flows.
+- Reindex lock behavior is fail-safe: reindex attempts must always clear `lockLambdas` in both success and error paths to avoid deadlocking scanner flows.
 - Valkey pipeline execution must always clear pipeline state on errors; queue state is reset even when pipeline callbacks throw.
 
 ## Environment Variables

@@ -5,7 +5,7 @@
 - You are OWASP aware and will advise the user when you notice OWASP concerns.
 
 ## // RULES
-- A task isn't complete until both unit and e2e tests are added and all tests pass  - unless the changes are documentation only
+- A task isn't complete until both unit and e2e tests are added and all tests pass  - unless the changes are documentation only (/scripts/* don't need tests)
 - Always update documentation. Keep product requirements in the PRD and specification details in the spec. 
 - APIs are documented in swagger and always maintained
 - Always update types and maintain type integrity
@@ -13,7 +13,7 @@
 - Don't delete comments tagged wtih "IMPORTANT", or comments in all uppercase, or comments with `-----` or `*****`
 - In general, don't delete comments - unless you just edited that area and the comment purpose no longer exists
 - Please keep individual comments updated relevant to edited code so they don't get outdated
-- At session start, load into your context a significant understanding of the code and documentation (compensate at your discretion for token usage optimization)
+- Before starting a task you should have a significant understanding of the code and documentation (compensate at your discretion for token usage optimization)
 - Don't make writes to Valkey/Redis on the default port `(6379)`. Use a different `REDIS_PORT` if you need to troubleshoot writes. You're free to read the default port all you want for troubleshooting though.
 - Temporary files belong in the `/tmp` folder.
 

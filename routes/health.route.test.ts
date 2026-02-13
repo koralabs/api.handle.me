@@ -53,12 +53,15 @@ afterAll(async () => {
 
 describe('Health Routes Test', () => {
     let app: App | null;
+    const originalReadOnlyStore = process.env.READ_ONLY_STORE;
     beforeEach(async () => {
+        process.env.READ_ONLY_STORE = '';
         app = await new App().initialize();
     });
 
     afterEach(() => {
         jest.clearAllMocks();
+        process.env.READ_ONLY_STORE = originalReadOnlyStore;
     });
 
     const getMockResponse = ({ networkSynchronization = 0 }: { networkSynchronization?: number }): HealthResponseBody => ({

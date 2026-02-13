@@ -7,10 +7,11 @@ const address = 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hj
 const createRepoMock = () =>
     ({
         getMetrics: jest.fn().mockReturnValue({ currentSlot: 0 }),
-        addMintDataFromUTxOs: jest.fn(),
+        addMintDataFromUTxOs: jest.fn().mockReturnValue(new Map()),
         getHandle: jest.fn(),
         removeHandle: jest.fn(),
         addUTxOAndMintData: jest.fn(),
+        addUTxOsWithMintDataAndUpdateIndexes: jest.fn(),
         removeUTxOs: jest.fn()
     }) as any;
 
@@ -97,8 +98,14 @@ describe('OgmiosService processBlock unit tests', () => {
                 expect.objectContaining({ id: `${txId}#1` })
             ])
         );
-        expect(repo.addUTxOAndMintData).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: `${txId}#1` }), true);
-        expect(repo.addUTxOAndMintData).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: `${txId}#0` }), true);
+        const preloadedMintingData = repo.addMintDataFromUTxOs.mock.results[0]?.value;
+        expect(repo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenCalledWith(
+            [
+                expect.objectContaining({ id: `${txId}#1` }),
+                expect.objectContaining({ id: `${txId}#0` })
+            ],
+            preloadedMintingData
+        );
         expect(repo.removeUTxOs).toHaveBeenCalledWith(['spent_tx#0']);
     });
 
@@ -192,7 +199,10 @@ describe('OgmiosService processBlock unit tests', () => {
                 event: 'processBlock.decodingDatum'
             })
         );
-        expect(repo.addUTxOAndMintData).toHaveBeenCalledWith(expect.objectContaining({ id: 'tx_datum#0', datum: undefined }), true);
+        expect(repo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenCalledWith(
+            [expect.objectContaining({ id: 'tx_datum#0', datum: undefined })],
+            expect.any(Map)
+        );
     });
 
     it('uses repo currentSlot fallback and handles missing tx fields', () => {
@@ -231,15 +241,17 @@ describe('OgmiosService processBlock unit tests', () => {
 
         service.Internal.processBlock(block);
 
-        expect(repo.addUTxOAndMintData).toHaveBeenCalledWith(
-            expect.objectContaining({
-                id: 'tx_sparse#0',
-                slot: 77,
-                datum: undefined,
-                script: { type: 'plutus_v2', cbor: '4e4d0100' },
-                mint: []
-            }),
-            true
+        expect(repo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenCalledWith(
+            [
+                expect.objectContaining({
+                    id: 'tx_sparse#0',
+                    slot: 77,
+                    datum: undefined,
+                    script: { type: 'plutus_v2', cbor: '4e4d0100' },
+                    mint: []
+                })
+            ],
+            expect.any(Map)
         );
         expect(repo.removeUTxOs).toHaveBeenCalledWith([]);
     });
@@ -295,7 +307,9 @@ describe('OgmiosService processBlock unit tests', () => {
 
         service.Internal.processBlock(block);
 
-        expect(repo.addUTxOAndMintData).toHaveBeenCalledTimes(2);
+        expect(repo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenCalledTimes(1);
+        const [utxos] = repo.addUTxOsWithMintDataAndUpdateIndexes.mock.calls[0];
+        expect(utxos).toHaveLength(2);
         expect(repo.removeHandle).not.toHaveBeenCalled();
     });
 
@@ -338,17 +352,19 @@ describe('OgmiosService processBlock unit tests', () => {
 
         service.Internal.processBlock(block);
 
-        expect(repo.addUTxOAndMintData).toHaveBeenCalledWith(
-            expect.objectContaining({
-                metadata: {
-                    '721': {
-                        [policyId]: {
-                            [alpha]: { image: 'ipfs://alpha' }
+        expect(repo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenCalledWith(
+            [
+                expect.objectContaining({
+                    metadata: {
+                        '721': {
+                            [policyId]: {
+                                [alpha]: { image: 'ipfs://alpha' }
+                            }
                         }
                     }
-                }
-            }),
-            true
+                })
+            ],
+            expect.any(Map)
         );
     });
 });

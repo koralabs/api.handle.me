@@ -358,8 +358,8 @@ export class HandlesRepository {
         return mintingData
     }
 
-    public buildIndexInfoFromUTxO(utxo: UTxOWithTxInfo) {
-        const mintingData = this.buildMintingDataFromUTxO(utxo);
+    public buildIndexInfoFromUTxO(utxo: UTxOWithTxInfo, mintData?: Map<string, MintingData[]>) {
+        const mintingData = mintData ?? this.buildMintingDataFromUTxO(utxo);
         
         // we need holders from the handles that are in the utxo
         const holders = new Map<string, HolderHandleNames>();
@@ -406,15 +406,12 @@ export class HandlesRepository {
         }
     }
 
-    public addUTxOAndMintData(utxo: UTxOWithTxInfo, updateIndexes = true) {
-        const { mintingData, holders, handles } = this.buildIndexInfoFromUTxO(utxo);
+    private addUTxOWithMintingData(utxo: UTxOWithTxInfo, mintingData?: Map<string, MintingData[]>) {
+        const { mintingData: resolvedMintingData, holders, handles } = this.buildIndexInfoFromUTxO(utxo, mintingData);
 
         this.store.pipeline(() => {
             this.addUTxO(utxo);
-            this.addMintData(mintingData);
-            if (updateIndexes) {         
-                this.updateHandleIndexes(utxo, mintingData, handles, holders);
-            }
+            this.updateHandleIndexes(utxo, resolvedMintingData, handles, holders);
         });
     }
 
@@ -435,14 +432,16 @@ export class HandlesRepository {
     }
 
     public addMintData(mintData: Map<string, MintingData[]>) {    
-        for (const [handleName, mintingData] of mintData) {
-            mintingData.forEach(md => {
-                this.store.addValueToIndexedSet(IndexNames.MINT, handleName, JSON.stringify(md, (_, val) => (typeof val === 'bigint' ? `${Number(val)}` : val)));
-            }) 
-        }
+        this.store.pipeline(() => {
+            for (const [handleName, mintingData] of mintData) {
+                mintingData.forEach(md => {
+                    this.store.addValueToIndexedSet(IndexNames.MINT, handleName, JSON.stringify(md, (_, val) => (typeof val === 'bigint' ? `${Number(val)}` : val)));
+                }) 
+            }
+        });
     }
 
-    public addMintDataFromUTxOs(utxos: UTxOWithTxInfo[]) {
+    private buildMintDataFromUTxOs(utxos: UTxOWithTxInfo[]): Map<string, MintingData[]> {
         const mintData = new Map<string, MintingData[]>();
         for (const utxo of utxos) {
             for (const assetName of this.getMintedAssetNames(utxo)) {
@@ -460,7 +459,30 @@ export class HandlesRepository {
             }
         }
 
+        return mintData;
+    }
+
+    public addMintDataFromUTxOs(utxos: UTxOWithTxInfo[]): Map<string, MintingData[]> {
+        const mintData = this.buildMintDataFromUTxOs(utxos);
         this.addMintData(mintData);
+        return mintData;
+    }
+
+    public addUTxOsWithMintDataAndUpdateIndexes(utxos: UTxOWithTxInfo[], mintingData?: Map<string, MintingData[]>) {
+        const resolvedMintingData = mintingData ?? this.addMintDataFromUTxOs(utxos);
+        for (const utxo of utxos) {
+            const utxoMintingData = this.getMintedAssetNames(utxo).length ? resolvedMintingData : undefined;
+            this.addUTxOWithMintingData(utxo, utxoMintingData);
+        }
+    }
+
+    public addUTxOsWithMintData(utxos: UTxOWithTxInfo[], mintingData?: Map<string, MintingData[]>) {
+        if (!mintingData) this.addMintDataFromUTxOs(utxos);
+        for (const utxo of utxos) {
+            this.store.pipeline(() => {
+                this.addUTxO(utxo);
+            });
+        }
     }
 
     public getMetrics(): IApiMetrics {  
@@ -792,7 +814,7 @@ export class HandlesRepository {
 
                 this.updateHolder(handle, holders);
                 
-                if (existingHandle && existingHandle.holder !== handle.holder) {
+                if (existingHandle?.holder && existingHandle.holder !== handle.holder) {
                     this._removeHandleFromHolder(existingHandle.holder, name, holders)
                 }
                 
@@ -1072,6 +1094,7 @@ export class HandlesRepository {
     };
 
     private _removeHandleFromHolder(holderAddress: string, handleName: string, holders?: Map<string, HolderHandleNames>) {
+        if (!holderAddress) return;
         holders?.get(holderAddress)?.delete(handleName)
         this.store.removeValueFromIndexedSet(IndexNames.HOLDER, holderAddress, handleName);
         this.store.removeValueFromIndexedSet(IndexNames.DEFAULT_HANDLE, holderAddress, handleName);
@@ -1082,7 +1105,7 @@ export class HandlesRepository {
         } else {
             holders?.delete(holderAddress);
             this.store.removeValuesFromOrderedSet(IndexNames.HOLDER_COUNT, holderAddress);
-            this.store.removeValuesFromOrderedSet(IndexNames.HOLDER, holderAddress);
+            this.store.removeKeyFromIndex(IndexNames.HOLDER, holderAddress);
         }
         
         const oldDecodedAddress = decodeAddress(holderAddress);

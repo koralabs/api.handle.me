@@ -1,4 +1,4 @@
-import { AssetNameLabel, IndexNames } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, IndexNames, LockedLambdaReason, UTxOFunctionName } from '@koralabs/kora-labs-common';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { RedisHandlesStore } from '../stores/redis';
@@ -59,12 +59,12 @@ const buildUtxo = ({
         }
     }) as any;
 
-const loadRollbackModule = () => {
-    let rollbackModule: any;
+const loadScannerModule = () => {
+    let scannerModule: any;
     jest.isolateModules(() => {
-        rollbackModule = require('./rollback');
+        scannerModule = require('./scanner');
     });
-    return rollbackModule;
+    return scannerModule;
 };
 
 const setup = () => {
@@ -76,11 +76,15 @@ const setup = () => {
             commands();
             return pipelineResponses.shift() ?? [];
         }),
-        removeValueFromIndexedSet: jest.fn()
+        removeValueFromIndexedSet: jest.fn(),
+        getIndexSchemaVersion: jest.fn().mockReturnValue(1),
+        repopulateIndexesFromUTxOs: jest.fn()
     };
 
     const handlesRepo = {
-        addUTxOAndMintData: jest.fn(),
+        initialize: jest.fn().mockResolvedValue(undefined),
+        addUTxO: jest.fn(),
+        addUTxOsWithMintData: jest.fn(),
         getHandle: jest.fn(),
         getHandleMintingData: jest.fn(),
         getMetrics: jest.fn(),
@@ -108,73 +112,72 @@ const setup = () => {
     return {
         handlesRepo,
         pipelineResponses,
-        rollbackModule: loadRollbackModule(),
+        scannerModule: loadScannerModule(),
         store
     };
 };
 
-describe('Rollback lambda unit tests', () => {
+describe('Scanner lambda unit tests', () => {
     beforeEach(() => {
         jest.clearAllMocks();
     });
 
-    it('exports lambdaHandler', () => {
-        const { rollbackModule } = setup();
-        expect(typeof rollbackModule.lambdaHandler).toBe('function');
+    it('exports lambdaHandler and Internal helpers', () => {
+        const { scannerModule } = setup();
+        expect(typeof scannerModule.lambdaHandler).toBe('function');
+        expect(scannerModule.Internal).toEqual(
+            expect.objectContaining({
+                checkRollback: expect.any(Function),
+                processRollback: expect.any(Function),
+                processReindex: expect.any(Function),
+                scan: expect.any(Function)
+            })
+        );
     });
 
     it('returns early when lambdas are locked', async () => {
-        const { handlesRepo, rollbackModule } = setup();
-        handlesRepo.getMetrics.mockReturnValue({ lockLambdas: true, currentSlot: 100 });
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ lockLambdas: LockedLambdaReason.ROLLBACK_20, currentSlot: 100 });
 
-        await expect(rollbackModule.lambdaHandler({} as any, {} as any)).resolves.toBeUndefined();
+        await expect(scannerModule.lambdaHandler({} as any, {} as any)).resolves.toBeUndefined();
 
         expect(handlesRepo.setMetrics).not.toHaveBeenCalled();
         expect(mockedHelpers.blockfrostApiCall).not.toHaveBeenCalled();
     });
 
     it('runs short rollback path and unlocks after success', async () => {
-        const { handlesRepo, pipelineResponses, rollbackModule, store } = setup();
-        handlesRepo.getMetrics.mockReturnValue({
-            lockLambdas: false,
-            currentSlot: 130,
-            lastMaxRollbackCheck: Date.now()
-        });
+        const { handlesRepo, pipelineResponses, scannerModule, store } = setup();
         store.getValuesFromOrderedSet.mockReturnValue(['utxo#0']);
         pipelineResponses.push([buildUtxo({ id: 'utxo#0', slot: 100, blockHash: 'provider_block', assetName: 'asset-a' })]);
 
-        await rollbackModule.lambdaHandler({} as any, {} as any);
+        await scannerModule.Internal.checkRollback({ currentSlot: 130, lastMaxRollbackCheck: Date.now() });
 
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next');
-        expect(handlesRepo.setMetrics).toHaveBeenNthCalledWith(1, { lockLambdas: true });
-        expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: false });
+        expect(handlesRepo.setMetrics).toHaveBeenNthCalledWith(
+            1,
+            expect.objectContaining({ lockLambdas: LockedLambdaReason.ROLLBACK_20, lockLambdasTimestamp: expect.any(Number) })
+        );
+        expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
     });
 
     it('runs max rollback path and updates lastMaxRollbackCheck', async () => {
-        const { handlesRepo, pipelineResponses, rollbackModule, store } = setup();
-        handlesRepo.getMetrics.mockReturnValue({
-            lockLambdas: false,
-            currentSlot: 130,
-            lastMaxRollbackCheck: 0
-        });
+        const { handlesRepo, pipelineResponses, scannerModule, store } = setup();
         store.getValuesFromOrderedSet.mockReturnValue(['utxo#0']);
         pipelineResponses.push([buildUtxo({ id: 'utxo#0', slot: 100, blockHash: 'provider_block', assetName: 'asset-a' })]);
 
-        await rollbackModule.lambdaHandler({} as any, {} as any);
+        await scannerModule.Internal.checkRollback({ currentSlot: 130, lastMaxRollbackCheck: 0 });
 
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/2840/next');
-        expect(handlesRepo.setMetrics).toHaveBeenNthCalledWith(1, { lockLambdas: true });
+        expect(handlesRepo.setMetrics).toHaveBeenNthCalledWith(
+            1,
+            expect.objectContaining({ lockLambdas: LockedLambdaReason.ROLLBACK_2160, lockLambdasTimestamp: expect.any(Number) })
+        );
         expect(handlesRepo.setMetrics).toHaveBeenNthCalledWith(2, { lastMaxRollbackCheck: expect.any(Number) });
-        expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: false });
+        expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
     });
 
     it('ignores future provider blocks when comparing hashes', async () => {
-        const { handlesRepo, pipelineResponses, rollbackModule, store } = setup();
-        handlesRepo.getMetrics.mockReturnValue({
-            lockLambdas: false,
-            currentSlot: 130,
-            lastMaxRollbackCheck: Date.now()
-        });
+        const { pipelineResponses, scannerModule, store } = setup();
         store.getValuesFromOrderedSet.mockReturnValue(['utxo#0']);
         mockedHelpers.fetchPaginatedResults.mockResolvedValue([
             { hash: 'provider_block', slot: 100 },
@@ -182,34 +185,27 @@ describe('Rollback lambda unit tests', () => {
         ] as never);
         pipelineResponses.push([buildUtxo({ id: 'utxo#0', slot: 100, blockHash: 'provider_block', assetName: 'asset-a' })]);
 
-        await rollbackModule.lambdaHandler({} as any, {} as any);
+        await scannerModule.Internal.checkRollback({ currentSlot: 130, lastMaxRollbackCheck: Date.now() });
 
         expect(mockedHelpers.fetchTxList).not.toHaveBeenCalled();
         expect(mockedHelpers.fetchKoios).not.toHaveBeenCalled();
     });
 
     it('releases lock when rollback processing throws', async () => {
-        const { handlesRepo, rollbackModule } = setup();
-        handlesRepo.getMetrics.mockReturnValue({
-            lockLambdas: false,
-            currentSlot: 130,
-            lastMaxRollbackCheck: Date.now()
-        });
+        const { handlesRepo, scannerModule } = setup();
         mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: false } as any);
 
-        await expect(rollbackModule.lambdaHandler({} as any, {} as any)).rejects.toThrow('Not good!');
+        await expect(scannerModule.Internal.checkRollback({ currentSlot: 130, lastMaxRollbackCheck: Date.now() })).rejects.toThrow('Not good!');
 
-        expect(handlesRepo.setMetrics).toHaveBeenNthCalledWith(1, { lockLambdas: true });
-        expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: false });
+        expect(handlesRepo.setMetrics).toHaveBeenNthCalledWith(
+            1,
+            expect.objectContaining({ lockLambdas: LockedLambdaReason.ROLLBACK_20, lockLambdasTimestamp: expect.any(Number) })
+        );
+        expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
     });
 
     it('replays rollback discrepancies, removes in-range mint data, and refreshes indexes', async () => {
-        const { handlesRepo, pipelineResponses, rollbackModule, store } = setup();
-        handlesRepo.getMetrics.mockReturnValue({
-            lockLambdas: false,
-            currentSlot: 300,
-            lastMaxRollbackCheck: Date.now()
-        });
+        const { handlesRepo, pipelineResponses, scannerModule, store } = setup();
         store.getValuesFromOrderedSet.mockReturnValue(['u1']);
         mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'provider_a', slot: 200 }] as never);
 
@@ -250,21 +246,16 @@ describe('Rollback lambda unit tests', () => {
             return [] as never;
         });
 
-        await rollbackModule.lambdaHandler({} as any, {} as any);
+        await scannerModule.Internal.checkRollback({ currentSlot: 300, lastMaxRollbackCheck: Date.now() });
 
         expect(store.removeValueFromIndexedSet).toHaveBeenCalledWith(IndexNames.MINT, 'handle-a', mintToRemove);
         expect(handlesRepo.removeUTxOs).toHaveBeenCalledWith(['u1']);
-        expect(handlesRepo.addUTxOAndMintData).toHaveBeenCalledWith(expect.objectContaining({ id: 'replay_block#0' }), false);
+        expect(handlesRepo.addUTxOsWithMintData).toHaveBeenCalledWith([expect.objectContaining({ id: 'replay_block#0' })]);
         expect(handlesRepo.updateHandleIndexes).toHaveBeenCalledWith(expect.objectContaining({ id: 'replay_tx_info#0' }), expect.any(Map), expect.any(Map));
     });
 
     it('batches tx_info requests when tx hash payload grows', async () => {
-        const { handlesRepo, pipelineResponses, rollbackModule, store } = setup();
-        handlesRepo.getMetrics.mockReturnValue({
-            lockLambdas: false,
-            currentSlot: 300,
-            lastMaxRollbackCheck: Date.now()
-        });
+        const { pipelineResponses, scannerModule, store } = setup();
         store.getValuesFromOrderedSet.mockReturnValue(['u1']);
         mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'provider_a', slot: 200 }] as never);
 
@@ -297,19 +288,14 @@ describe('Rollback lambda unit tests', () => {
         });
         mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
 
-        await rollbackModule.lambdaHandler({} as any, {} as any);
+        await scannerModule.Internal.checkRollback({ currentSlot: 300, lastMaxRollbackCheck: Date.now() });
 
         const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
         expect(txInfoCalls.length).toBeGreaterThan(1);
     });
 
     it('includes CIP67 companion assets in asset_utxos lookup payload', async () => {
-        const { handlesRepo, pipelineResponses, rollbackModule, store } = setup();
-        handlesRepo.getMetrics.mockReturnValue({
-            lockLambdas: false,
-            currentSlot: 300,
-            lastMaxRollbackCheck: Date.now()
-        });
+        const { pipelineResponses, scannerModule, store } = setup();
         store.getValuesFromOrderedSet.mockReturnValue(['u1']);
         mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'provider_a', slot: 200 }] as never);
 
@@ -340,14 +326,10 @@ describe('Rollback lambda unit tests', () => {
             [new Set([JSON.stringify({ created_slot: 150, metadata: {}, txHash: 'mint-a' })])]
         );
 
-        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
-            if (path === 'asset_utxos') return [] as never;
-            if (path === 'tx_info') return [] as never;
-            return [] as never;
-        });
+        mockedHelpers.fetchKoios.mockResolvedValue([] as never);
         mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
 
-        await rollbackModule.lambdaHandler({} as any, {} as any);
+        await scannerModule.Internal.checkRollback({ currentSlot: 300, lastMaxRollbackCheck: Date.now() });
 
         const assetUtxoCall = mockedHelpers.fetchKoios.mock.calls.find((call) => call[0] === 'asset_utxos');
         expect(assetUtxoCall).toBeDefined();
@@ -359,5 +341,47 @@ describe('Rollback lambda unit tests', () => {
                 ['policy-a', companion001]
             ])
         );
+    });
+
+    it('processReindex calls repopulateIndexesFromUTxOs with bound handlers', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+
+        await scannerModule.Internal.processReindex();
+
+        expect(store.repopulateIndexesFromUTxOs).toHaveBeenCalledWith(
+            expect.objectContaining({
+                [UTxOFunctionName.ADD_UTXO]: expect.any(Function),
+                [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: expect.any(Function)
+            })
+        );
+        const callArgs = store.repopulateIndexesFromUTxOs.mock.calls[0][0];
+        callArgs[UTxOFunctionName.ADD_UTXO]({});
+        callArgs[UTxOFunctionName.UPDATE_HANDLE_INDEXES]({});
+        expect(handlesRepo.addUTxO).toHaveBeenCalledWith({});
+        expect(handlesRepo.updateHandleIndexes).toHaveBeenCalledWith({});
+    });
+
+    it('processReindex unlocks with new index schema version', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        store.getIndexSchemaVersion.mockReturnValue(3);
+
+        await scannerModule.Internal.processReindex();
+
+        expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ indexSchemaVersion: 3, lockLambdas: LockedLambdaReason.UNLOCKED });
+    });
+
+    it('processReindex unlocks lambdas when repopulation fails', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        store.repopulateIndexesFromUTxOs.mockImplementation(() => {
+            throw new Error('Reindex failed');
+        });
+
+        await expect(scannerModule.Internal.processReindex()).rejects.toThrow('Reindex failed');
+
+        expect(handlesRepo.setMetrics).toHaveBeenNthCalledWith(
+            1,
+            expect.objectContaining({ lockLambdas: LockedLambdaReason.REINDEX, lockLambdasTimestamp: expect.any(Number) })
+        );
+        expect(handlesRepo.setMetrics).toHaveBeenNthCalledWith(2, { lockLambdas: LockedLambdaReason.UNLOCKED });
     });
 });

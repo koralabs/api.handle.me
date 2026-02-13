@@ -10,7 +10,6 @@ jest.mock('./repositories/handlesRepository');
 jest.mock('./services/ogmios/ogmios.service');
 jest.mock('./utils/util');
 jest.mock('./lambdas/scanner', () => ({ lambdaHandler: jest.fn() }));
-jest.mock('./lambdas/rollback', () => ({ lambdaHandler: jest.fn() }));
 
 const mockedRepoClass = HandlesRepository as unknown as jest.Mock;
 const mockedOgmiosClass = OgmiosService as unknown as jest.Mock;
@@ -121,7 +120,7 @@ describe('App lifecycle', () => {
         await (app as any).initializeOgmios();
 
         expect(repoInitialize).toHaveBeenCalled();
-        expect(intervalSpy).toHaveBeenCalledTimes(2);
+        expect(intervalSpy).toHaveBeenCalledTimes(1);
         expect(ogmiosInitialize).not.toHaveBeenCalled();
     });
 

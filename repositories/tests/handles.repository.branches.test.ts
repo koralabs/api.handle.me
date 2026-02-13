@@ -785,7 +785,7 @@ describe('HandlesRepository branch tests', () => {
         const addMintDataSpy = jest.spyOn(repo, 'addMintData').mockImplementation(jest.fn());
         const alphaHex = `${AssetNameLabel.LBL_222}${Buffer.from('alpha').toString('hex')}`;
 
-        repo.addMintDataFromUTxOs([
+        const mintData = repo.addMintDataFromUTxOs([
             {
                 ...buildUtxo(alphaHex, 90),
                 mint: [[policy, { [alphaHex]: 1n, '': 1n }]]
@@ -798,6 +798,21 @@ describe('HandlesRepository branch tests', () => {
 
         const savedMap = addMintDataSpy.mock.calls[0][0] as Map<string, any[]>;
         expect(savedMap.get('alpha')?.length).toBe(2);
+        expect(mintData.get('alpha')?.length).toBe(2);
+    });
+
+    it('pipelines addMintData writes', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        const mintData = new Map([
+            ['alpha', [{ created_slot: 1, metadata: {}, txHash: 'tx_1' } as any]],
+            ['beta', [{ created_slot: 2, metadata: {}, txHash: 'tx_2' } as any]]
+        ]);
+
+        repo.addMintData(mintData as any);
+
+        expect(store.pipeline).toHaveBeenCalledTimes(1);
+        expect(store.addValueToIndexedSet).toHaveBeenCalledTimes(2);
     });
 
     it('passes through store starting point requests', async () => {
@@ -1028,12 +1043,53 @@ describe('HandlesRepository branch tests', () => {
             handles: new Map()
         } as any);
 
-        repo.addUTxOAndMintData(buildUtxo(assetHex, 43) as any, false);
-        repo.addUTxOAndMintData(buildUtxo(assetHex, 44) as any, true);
+        repo.addUTxOsWithMintData([buildUtxo(assetHex, 43) as any]);
+        repo.addUTxOsWithMintDataAndUpdateIndexes([buildUtxo(assetHex, 44) as any]);
 
         expect(addUTxOSpy).toHaveBeenCalledTimes(2);
         expect(addMintSpy).toHaveBeenCalledTimes(2);
         expect(updateSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('adds mint data once when processing a UTxO batch', () => {
+        const repo = new HandlesRepository(buildStoreMock());
+        const assetHex = Buffer.from('alpha').toString('hex');
+        const utxoA = buildUtxo(assetHex, 43) as any;
+        const utxoB = buildUtxo(assetHex, 44) as any;
+        const mintingData = new Map([['alpha', [{ created_slot: 1, metadata: {}, txHash: 'tx' } as any]]]);
+        const addMintFromUtxosSpy = jest.spyOn(repo, 'addMintDataFromUTxOs').mockReturnValue(mintingData);
+        const addUTxOSpy = jest.spyOn(repo, 'addUTxO').mockImplementation(jest.fn());
+        const updateIndexesSpy = jest.spyOn(repo, 'updateHandleIndexes').mockImplementation(jest.fn());
+        const buildInfoSpy = jest.spyOn(repo, 'buildIndexInfoFromUTxO').mockReturnValue({
+            mintingData: new Map(),
+            holders: new Map(),
+            handles: new Map()
+        } as any);
+
+        repo.addUTxOsWithMintDataAndUpdateIndexes([utxoA, utxoB]);
+
+        expect(addMintFromUtxosSpy).toHaveBeenCalledWith([utxoA, utxoB]);
+        expect(buildInfoSpy).toHaveBeenNthCalledWith(1, utxoA, mintingData);
+        expect(buildInfoSpy).toHaveBeenNthCalledWith(2, utxoB, mintingData);
+        expect(addUTxOSpy).toHaveBeenCalledTimes(2);
+        expect(updateIndexesSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('falls back to per-utxo mint lookup for non-mint batch updates', () => {
+        const repo = new HandlesRepository(buildStoreMock());
+        const assetHex = Buffer.from('alpha').toString('hex');
+        const utxo = { ...buildUtxo(assetHex, 45), mint: [] } as any;
+        const mintingData = new Map([['alpha', [{ created_slot: 1, metadata: {}, txHash: 'tx' } as any]]]);
+        const buildInfoSpy = jest.spyOn(repo, 'buildIndexInfoFromUTxO').mockReturnValue({
+            mintingData: new Map(),
+            holders: new Map(),
+            handles: new Map()
+        } as any);
+        jest.spyOn(repo, 'updateHandleIndexes').mockImplementation(jest.fn());
+
+        repo.addUTxOsWithMintDataAndUpdateIndexes([utxo], mintingData);
+
+        expect(buildInfoSpy).toHaveBeenCalledWith(utxo, undefined);
     });
 
     it('adds and removes UTxOs through slot and hash indexes', () => {

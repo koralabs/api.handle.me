@@ -7,8 +7,6 @@ import typescript from 'rollup-plugin-typescript2';
 export default (async () => ({
     input: [
         'lambdas/api.ts',
-        'lambdas/reindex.ts',
-        'lambdas/rollback.ts',
         'lambdas/scanner.ts',
         'lambdas/snapshot.ts',
         'ioc/*.registry.ts',
@@ -29,4 +27,3 @@ export default (async () => ({
     },
     external: [ 'aws-sdk', 'forever', 'swagger-ui-express', '@valkey/valkey-glide' ]
 }))();
-

@@ -259,7 +259,7 @@ class OgmiosService {
             transactionsWithUtxos.push({ txBody, utxos });
         }
 
-        this.scanningRepo.addMintDataFromUTxOs(transactionsWithUtxos.flatMap((entry) => entry.utxos));
+        const mintingData = this.scanningRepo.addMintDataFromUTxOs(transactionsWithUtxos.flatMap((entry) => entry.utxos));
 
         for (const { txBody, utxos } of transactionsWithUtxos) {
             // Look for burn transactions
@@ -283,9 +283,7 @@ class OgmiosService {
             // Sort the UTxOs so that Handles with 222 are first. This fixes when we look for mintingData later.
             utxos.sort(u => u.handles.some(h => h[1].some(a => a.startsWith(AssetNameLabel.LBL_222))) ? -1 : 1);
 
-            for (const utxo of utxos) {
-                this.scanningRepo.addUTxOAndMintData(utxo, true);
-            }
+            this.scanningRepo.addUTxOsWithMintDataAndUpdateIndexes(utxos, mintingData);
 
             // remove all the utxos that were spent as inputs to this tx
             this.scanningRepo.removeUTxOs(txBody?.inputs.flatMap((x) => `${x.transaction.id}#${x.index}`) ?? []);

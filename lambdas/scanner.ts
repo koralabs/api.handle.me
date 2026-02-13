@@ -9,7 +9,12 @@ import { blockfrostApiCall, buildUTxOsFromKoiosTxs, defaultKoiosSettings, fetchK
 const startTime = Date.now();
 const store = new RedisHandlesStore(); // I hate this
 const handlesRepo = new HandlesRepository(store);
-await handlesRepo.initialize();
+let initialized = false;
+const ensureInitialized = async () => {
+    if (initialized) return;
+    await handlesRepo.initialize();
+    initialized = true;
+};
 
 const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSlot: number; rollbackOffset: number }) => {
     const latestBlockResponse = await blockfrostApiCall('blocks/latest');
@@ -39,7 +44,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
     if (missingInApi || missingInProvider) {
         // This should be a notify since we are very rarely expecting in this range
         // and may need to adjust the number 20 above accordingly
-        Logger.log({ message: `2160 Rollback detected! Missing in API: ${missingInApi}, Missing in Provider: ${missingInProvider}`, event: 'RollbackLambda' });
+        Logger.log({ message: `Rollback after 20 blocks detected! Missing in API: ${missingInApi}, Missing in Provider: ${missingInProvider}`, event: 'RollbackLambda' });
         // If there are any missing delete/replay
         const handles: string[] = [];
         for (const utxo of utxos) {
@@ -107,10 +112,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
         for (const block of blockList) {
             const txList = await fetchTxList(block.hash);
             const utxos = buildUTxOsFromKoiosTxs(txList);
-            for (const utxo of utxos) {
-                // We still need to handle burns
-                handlesRepo.addUTxOAndMintData(utxo, false);
-            }
+            handlesRepo.addUTxOsWithMintData(utxos);
         }
 
         const batchedHandles: [string, string][][] = [];
@@ -229,14 +231,19 @@ const processReindex = async () => {
     handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.REINDEX, lockLambdasTimestamp: startTime });
 
     Logger.log({ message: `Repopulating indexes from UTxOs to schema version ${store.getIndexSchemaVersion()}`, category: LogCategory.INFO, event: 'getStartingPoint.repopulateIndexesFromUTxOs' });
-    // TODO: This should process in chunks of 10k or so then stop the lambda and it should restart and pick up where it left off.
-    // This function already chunks at a rate of about 20K every 10 seconds. 300K handles should take about 5 minutes
-    store.repopulateIndexesFromUTxOs({
-        [UTxOFunctionName.ADD_UTXO]: handlesRepo.addUTxO.bind(handlesRepo),
-        [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: handlesRepo.updateHandleIndexes.bind(handlesRepo)
-    });
-    // Unpause the lambdas and set the new schema version
-    handlesRepo.setMetrics({ indexSchemaVersion: store.getIndexSchemaVersion(), lockLambdas: LockedLambdaReason.UNLOCKED });
+    try {
+        // TODO: This should process in chunks of 10k or so then stop the lambda and it should restart and pick up where it left off.
+        // This function already chunks at a rate of about 20K every 10 seconds. 300K handles should take about 5 minutes
+        store.repopulateIndexesFromUTxOs({
+            [UTxOFunctionName.ADD_UTXO]: handlesRepo.addUTxO.bind(handlesRepo),
+            [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: handlesRepo.updateHandleIndexes.bind(handlesRepo)
+        });
+        // Unpause the lambdas and set the new schema version
+        handlesRepo.setMetrics({ indexSchemaVersion: store.getIndexSchemaVersion(), lockLambdas: LockedLambdaReason.UNLOCKED });
+    } catch (error) {
+        handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
+        throw error;
+    }
 };
 
 const scan = async (currentBlockHash: string) => {
@@ -255,8 +262,6 @@ const scan = async (currentBlockHash: string) => {
             const handleNames = builtUTxOs.flatMap((u) => u.handles?.flatMap((h) => h[1].map((assetName) => getHandleNameFromAssetName(assetName).name)) ?? []) ?? [];
             console.log(`Processing block ${block.id} at slot ${block.slot} with ${builtUTxOs.length} UTxOs containing ${handleNames.join(', ')} handles from ${txList.length} transactions`);
 
-            handlesRepo.addMintDataFromUTxOs(builtUTxOs);
-
             builtUTxOs.forEach((utxo) => {
                 // ********** BURNS ************* //
                 const burnHandles: StoredHandle[] = store.pipeline(() => {
@@ -271,10 +276,10 @@ const scan = async (currentBlockHash: string) => {
                         handlesRepo.removeHandle(burned);
                     });
                 });
-
-                // ********* UPDATES ************ //
-                handlesRepo.addUTxOAndMintData(utxo, true);
             });
+
+            // ********* UPDATES ************ //
+            handlesRepo.addUTxOsWithMintDataAndUpdateIndexes(builtUTxOs);
 
             // ******** SPENT UTxOs *********** //
             handlesRepo.removeUTxOs(txList.flatMap((tx) => tx.inputs).map((i) => `${i.tx_hash}#${i.tx_index}`));
@@ -295,6 +300,7 @@ const scan = async (currentBlockHash: string) => {
 };
 
 export const lambdaHandler = async (event: AWSLambda.ALBEvent, context: AWSLambda.Context) => {
+    await ensureInitialized();
     const metrics = handlesRepo.getMetrics();
     if (metrics.lockLambdas) {
         // we probably need some recovery checks/notify here
@@ -324,7 +330,7 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context: AWSLambd
         return;
     }
 
-    // await checkRollback();
+    await checkRollback(metrics);
 
     await scan(metrics.currentBlockHash ?? '');
 
@@ -333,4 +339,11 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context: AWSLambd
         statusCode: 200,
         body: ''
     };
+};
+
+export const Internal = {
+    checkRollback,
+    processRollback,
+    processReindex,
+    scan
 };
