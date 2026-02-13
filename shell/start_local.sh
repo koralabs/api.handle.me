@@ -2,12 +2,12 @@
 set -eu
 set -a && source .env && set +a
 mkdir -p tmp
-OGMIOS_VER=${OGMIOS_VER:-6.11.2}
-CARDANO_NODE_VER=${CARDANO_NODE_VER:-10.5.3}
-SOCKET_PATH=${SOCKET_PATH:-"${PWD}/tmp/node.socket"}
-BASE_URL=${CONFIG_FILES_BASE_URL:-'https://book.play.dev.cardano.org/environments'}
-CARDANO_DB_PATH=${CARDANO_DB_PATH:-"./tmp"}
-NODE_CONFIG_PATH="./tmp/${NETWORK}"
+export OGMIOS_VER=${OGMIOS_VER:-6.11.2}
+export CARDANO_NODE_VER=${CARDANO_NODE_VER:-10.5.3}
+export SOCKET_PATH=${SOCKET_PATH:-"${PWD}/tmp/node.socket"}
+export BASE_URL=${CONFIG_FILES_BASE_URL:-'https://book.play.dev.cardano.org/environments'}
+export CARDANO_DB_PATH=${CARDANO_DB_PATH:-"./tmp"}
+export NODE_CONFIG_PATH="./tmp/${NETWORK}"
 
 if [[ "$@" != *"--host"* ]]
 then

@@ -40,3 +40,19 @@
 - A Handle address has to be correct 100% of the time. There are NO exceptions. If a single address is wrong, the whole protocol, project, and business is a failure. 
 - Handles can NEVER double mint. If a double mint ever happens and isn't immediately remedied (duplicate is burned), the whole protocol, project, and business is a failure.
 - All other Handle properties MUST be accurate. It's a blockchain, Handles are first class resolvers - accuracy is demanded.
+
+## // SIBLING PROJECTS
+- You can also edit these projects if needed to support a feature in this project.
+- Dont edit on the main/master branch in these sibling projects. Create a `codex` branch, or a `feature/<name>` branch.
+- Inform the user if the related project needs to be merged/built/deployed, or if it is blocking progress
+- For `@koralabs/<package-name>` npm packages, the project is located at `../<package-name>`. Feel free to build and npm link the output `./lib` folder in that project. Also notify the user of the needed publish before deployment. Bump both the package.json version and associated dependency.
+- Sites are at the same name as the primary domain.
+    - Example: https://handle.me (sometimes preceded by preview./preprod.) will be at `../handle.me`
+    - Example: https://docs.handle.me (sometimes preceded by preview./preprod.) will be at `../docs.handle.me`
+- api.handle.me is at `../handle-public-api`
+- Related Cardano validators/contracts:
+  - Personalization (a.k.a. "Pz") & Virtual SubHandles (100 asset label): `../handles-personalization`
+  - Marketplace: `../handles-marketplace-contracts`
+  - SubHandle Settings (001 asset label): `../handles-subhandle-settings`
+  - Handles Minting (DeMi & Legacy): `../decentralized-minting`
+  - Pz Background RFT (444) Minting: `../cip-68-444-minting`
