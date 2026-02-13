@@ -15,7 +15,7 @@ async function getClient() {
         glideClient = await GlideClient.createClient({
             addresses: [{ host: REDIS_HOST, port: getRedisPort() }],
             useTLS: process.env.REDIS_USE_TLS ? process.env.REDIS_USE_TLS == 'true' : true,
-            requestTimeout: 30_000
+            requestTimeout: 20_000
         });
         const status = await glideClient.ping();
         if (status == 'PONG') {
@@ -47,7 +47,7 @@ if (parentPort) {
                         //console.log(cmd, args);
                         pipeline[cmd](...args);
                     }
-                    const result = await client.exec(pipeline, true, { timeout: 10_000 });
+                    const result = await client.exec(pipeline, true, { timeout: 20_000 });
                     reply.postMessage({ id, ok: true, result });
                     break;
                 }

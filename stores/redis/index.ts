@@ -136,12 +136,15 @@ export class RedisHandlesStore implements IApiStore {
         }
         Logger.log(`Built mint data for ${mintingData.size.toLocaleString()} handles`);
 
-        this.pipeline(() => {
-            for (const utxo of utxos) {
-                utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo, mintingData, handles, holders);
-                added++;
-            }
-        })
+        const utxoChunks = chunk(utxos, MAX_SETS_PER_PIPE);
+        for (const utxoChunk of utxoChunks) {
+            this.pipeline(() => {
+                for (const utxo of utxoChunk) {
+                    utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo, mintingData, handles, holders);
+                    added++;
+                }
+            })
+        }
         
         // Log progress every 10k keys
         if (added % 10000 === 0) {
@@ -496,7 +499,7 @@ export class RedisHandlesStore implements IApiStore {
         RedisHandlesStore._worker.postMessage({ id, sab, payload: { id, cmd, args }, reply: port2 }, [port2]);
 
         // Block up to 30s so we don't hang forever
-        const status = Atomics.wait(view, 0, 0, 30_000);
+        const status = Atomics.wait(view, 0, 0, 20_000);
         if (status === 'timed-out') {
             throw new Error(`GlideClient ${cmd} timed out`);
         }

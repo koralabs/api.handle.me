@@ -22,6 +22,7 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context:AWSLambda
 
     try {
         // TODO: This should process in chunks of 10k or so then stop the lambda and it should restart and pick up where it left off.
+        // This function already chunks at a rate of about 20K every 10 seconds. 300K handles should take about 5 minutes
         store.repopulateIndexesFromUTxOs({
             [UTxOFunctionName.ADD_UTXO]: handlesRepo.addUTxO.bind(handlesRepo),
             [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: handlesRepo.updateHandleIndexes.bind(handlesRepo)
