@@ -51,7 +51,7 @@ const getBatchedTxHashes = async (blockHashes: string[]) => {
     const batchedBlockHashes = getKoiosBatches(blockHashes, '_block_hashes');
     const txHashes: string[] = [];
     await asyncForEach(batchedBlockHashes, async (blockHashes) => {
-        const txs = (await fetchKoios(`block_txs`, 'POST', JSON.stringify({ _block_hashes: blockHashes, ...defaultKoiosSettings }))) as { tx_hash: string }[] | null;
+        const txs = (await fetchKoios(`block_txs`, 'POST', JSON.stringify({ _block_hashes: blockHashes }))) as { tx_hash: string }[] | null;
         txHashes.push(...(txs?.map((tx) => tx.tx_hash) ?? []));
     });
     return txHashes;
