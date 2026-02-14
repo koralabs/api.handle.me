@@ -16,6 +16,47 @@ const ensureInitialized = async () => {
     initialized = true;
 };
 
+const getKoiosBatches = (list: string[], keyName: string) => {
+    const batchedList: string[][] = [];
+    let batchesIndex = 0;
+    let listArray: string[] = [];
+    while (batchesIndex < list.length) {
+        listArray.push(list[batchesIndex]);
+        if (JSON.stringify({ [keyName]: listArray, ...defaultKoiosSettings }).length >= 4900) {
+            // Max possible ",[policy,handle]" length is 96
+            batchedList.push(listArray);
+            listArray = [];
+        }
+        batchesIndex++;
+        // last check if last handle
+        if (batchesIndex == list.length && listArray.length) {
+            batchedList.push(listArray);
+        }
+    }
+    return batchedList;
+};
+
+const getBatchedUTxOs = async (txHashes: string[]) => {
+    const batchedTxHashes = getKoiosBatches(txHashes, '_tx_hashes');
+    const utxos: UTxOWithTxInfo[] = [];
+    await asyncForEach(batchedTxHashes, async (txHashes) => {
+        const txs = (await fetchKoios(`tx_info`, 'POST', JSON.stringify({ _tx_hashes: txHashes, ...defaultKoiosSettings }))) as KoiosTxInfo[] | null;
+        const builtUTxOs = buildUTxOsFromKoiosTxs(txs ?? []);
+        utxos.push(...builtUTxOs);
+    });
+    return utxos;
+};
+
+const getBatchedTxHashes = async (blockHashes: string[]) => {
+    const batchedBlockHashes = getKoiosBatches(blockHashes, '_block_hashes');
+    const txHashes: string[] = [];
+    await asyncForEach(batchedBlockHashes, async (blockHashes) => {
+        const txs = (await fetchKoios(`block_txs`, 'POST', JSON.stringify({ _block_hashes: blockHashes, ...defaultKoiosSettings }))) as { tx_hash: string }[] | null;
+        txHashes.push(...(txs?.map((tx) => tx.tx_hash) ?? []));
+    });
+    return txHashes;
+};
+
 const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSlot: number; rollbackOffset: number }) => {
     Logger.local(`Running rollback check - ${rollbackOffset}`);
     const latestBlockResponse = await blockfrostApiCall('blocks/latest');
@@ -34,48 +75,43 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
     const providerBlocks = blockList.filter((b) => b.slot <= currentSlot).sort((a, b) => a.slot - b.slot);
     if (!providerBlocks.length) return;
 
-    const providerUTxOs: UTxOWithTxInfo[] = []
-    for (const block of providerBlocks) {
-        const txList: KoiosTxInfo[] = await fetchTxList(block.hash);
-        const utxos = buildUTxOsFromKoiosTxs(txList);      
-        providerUTxOs.push(...utxos);  
-    }
+    const providerTxHashes = await getBatchedTxHashes(providerBlocks.map((b) => b.hash));
+    const providerUTxOs: UTxOWithTxInfo[] = await getBatchedUTxOs(providerTxHashes);
 
     // Get all of the UTxOs from db after that slot
     // Using the firstBlock.slot, we might get a UTxO that does not have Handles.
     const utxoIds = store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 0, { start: firstBlock.slot }) as string[];
 
     console.log('UTXO_IDS', utxoIds);
-    
+
     const utxos = store.pipeline(() => {
         utxoIds.forEach((utxoId) => handlesRepo.getUTxO(utxoId));
     }) as UTxOWithTxInfo[];
 
-    const [providerIds, apiIds] = [new Set(providerUTxOs.map(u => u.id)), new Set(utxos.map(u => u.id))];
-    const differences = [...providerIds.symmetricDifference(apiIds)].map(id => {
-        return [...providerUTxOs, ...utxos].find(u => u.id === id);
+    const [providerIds, apiIds] = [new Set(providerUTxOs.map((u) => u.id)), new Set(utxos.map((u) => u.id))];
+    const differences = [...providerIds.symmetricDifference(apiIds)].map((id) => {
+        return [...providerUTxOs, ...utxos].find((u) => u.id === id);
     });
 
     console.log('DIFFERENCES', differences);
 
     if (differences.length) {
-        const rollbackStartSlot = Math.min(...differences.map(u => u?.slot ?? Infinity));
+        const rollbackStartSlot = Math.min(...differences.map((u) => u?.slot ?? Infinity));
         if (!Number.isFinite(rollbackStartSlot)) return;
 
         console.log('ROLLBACK_START_SLOT', rollbackStartSlot);
 
         const providerRollbackUTxOs = providerUTxOs.filter((utxo) => utxo.slot >= rollbackStartSlot);
 
-        const firstMissingHeight = Math.min(...differences.map(u => u?.blockNum ?? Infinity));
+        const firstMissingHeight = Math.min(...differences.map((u) => u?.blockNum ?? Infinity));
         const distanceFromTip = latestBlock.height - firstMissingHeight;
         Logger.local(`Rollback detected from slot ${rollbackStartSlot}${distanceFromTip === null ? '' : ` (${distanceFromTip} blocks from tip)`}`);
 
         const apiRollbackUtxos = utxos.filter((utxo): utxo is UTxOWithTxInfo => !!utxo && utxo.slot >= rollbackStartSlot);
-        
+
         // This should be a notify since we are very rarely expecting in this range
         // and may need to adjust the number 20 above accordingly
-        if (distanceFromTip! > 20)
-            Logger.log({ category: LogCategory.NOTIFY, message: `Rollback at ${distanceFromTip} blocks detected! Block: ${firstMissingHeight}`, event: 'RollbackLambda' });
+        if (distanceFromTip! > 20) Logger.log({ category: LogCategory.NOTIFY, message: `Rollback at ${distanceFromTip} blocks detected! Block: ${firstMissingHeight}`, event: 'RollbackLambda' });
         // If there are any missing delete/replay
         const handles: string[] = [];
         for (const utxo of apiRollbackUtxos) {
@@ -187,23 +223,6 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
             }
         });
 
-        const batchedTxHashes: string[][] = [];
-        let batchesIndex = 0;
-        let txHashesArray: string[] = [];
-        while (batchesIndex < txHashes.length) {
-            txHashesArray.push(txHashes[batchesIndex]);
-            if (JSON.stringify({ _tx_hashes: txHashesArray, _metadata: true, _assets: true, _bytecode: true, _scripts: true }).length >= 4900) {
-                // Max possible ",[policy,handle]" length is 96
-                batchedTxHashes.push(txHashesArray);
-                txHashesArray = [];
-            }
-            batchesIndex++;
-            // last check if last handle
-            if (batchesIndex == txHashes.length && txHashesArray.length) {
-                batchedTxHashes.push(txHashesArray);
-            }
-        }
-
         const storedHandlesMap = new Map<string, StoredHandle>(storedHandles.map((h) => [h.name, h]));
 
         const retrievedMintingData = store.pipeline(() => {
@@ -221,14 +240,11 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
             );
         });
 
-        await asyncForEach(batchedTxHashes, async (txHashes) => {
-            const txs = (await fetchKoios(`tx_info`, 'POST', JSON.stringify({ _tx_hashes: txHashes, ...defaultKoiosSettings }))) as KoiosTxInfo[] | null;
-            const builtUTxOs = buildUTxOsFromKoiosTxs(txs ?? []);
-            store.pipeline(() => {
-                for (const utxo of builtUTxOs) {
-                    handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap);
-                }
-            });
+        const builtUTxOs = await getBatchedUTxOs(txHashes);
+        store.pipeline(() => {
+            for (const utxo of builtUTxOs) {
+                handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap);
+            }
         });
     }
 };
@@ -236,7 +252,6 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
 const checkRollback = async () => {
     const { currentSlot = 0, lastMaxRollbackCheck = 0 } = handlesRepo.getMetrics();
     try {
-
         handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.ROLLBACK_20, lockLambdasTimestamp: startTime });
         // 20 confirmation range once a minute
         // Get "20 ago block" (Blockfrost supports get by height/number)
