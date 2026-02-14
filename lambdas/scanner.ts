@@ -38,10 +38,9 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
     const utxoIds = store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 0, { start: firstBlock.slot }) as string[];
     const utxos = store.pipeline(() => {
         utxoIds.forEach((utxoId) => handlesRepo.getUTxO(utxoId));
-    }) as (UTxOWithTxInfo | null)[];
+    }) as UTxOWithTxInfo[];
 
-    const apiBlocks = [...new Map(utxos.filter((u): u is UTxOWithTxInfo => !!u && !!u.blockHash).map((u) => [`${u.slot}:${u.blockHash}`, { slot: u.slot, hash: u.blockHash }])).values()];
-    apiBlocks.sort((a, b) => a.slot - b.slot);
+    const apiBlocks = utxos.map((u) => ({ slot: u.slot, hash: u.blockHash, height: u.blockNum })).sort((a, b) => a.slot - b.slot);
 
     const apiBlockHashes = new Set(apiBlocks.map((u) => u.hash));
     const providerBlockHashes = new Set(providerBlocks.map((b) => b.hash));
@@ -51,14 +50,14 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
     const firstMissingInProvider = apiBlocks.find((block) => !providerBlockHashes.has(block.hash));
 
     if (firstMissingInApi || firstMissingInProvider) {
-        const rollbackStartSlot = Math.min(firstMissingInApi?.slot ?? Number.POSITIVE_INFINITY, firstMissingInProvider?.slot ?? Number.POSITIVE_INFINITY);
+        const rollbackStartSlot = Math.min(firstMissingInApi?.slot ?? Infinity, firstMissingInProvider?.slot ?? Infinity);
         if (!Number.isFinite(rollbackStartSlot)) return;
 
         const rollbackBlocks = providerBlocks.filter((block) => block.slot >= rollbackStartSlot);
-        const firstMissingHeight = firstMissingInApi?.height ?? rollbackBlocks[0]?.height;
-        const distanceFromTip = typeof firstMissingHeight === 'number' ? Math.max(0, latestBlock.height - firstMissingHeight) : null;
+        const firstMissingHeight = Math.min(firstMissingInApi?.height ?? Infinity, firstMissingInProvider?.height ?? Infinity);
+        const distanceFromTip = latestBlock.height - firstMissingHeight;
 
-        Logger.local(`Rollback detected from slot ${rollbackStartSlot}${distanceFromTip === null ? '' : ` (~${distanceFromTip} blocks from tip)`}`);
+        Logger.local(`Rollback detected from slot ${rollbackStartSlot}${distanceFromTip === null ? '' : ` (${distanceFromTip} blocks from tip)`}`);
 
         const rollbackUtxos = utxos.filter((utxo): utxo is UTxOWithTxInfo => !!utxo && utxo.slot >= rollbackStartSlot);
         
