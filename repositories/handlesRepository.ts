@@ -303,18 +303,6 @@ export class HandlesRepository {
         return Array.from(mintedAssetNames);
     }
 
-    private getPrimaryMintingData(mintingData: MintingData[]): MintingData | undefined {
-        return [...mintingData].sort((a, b) => {
-            if (a.created_slot !== b.created_slot) return a.created_slot - b.created_slot;
-
-            const aHasNftMetadata = !!a.metadata?.[MetadataLabel.NFT];
-            const bHasNftMetadata = !!b.metadata?.[MetadataLabel.NFT];
-            if (aHasNftMetadata !== bHasNftMetadata) return Number(bHasNftMetadata) - Number(aHasNftMetadata);
-
-            return `${a.txHash}`.localeCompare(`${b.txHash}`);
-        })[0];
-    }
-
     public buildMintingDataFromUTxO(utxo: UTxOWithTxInfo) {
         const mintingData: Map<string, MintingData[]>  = new Map();
         const mintedAssetNames = this.getMintedAssetNames(utxo);
@@ -679,10 +667,11 @@ export class HandlesRepository {
 
                 //const mintIndexValue = this.store.getValuesFromIndexedSet(IndexNames.MINT, name) as Set<string>;
                 //.map<MintingData>(md => JSON.parse(md))
-                const mintIndexValue = mintingData?.get(name)
-                    ?? Array.from(this.store.getValuesFromIndexedSet(IndexNames.MINT, name) ?? new Set<string>())
-                        .map<MintingData>(md => JSON.parse(md));
-                const firstMintingData = this.getPrimaryMintingData(Array.from(mintIndexValue));
+                const mintIndexValue = mintingData?.get(name) 
+                                            ?? Array.from(this.store.getValuesFromIndexedSet(IndexNames.MINT, name) 
+                                            ?? new Set<string>())
+                                        .map<MintingData>(md => JSON.parse(md));
+                const firstMintingData = Array.from(mintIndexValue).sort((a, b) => a.created_slot - b.created_slot)[0]
 
                 // mintingData from the index should never be undefined.
                 // however, metadata can.
