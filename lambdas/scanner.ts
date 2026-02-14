@@ -75,24 +75,96 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
     const providerBlocks = blockList.filter((b) => b.slot <= currentSlot).sort((a, b) => a.slot - b.slot);
     if (!providerBlocks.length) return;
 
+    // Get all of the UTxOs from db after that slot
+    // Using the firstBlock.slot, we might get a UTxO that does not have Handles.
+    const utxoIds = store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 0, { start: firstBlock.slot }) as string[];
+    console.log('UTXO_IDS', utxoIds);
+    const utxos = store.pipeline(() => {
+        utxoIds.forEach((utxoId) => handlesRepo.getUTxO(utxoId));
+    }) as UTxOWithTxInfo[];
+
     const providerTxHashes = await getBatchedTxHashes(providerBlocks.map((b) => b.hash));
     const providerUTxOs: UTxOWithTxInfo[] = await getBatchedUTxOs(providerTxHashes);
     // sort provider UTxOs by slot ascending
     providerUTxOs.sort((a, b) => a.slot - b.slot);
 
-    // Get all of the UTxOs from db after that slot
-    // Using the firstBlock.slot, we might get a UTxO that does not have Handles.
-    const utxoIds = store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 0, { start: firstBlock.slot }) as string[];
+    const handleNames: Set<string> = new Set();
+    for (const utxo of [...providerUTxOs, ...utxos]) {
+        for (const assets of utxo?.handles ?? []) {
+            assets[1].forEach((assetName) => {
+                const { name } = getHandleNameFromAssetName(assetName);
+                handleNames.add(name);
+            });
+        }
+    }
+    
+    const handles = [...handleNames];
 
-    console.log('UTXO_IDS', utxoIds);
+    const storedHandles = store
+        .pipeline(() => {
+            handles.forEach((handleName) => {
+                handlesRepo.getHandle(handleName);
+            });
+        })
+        .filter(Boolean) as StoredHandle[];
 
-    const utxos = store.pipeline(() => {
-        utxoIds.forEach((utxoId) => handlesRepo.getUTxO(utxoId));
-    }) as UTxOWithTxInfo[];
+    const batchedHandles: [string, string][][] = [];
+    let storedHandlesIndex = 0;
+    let assetNames: [string, string][] = [];
+    while (storedHandlesIndex < storedHandles.length) {
+        // TODO: deal with virtual subHandles
+        const storedHandle = storedHandles[storedHandlesIndex];
+        const { isCip67 } = getHandleNameFromAssetName(storedHandle.hex);
 
-    const [providerIds, apiIds] = [new Set(providerUTxOs.map((u) => u.id)), new Set(utxos.map((u) => u.id))];
-    const differences = [...providerIds.symmetricDifference(apiIds)].map((id) => {
-        return [...providerUTxOs, ...utxos].find((u) => u.id === id);
+        assetNames.push([storedHandles[storedHandlesIndex].policy, storedHandles[storedHandlesIndex].hex]);
+
+        if (isCip67) {
+            const hexWithoutLabel = storedHandles[storedHandlesIndex].hex.slice(8);
+            assetNames.push([storedHandles[storedHandlesIndex].policy, `${AssetNameLabel.LBL_100}${hexWithoutLabel}`]);
+            assetNames.push([storedHandles[storedHandlesIndex].policy, `${AssetNameLabel.LBL_001}${hexWithoutLabel}`]);
+        }
+
+        if (JSON.stringify({ _asset_list: assetNames, _extended: true }).length >= 4700) {
+            // Max possible ",[policy,handle]" length is 96
+            batchedHandles.push(assetNames);
+            assetNames = [];
+        }
+        storedHandlesIndex++;
+        // last check if last handle
+        if (storedHandlesIndex == storedHandles.length && assetNames.length) {
+            batchedHandles.push(assetNames);
+        }
+    }
+
+    const handleTxHashes: string[] = [];
+    // This is a separate set of UTxOs representing the current Handle values (potentially different from above UTxOs)
+    await asyncForEach(batchedHandles, async (handleNames) => {
+        const body = JSON.stringify({ _asset_list: handleNames, _extended: true });
+        const koiosUtxos = (await fetchKoios(`asset_utxos`, 'POST', body)) as KoiosAssetUTxO[] | null;
+        if (koiosUtxos !== null) {
+            // go through each asset and grab the data we need to test, tx_hash, tx_index, address
+            for (const utxo of koiosUtxos) {
+                handleTxHashes.push(utxo.tx_hash);
+            }
+        } else {
+            // Handle not found in provider, we need to remove it from our store.
+            // this can happen if a mint was rolled back and didn't return
+            // Mostly possible with DEMI and Manually added Handles because handle.me uses Blockfrost
+        }
+    });
+
+    const latestUTxOsForAffectedHandles = await getBatchedUTxOs(handleTxHashes);
+
+    // find the intersection of providerUTxOs and latestUTxOsForAffectedHandles to get the latest UTxOs for the affected handles
+    const [providerIds, latestIds] = [new Set(providerUTxOs.map((u) => u.id)), new Set(latestUTxOsForAffectedHandles.map((u) => u.id))];
+    const latestProviderUTxOsForAffectedHandles = [...providerIds.intersection(latestIds)].map((id) => {
+        return [...providerUTxOs, ...latestUTxOsForAffectedHandles].find((u) => u.id === id)!;
+    });
+
+    // then find the differences between that and the utxos from our store to find any discrepancies
+    const [latestProviderIds, apiIds] = [new Set(latestProviderUTxOsForAffectedHandles.map((u) => u.id)), new Set(utxos.map((u) => u.id))];
+    const differences = [...latestProviderIds.symmetricDifference(apiIds)].map((id) => {
+        return [...latestProviderUTxOsForAffectedHandles, ...utxos].find((u) => u.id === id);
     });
 
     console.log('DIFFERENCES', differences);
@@ -115,15 +187,6 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
         // and may need to adjust the number 20 above accordingly
         if (distanceFromTip! > 20) Logger.log({ category: LogCategory.NOTIFY, message: `Rollback at ${distanceFromTip} blocks detected! Block: ${firstMissingHeight}`, event: 'RollbackLambda' });
         // If there are any missing delete/replay
-        const handles: string[] = [];
-        for (const utxo of apiRollbackUtxos) {
-            for (const assets of utxo?.handles ?? []) {
-                assets[1].forEach((assetName) => {
-                    const { name } = getHandleNameFromAssetName(assetName);
-                    handles.push(name);
-                });
-            }
-        }
 
         // build the minting data for all handles in this range
         const handlesMintingData = store.pipeline(() => {
@@ -145,13 +208,6 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
             });
         });
 
-        const storedHandles = store
-            .pipeline(() => {
-                handles.forEach((handleName) => {
-                    handlesRepo.getHandle(handleName);
-                });
-            })
-            .filter(Boolean) as StoredHandle[];
         const stakeAddresses = storedHandles.map((h) => buildHolderInfo(h.resolved_addresses.ada).address);
 
         // get a full list of holders so we can pass it into the updateHolder function later
@@ -180,51 +236,6 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
         // repopulate utxo store and minting data from Bf/Ko
         handlesRepo.addUTxOsWithMintData(providerRollbackUTxOs);
 
-        const batchedHandles: [string, string][][] = [];
-        let storedHandlesIndex = 0;
-        let assetNames: [string, string][] = [];
-        while (storedHandlesIndex < storedHandles.length) {
-            // TODO: deal with virtual subHandles
-            const storedHandle = storedHandles[storedHandlesIndex];
-            const { isCip67 } = getHandleNameFromAssetName(storedHandle.hex);
-
-            assetNames.push([storedHandles[storedHandlesIndex].policy, storedHandles[storedHandlesIndex].hex]);
-
-            if (isCip67) {
-                const hexWithoutLabel = storedHandles[storedHandlesIndex].hex.slice(8);
-                assetNames.push([storedHandles[storedHandlesIndex].policy, `${AssetNameLabel.LBL_100}${hexWithoutLabel}`]);
-                assetNames.push([storedHandles[storedHandlesIndex].policy, `${AssetNameLabel.LBL_001}${hexWithoutLabel}`]);
-            }
-
-            if (JSON.stringify({ _asset_list: assetNames, _extended: true }).length >= 4700) {
-                // Max possible ",[policy,handle]" length is 96
-                batchedHandles.push(assetNames);
-                assetNames = [];
-            }
-            storedHandlesIndex++;
-            // last check if last handle
-            if (storedHandlesIndex == storedHandles.length && assetNames.length) {
-                batchedHandles.push(assetNames);
-            }
-        }
-
-        const txHashes: string[] = [];
-        // This is a separate set of UTxOs representing the current Handle values (potentially different from above UTxOs)
-        await asyncForEach(batchedHandles, async (handleNames) => {
-            const body = JSON.stringify({ _asset_list: handleNames, _extended: true });
-            const koiosUtxos = (await fetchKoios(`asset_utxos`, 'POST', body)) as KoiosAssetUTxO[] | null;
-            if (koiosUtxos !== null) {
-                // go through each asset and grab the data we need to test, tx_hash, tx_index, address
-                for (const utxo of koiosUtxos) {
-                    txHashes.push(utxo.tx_hash);
-                }
-            } else {
-                // Handle not found in provider, we need to remove it from our store.
-                // this can happen if a mint was rolled back and didn't return
-                // Mostly possible with DEMI and Manually added Handles because handle.me uses Blockfrost
-            }
-        });
-
         const storedHandlesMap = new Map<string, StoredHandle>(storedHandles.map((h) => [h.name, h]));
 
         const retrievedMintingData = store.pipeline(() => {
@@ -242,9 +253,8 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
             );
         });
 
-        const builtUTxOs = await getBatchedUTxOs(txHashes);
         store.pipeline(() => {
-            for (const utxo of builtUTxOs) {
+            for (const utxo of latestUTxOsForAffectedHandles) {
                 handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap);
             }
         });
