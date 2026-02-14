@@ -154,5 +154,8 @@ export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[]): UTxOWithTxI
         }
     }
 
+    // Sort the UTxOs so that Handles with 222 are first. This fixes when we look for mintingData later.
+    utxos.sort(u => u.handles.some(h => h[1].some(a => a.startsWith(AssetNameLabel.LBL_222))) ? -1 : 1);
+    
     return utxos;
 }

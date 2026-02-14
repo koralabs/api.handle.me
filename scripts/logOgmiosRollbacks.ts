@@ -15,6 +15,7 @@ type RollbackWatcherDeps = {
     createSocket?: (ogmiosHost: string) => RollbackWatcherSocket;
     log?: (...args: any[]) => void;
     errorLog?: (...args: any[]) => void;
+    reconnectDelayMs?: number;
 };
 
 const toNumber = (value: unknown) => {
@@ -99,16 +100,40 @@ export const startOgmiosRollbackWatcher = async (deps: RollbackWatcherDeps = {})
     });
 
     client.on('close', (code: number, reason: Buffer) => {
-        log(`Ogmios websocket closed (${code}) ${reason.toString()}`);
+        const textReason = reason.toString();
+        if (textReason.includes('Connection with the node lost or failed')) {
+            log(`Ogmios websocket closed (${code}) waiting to reconnect`);
+            return;
+        }
+        log(`Ogmios websocket closed (${code}) ${textReason}`);
     });
 
     return { client, intersectionPoint };
 };
 
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export const runOgmiosRollbackWatcher = async (deps: RollbackWatcherDeps = {}) => {
+    const reconnectDelayMs = deps.reconnectDelayMs ?? Number(process.env.OGMIOS_ROLLBACK_RECONNECT_MS ?? 5000);
+    const log = deps.log ?? console.log;
+    const errorLog = deps.errorLog ?? console.error;
+
+    for (;;) {
+        try {
+            const { client } = await startOgmiosRollbackWatcher(deps);
+            await new Promise<void>((resolve) => {
+                client.on('close', () => resolve());
+            });
+        } catch (error: any) {
+            errorLog('Failed to start Ogmios rollback watcher', error?.message ?? error);
+        }
+
+        log(`Reconnecting Ogmios rollback watcher in ${reconnectDelayMs}ms`);
+        await delay(reconnectDelayMs);
+    }
+};
+
 const isMainModule = process.argv[1] && import.meta.url === url.pathToFileURL(process.argv[1]).href;
 if (isMainModule) {
-    startOgmiosRollbackWatcher().catch((error: any) => {
-        console.error('Failed to start Ogmios rollback watcher', error?.message ?? error);
-        process.exitCode = 1;
-    });
+    runOgmiosRollbackWatcher();
 }

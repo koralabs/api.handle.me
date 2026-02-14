@@ -46,7 +46,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
         // This should be a notify since we are very rarely expecting in this range
         // and may need to adjust the number 20 above accordingly
         if (rollbackOffset == 2160)
-            Logger.log({ message: `Rollback after 20 blocks detected! Missing in API: ${missingInApi}, Missing in Provider: ${missingInProvider}`, event: 'RollbackLambda' });
+            Logger.log({ category: LogCategory.NOTIFY, message: `Rollback after 20 blocks detected! Missing in API: ${missingInApi}, Missing in Provider: ${missingInProvider}`, event: 'RollbackLambda' });
         // If there are any missing delete/replay
         const handles: string[] = [];
         for (const utxo of utxos) {
@@ -210,18 +210,18 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
 const checkRollback = async (metrics: IApiMetrics) => {
     const { currentSlot = 0, lastMaxRollbackCheck = 0 } = metrics;
     try {
-        // if it is time to run the 2160 then we don't have to run the 20
+
+        handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.ROLLBACK_20, lockLambdasTimestamp: startTime });
+        // 20 confirmation range once a minute
+        // Get "20 ago block" (Blockfrost supports get by height/number)
+        await processRollback({ currentSlot, rollbackOffset: 20 });
+
         if (Date.now() - lastMaxRollbackCheck > 60 * 60 * 1000) {
             // Get "2160 ago block" (Blockfrost supports get by height/number)
             handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.ROLLBACK_2160, lockLambdasTimestamp: startTime });
             await processRollback({ currentSlot, rollbackOffset: 2160 });
             // Update last2160check
             handlesRepo.setMetrics({ lastMaxRollbackCheck: Date.now() });
-        } else {
-            // 20 confirmation range once a minute
-            // Get "20 ago block" (Blockfrost supports get by height/number)
-            handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.ROLLBACK_20, lockLambdasTimestamp: startTime });
-            await processRollback({ currentSlot, rollbackOffset: 20 });
         }
     } finally {
         handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
@@ -332,9 +332,9 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context: AWSLambd
         return;
     }
 
-    await checkRollback(metrics);
-
     await scan(metrics.currentBlockHash ?? '');
+
+    await checkRollback(metrics);
 
     return {
         isBase64Encoded: false,

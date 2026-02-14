@@ -10,16 +10,18 @@ export CARDANO_DB_PATH=${CARDANO_DB_PATH:-"./tmp"}
 export NODE_CONFIG_PATH="./tmp/${NETWORK}"
 CARDANO_NODE_PID=""
 OGMIOS_PID=""
+MANAGED_CARDANO_NODE=false
+MANAGED_OGMIOS=false
 
 cleanup() {
-    if [[ -n "${CARDANO_NODE_PID}" ]] && kill -0 "${CARDANO_NODE_PID}" 2>/dev/null; then
+    if [[ "${MANAGED_CARDANO_NODE}" == "true" ]] && [[ -n "${CARDANO_NODE_PID}" ]] && kill -0 "${CARDANO_NODE_PID}" 2>/dev/null; then
         echo "Stopping cardano-node with SIGINT..."
         kill -INT "${CARDANO_NODE_PID}" || true
         wait "${CARDANO_NODE_PID}" || true
         echo "  ...CARDANO-NODE STOPPED"
     fi
 
-    if [[ -n "${OGMIOS_PID}" ]] && kill -0 "${OGMIOS_PID}" 2>/dev/null; then
+    if [[ "${MANAGED_OGMIOS}" == "true" ]] && [[ -n "${OGMIOS_PID}" ]] && kill -0 "${OGMIOS_PID}" 2>/dev/null; then
         echo "Stopping ogmios..."
         kill -TERM "${OGMIOS_PID}" || true
         wait "${OGMIOS_PID}" || true
@@ -129,14 +131,32 @@ fi
 # Workaround for Mithril not outputting the protocolMagicId
 cat ${NODE_CONFIG_PATH}/shelley-genesis.json | jq -r .networkMagic > ${NODE_DB}/protocolMagicId
 
-./tmp/cardano-node/bin/cardano-node run \
-    --config ${NODE_CONFIG_PATH}/config.json \
-    --topology ${NODE_CONFIG_PATH}/topology.json \
-    --database-path ${NODE_DB} \
-    --port 3000 \
-    --host-addr 0.0.0.0 \
-    --socket-path ${SOCKET_PATH} > >(stdbuf -oL -eL egrep --line-buffered '\b(startup:Info:|local socket:|ChainDB:Notice:|:Critical:|Validating chunk)\b') 2>&1 &
-CARDANO_NODE_PID=$!
+if pgrep -x "cardano-node" > /dev/null
+then
+    CARDANO_NODE_PID="$(pgrep -x cardano-node | head -n1)"
+    if [[ ! -S "${SOCKET_PATH}" ]]; then
+        echo "cardano-node is already running but ${SOCKET_PATH} is missing."
+        echo "This usually means cardano-node was started multiple times and the socket path was unlinked."
+        echo "Stop existing cardano-node/ogmios processes and restart with npm run ogmios."
+        exit 1
+    fi
+    echo "cardano-node already running. Reusing PID ${CARDANO_NODE_PID}."
+else
+    ./tmp/cardano-node/bin/cardano-node run \
+        --config ${NODE_CONFIG_PATH}/config.json \
+        --topology ${NODE_CONFIG_PATH}/topology.json \
+        --database-path ${NODE_DB} \
+        --port 3000 \
+        --host-addr 0.0.0.0 \
+        --socket-path ${SOCKET_PATH} > >(stdbuf -oL -eL egrep --line-buffered '\b(startup:Info:|local socket:|ChainDB:Notice:|:Critical:|Validating chunk)\b') 2>&1 &
+    CARDANO_NODE_PID=$!
+    MANAGED_CARDANO_NODE=true
+
+    until [[ -S "${SOCKET_PATH}" ]]
+    do
+        sleep 1
+    done
+fi
 
 ###############################################
 #                  OGMIOS                     #
@@ -152,6 +172,9 @@ then
     echo "Starting Ogmios - connecting to ${SOCKET_PATH}"
     ./tmp/ogmios/bin/ogmios $HOST $NODE_CONFIG $NODE_SOCKET $@ --include-transaction-cbor --log-level Error &
     OGMIOS_PID=$!
+    MANAGED_OGMIOS=true
+else
+    echo "ogmios already running. Reusing existing process."
 fi
 
 wait
