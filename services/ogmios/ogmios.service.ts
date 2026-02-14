@@ -156,7 +156,7 @@ class OgmiosService {
                     }
                     break;
             }
-                            this._rpcRequest('nextBlock', {}, 'next-block');
+            this._rpcRequest('nextBlock', {}, 'next-block');
         }, 1).push)
         client.on('error', (error) => {
             Logger.log({ message: `OgmiosClient Error: ${error}`, category: LogCategory.ERROR, event: 'OgmiosClient.Error' });

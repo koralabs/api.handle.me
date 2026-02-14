@@ -77,6 +77,8 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
 
     const providerTxHashes = await getBatchedTxHashes(providerBlocks.map((b) => b.hash));
     const providerUTxOs: UTxOWithTxInfo[] = await getBatchedUTxOs(providerTxHashes);
+    // sort provider UTxOs by slot ascending
+    providerUTxOs.sort((a, b) => a.slot - b.slot);
 
     // Get all of the UTxOs from db after that slot
     // Using the firstBlock.slot, we might get a UTxO that does not have Handles.
