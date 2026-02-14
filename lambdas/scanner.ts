@@ -1,5 +1,5 @@
 import { Transaction } from '@cardano-ogmios/schema';
-import { AssetNameLabel, asyncForEach, buildHolderInfo, IApiMetrics, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, asyncForEach, buildHolderInfo, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { BlockfrostBlock, KoiosAssetUTxO, KoiosTxInfo } from '../interfaces/provider.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
@@ -34,32 +34,43 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
     const providerBlocks = blockList.filter((b) => b.slot <= currentSlot).sort((a, b) => a.slot - b.slot);
     if (!providerBlocks.length) return;
 
+    const providerUTxOs: UTxOWithTxInfo[] = []
+    for (const block of providerBlocks) {
+        const txList: KoiosTxInfo[] = await fetchTxList(block.hash);
+        const utxos = buildUTxOsFromKoiosTxs(txList);      
+        providerUTxOs.push(...utxos);  
+    }
+
     // Get all of the UTxOs from db after that slot
+    // Using the firstBlock.slot, we might get a UTxO that does not have Handles.
     const utxoIds = store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 0, { start: firstBlock.slot }) as string[];
+
+    console.log('UTXO_IDS', utxoIds);
+    
     const utxos = store.pipeline(() => {
         utxoIds.forEach((utxoId) => handlesRepo.getUTxO(utxoId));
     }) as UTxOWithTxInfo[];
 
-    const apiBlocks = utxos.map((u) => ({ slot: u.slot, hash: u.blockHash, height: u.blockNum })).sort((a, b) => a.slot - b.slot);
+    const [providerIds, apiIds] = [new Set(providerUTxOs.map(u => u.id)), new Set(utxos.map(u => u.id))];
+    const differences = [...providerIds.symmetricDifference(apiIds)].map(id => {
+        return [...providerUTxOs, ...utxos].find(u => u.id === id);
+    });
 
-    const apiBlockHashes = new Set(apiBlocks.map((u) => u.hash));
-    const providerBlockHashes = new Set(providerBlocks.map((b) => b.hash));
-    // Check for  API <--  missing UTxOs --> Bf/Ko
+    console.log('DIFFERENCES', differences);
 
-    const firstMissingInApi = providerBlocks.find((block) => !apiBlockHashes.has(block.hash));
-    const firstMissingInProvider = apiBlocks.find((block) => !providerBlockHashes.has(block.hash));
-
-    if (firstMissingInApi || firstMissingInProvider) {
-        const rollbackStartSlot = Math.min(firstMissingInApi?.slot ?? Infinity, firstMissingInProvider?.slot ?? Infinity);
+    if (differences.length) {
+        const rollbackStartSlot = Math.min(...differences.map(u => u?.slot ?? Infinity));
         if (!Number.isFinite(rollbackStartSlot)) return;
 
-        const rollbackBlocks = providerBlocks.filter((block) => block.slot >= rollbackStartSlot);
-        const firstMissingHeight = Math.min(firstMissingInApi?.height ?? Infinity, firstMissingInProvider?.height ?? Infinity);
-        const distanceFromTip = latestBlock.height - firstMissingHeight;
+        console.log('ROLLBACK_START_SLOT', rollbackStartSlot);
 
+        const providerRollbackUTxOs = providerUTxOs.filter((utxo) => utxo.slot >= rollbackStartSlot);
+
+        const firstMissingHeight = Math.min(...differences.map(u => u?.blockNum ?? Infinity));
+        const distanceFromTip = latestBlock.height - firstMissingHeight;
         Logger.local(`Rollback detected from slot ${rollbackStartSlot}${distanceFromTip === null ? '' : ` (${distanceFromTip} blocks from tip)`}`);
 
-        const rollbackUtxos = utxos.filter((utxo): utxo is UTxOWithTxInfo => !!utxo && utxo.slot >= rollbackStartSlot);
+        const apiRollbackUtxos = utxos.filter((utxo): utxo is UTxOWithTxInfo => !!utxo && utxo.slot >= rollbackStartSlot);
         
         // This should be a notify since we are very rarely expecting in this range
         // and may need to adjust the number 20 above accordingly
@@ -67,7 +78,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
             Logger.log({ category: LogCategory.NOTIFY, message: `Rollback at ${distanceFromTip} blocks detected! Block: ${firstMissingHeight}`, event: 'RollbackLambda' });
         // If there are any missing delete/replay
         const handles: string[] = [];
-        for (const utxo of rollbackUtxos) {
+        for (const utxo of apiRollbackUtxos) {
             for (const assets of utxo?.handles ?? []) {
                 assets[1].forEach((assetName) => {
                     const { name } = getHandleNameFromAssetName(assetName);
@@ -123,17 +134,13 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
         });
 
         // delete all UTxOs after that slot and replay them all
-        const utxoIdsToRemove = rollbackUtxos.map((utxo) => utxo.id);
+        const utxoIdsToRemove = apiRollbackUtxos.map((utxo) => utxo.id);
         if (utxoIdsToRemove.length) {
             handlesRepo.removeUTxOs(utxoIdsToRemove);
         }
 
         // repopulate utxo store and minting data from Bf/Ko
-        for (const block of rollbackBlocks) {
-            const txList = await fetchTxList(block.hash);
-            const utxos = buildUTxOsFromKoiosTxs(txList);
-            handlesRepo.addUTxOsWithMintData(utxos);
-        }
+        handlesRepo.addUTxOsWithMintData(providerRollbackUTxOs);
 
         const batchedHandles: [string, string][][] = [];
         let storedHandlesIndex = 0;
@@ -176,6 +183,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
             } else {
                 // Handle not found in provider, we need to remove it from our store.
                 // this can happen if a mint was rolled back and didn't return
+                // Mostly possible with DEMI and Manually added Handles because handle.me uses Blockfrost
             }
         });
 
@@ -225,8 +233,8 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
     }
 };
 
-const checkRollback = async (metrics: IApiMetrics) => {
-    const { currentSlot = 0, lastMaxRollbackCheck = 0 } = metrics;
+const checkRollback = async () => {
+    const { currentSlot = 0, lastMaxRollbackCheck = 0 } = handlesRepo.getMetrics();
     try {
 
         handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.ROLLBACK_20, lockLambdasTimestamp: startTime });
@@ -266,12 +274,13 @@ const processReindex = async () => {
     }
 };
 
-const scan = async (currentBlockHash: string) => {
+const scan = async () => {
     Logger.local(`Running scan...`);
+    const metrics = handlesRepo.getMetrics();
     // Is scanning fast enough to do this without MAX_TIP_SLOTS? Or a much higher one?
     handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.SCANNING, lockLambdasTimestamp: startTime });
     try {
-        const bResp: { hash: string; slot: number; confirmations: number }[] = await fetchPaginatedResults(`blocks/${currentBlockHash}/next`);
+        const bResp: { hash: string; slot: number; confirmations: number }[] = await fetchPaginatedResults(`blocks/${metrics.currentBlockHash}/next`);
         bResp.sort((a, b) => b.confirmations - a.confirmations);
         for (const b of bResp) {
             const block = { id: b.hash, slot: b.slot, confirmations: b.confirmations, transactions: [] as Transaction[] };
@@ -351,9 +360,9 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context: AWSLambd
         return;
     }
 
-    await scan(metrics.currentBlockHash ?? '');
+    await scan();
 
-    await checkRollback(metrics);
+    await checkRollback();
 
     return {
         isBase64Encoded: false,
