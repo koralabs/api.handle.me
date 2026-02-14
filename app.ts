@@ -105,6 +105,7 @@ class App {
             if (['development', 'test'].includes(NODE_ENV) && process.env.USE_LAMBDA_SCANNER == 'true') {
                 await (async () => {
                     const scanner = await import('./lambdas/scanner');
+                    scanner.lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
                     setInterval(() => {
                         Logger.log(`Running scanner lambda...`);
                         scanner.lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
