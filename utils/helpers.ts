@@ -2,7 +2,7 @@ import { AssetNameLabel, delay, HANDLE_POLICIES, LogCategory, Logger, Network, N
 import { KoiosTxInfo } from '../interfaces/provider.interface';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 
-export const defaultKoiosSettings = { _inputs: false, _withdrawals: false, _certs: false, _scripts: false, _bytecode: false, _governance: false, _metadata: true, _assets: true };
+export const defaultKoiosSettings = { _inputs: false, _withdrawals: false, _certs: false, _governance: false, _scripts: true, _bytecode: true, _metadata: true, _assets: true };
 
 export const blockfrostApiCall = async (endpointSegment: string) => {
     const headers = {
