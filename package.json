@@ -26,7 +26,7 @@
   "dependencies": {
     "@cardano-ogmios/client": "^6.11.0",
     "@cardano-ogmios/schema": "^6.11.0",
-    "@koralabs/kora-labs-common": "6.4.13",
+    "@koralabs/kora-labs-common": "6.4.14",
     "@stricahq/cardano-codec": "^2.0.4",
     "@valkey/valkey-glide": "^2.0.1",
     "@vendia/serverless-express": "^4.12.6",

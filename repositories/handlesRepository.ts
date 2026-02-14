@@ -927,16 +927,16 @@ export class HandlesRepository {
         let personalization = handle?.personalization;
         if (handle?.reference_utxo) {
             const refUtxo = this.getUTxO(handle?.reference_utxo)
-            console.log('REFUTXO', refUtxo)
+            Logger.local(`'REFUTXO', ${refUtxo}`)
             const { projectAttributes } = this.buildPersonalizationData(handle, refUtxo?.datum!);
-            console.log('PROJECTATTRIBUTES', projectAttributes)
+            Logger.local(`'PROJECTATTRIBUTES', ', ${projectAttributes}`)
             personalization = await this._buildPersonalization({ 
                 personalizationDatum: projectAttributes!, 
                 personalization: handle.personalization ?? { validated_by: '', trial: true, nsfw: true } 
             });
         }
-        console.log('REFERENCE', handle?.reference_utxo)
-        console.log('PERSONALIZATION', personalization)
+        Logger.local(`'REFERENCE', ', ${handle?.reference_utxo}`)
+        Logger.local(`'PERSONALIZATION', ', ${personalization}`)
         return personalization
     }
     

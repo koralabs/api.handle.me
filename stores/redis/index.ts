@@ -29,7 +29,7 @@ export class RedisHandlesStore implements IApiStore {
             worker.on('exit', (e) => Logger.log({ message: `Error: ${e}`, category: LogCategory.ERROR, event: 'ValkeySyncWorker.Exit' }));
             RedisHandlesStore._worker = worker;
         }
-        //const interval = setInterval(() => {console.log('TIMINGS', JSON.stringify(Object.entries(redisTimings).sort((a, b) => b[1] - a[1])))}, 10_000)
+        //const interval = setInterval(() => {Logger.local('TIMINGS', JSON.stringify(Object.entries(redisTimings).sort((a, b) => b[1] - a[1])))}, 10_000)
         return this;
     }
     /**
@@ -44,7 +44,7 @@ export class RedisHandlesStore implements IApiStore {
         RedisHandlesStore._pipeline = [];
         try {
             commands();
-            //console.log('PIPELINE', RedisHandlesStore._pipeline)
+            //Logger.local('PIPELINE', RedisHandlesStore._pipeline)
             const pipelineCommands = RedisHandlesStore._pipeline ?? [];
             if (pipelineCommands.length === 0) {
                 return [];
@@ -54,7 +54,7 @@ export class RedisHandlesStore implements IApiStore {
                 // All results are returned
                 // Only used to rehydrate the hgetall
                 if (pipelineCommands[i][0] == 'hgetall') {
-                    //console.log(pipelineCommands[i][1][0], results[i])
+                    //Logger.local(pipelineCommands[i][1][0], results[i])
                     results[i] = this.rehydrateObject(pipelineCommands[i][1][0], results[i]);
                 }
             }
@@ -100,7 +100,7 @@ export class RedisHandlesStore implements IApiStore {
                     if (deleted % 100000 === 0 || deleted % 100000 < keys.length) {
                         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
                         const rate = (deleted / ((Date.now() - startTime) / 1000)).toFixed(0);
-                        console.log(`Deleted: ${deleted.toLocaleString()} keys (${elapsed}s, ~${rate} keys/sec): firstKey ${keys[0]}, lastKey ${keys[keys.length - 1]}`);
+                        Logger.local(`Deleted: ${deleted.toLocaleString()} keys (${elapsed}s, ~${rate} keys/sec): firstKey ${keys[0]}, lastKey ${keys[keys.length - 1]}`);
                     }
                 }
             } while (cursor !== '0');
@@ -150,7 +150,7 @@ export class RedisHandlesStore implements IApiStore {
         if (added % 10000 === 0) {
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
             const rate = (added / ((Date.now() - startTime) / 1000)).toFixed(0);
-            console.log(`Added: ${added.toLocaleString()} keys (${elapsed}s, ~${rate} keys/sec)`);
+            Logger.local(`Added: ${added.toLocaleString()} keys (${elapsed}s, ~${rate} keys/sec)`);
         }
         
         const endTime = Date.now();

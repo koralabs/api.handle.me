@@ -17,20 +17,39 @@ type RollbackWatcherDeps = {
     errorLog?: (...args: any[]) => void;
 };
 
+const toNumber = (value: unknown) => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string') {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return null;
+};
+
+const toWebSocketUrl = (host: string) => {
+    const parsed = new url.URL(host);
+    if (parsed.protocol === 'http:') parsed.protocol = 'ws:';
+    if (parsed.protocol === 'https:') parsed.protocol = 'wss:';
+    return parsed.toString();
+};
+
 export const resolveIntersectionPoint = (health: HealthResponseBody | null): IntersectionPoint => {
     const tip = health?.lastKnownTip;
-    if (!tip?.hash || typeof tip.slot !== 'number') {
+    const slot = toNumber(tip?.slot);
+    const id = typeof tip?.id === 'string' ? tip.id : typeof tip?.hash === 'string' ? tip.hash : null;
+
+    if (!id || slot === null) {
         throw new Error('Could not determine current tip from Ogmios health');
     }
-    return { slot: tip.slot, id: tip.hash };
+    return { slot, id };
 };
 
 export const startOgmiosRollbackWatcher = async (deps: RollbackWatcherDeps = {}) => {
     const ogmiosHost = deps.ogmiosHost ?? process.env.OGMIOS_HOST ?? 'http://localhost:1337';
     const log = deps.log ?? console.log;
     const errorLog = deps.errorLog ?? console.error;
-    const getHealth = deps.fetchHealthFn ?? fetchHealth;
-    const createSocket = deps.createSocket ?? ((host: string) => new WebSocket(new url.URL(host).toString(), { allowSynchronousEvents: false }));
+    const getHealth = deps.fetchHealthFn ?? (() => fetchHealth(ogmiosHost));
+    const createSocket = deps.createSocket ?? ((host: string) => new WebSocket(toWebSocketUrl(host), { allowSynchronousEvents: false }));
     const intersectionPoint = resolveIntersectionPoint(await getHealth());
     const client = createSocket(ogmiosHost);
 

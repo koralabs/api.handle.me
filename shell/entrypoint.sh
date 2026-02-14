@@ -16,10 +16,17 @@ NODE_DB=${NODE_DB:-'/db'}
 SOCKET_PATH=${SOCKET_PATH:-'/ipc/node.socket'}
 CARDANO_NODE_PATH=${CARDANO_NODE_PATH:-'./cardano-node'}
 NODE_CONFIG_PATH=${NODE_CONFIG_PATH:-"./${NETWORK}"}
+CARDANO_NODE_PID=""
 mkdir -p "$(dirname "$SOCKET_PATH")"
 
 function cleanup {
-  kill -INT $(pidof cardano-node)
+  if [[ -n "${CARDANO_NODE_PID}" ]] && kill -0 "${CARDANO_NODE_PID}" 2>/dev/null; then
+    echo "Stopping cardano-node with SIGINT..."
+    kill -INT "${CARDANO_NODE_PID}" || true
+    wait "${CARDANO_NODE_PID}" || true
+    echo "  ...CARDANO-NODE STOPPED"
+  fi
+  exit 0
 }
 
 if [[ "$@" != *"--host"* ]]
@@ -71,9 +78,14 @@ export RELEASE_HOST=$(release_host)
 
 if [[ "${MODE}" == "cardano-node" || "${MODE}" == "both" || "${MODE}" == "all" ]]; then
     echo "STARTING CARDANO-NODE..."
-    if [ ! "${DISABLE_NODE_SNAPSHOT}" == "true" ]; then
-        rm -rf ${NODE_DB}
-        mkdir -p ${NODE_DB}
+    if [[ -d "${NODE_DB}/immutable" ]]; then
+        echo "Previous Cardano database found. Continuing scan."
+    elif [[ "${DISABLE_NODE_SNAPSHOT}" == "true" ]]; then
+        mkdir -p "${NODE_DB}"
+        echo "No previous Cardano database found. Starting from origin."
+    else
+        rm -rf "${NODE_DB}"
+        mkdir -p "${NODE_DB}"
         echo "Grabbing latest snapshot with Mithril."
         MITHRIL_VERSION=2603.1
         curl -fsSL https://github.com/input-output-hk/mithril/releases/download/${MITHRIL_VERSION}/mithril-${MITHRIL_VERSION}-linux-x64.tar.gz | tar -xz
@@ -91,19 +103,20 @@ if [[ "${MODE}" == "cardano-node" || "${MODE}" == "both" || "${MODE}" == "all" ]
         echo "Mithril snapshot downloaded and validated."
     fi
     
-    trap cleanup INT TERM KILL QUIT ABRT
+    trap cleanup INT TERM QUIT ABRT
     echo "Starting cardano-node."
 
     # Workaround for Mithril not outputting the protocolMagicId
     cat ${NODE_CONFIG_PATH}/shelley-genesis.json | jq -r .networkMagic > ${NODE_DB}/protocolMagicId
 
-    exec ${CARDANO_NODE_PATH} run \
+    ${CARDANO_NODE_PATH} run \
         --config ${NODE_CONFIG_PATH}/config.json \
         --topology ${NODE_CONFIG_PATH}/topology.json \
         --database-path ${NODE_DB} \
         --port 3000 \
         --host-addr 0.0.0.0 \
         --socket-path ${SOCKET_PATH} &
+    CARDANO_NODE_PID=$!
 
     if [[ "${ENABLE_SOCKET_REDIRECT}" == "true" ]]; then
         until [ -S ${SOCKET_PATH} ]

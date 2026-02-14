@@ -8,6 +8,28 @@ export SOCKET_PATH=${SOCKET_PATH:-"${PWD}/tmp/node.socket"}
 export BASE_URL=${CONFIG_FILES_BASE_URL:-'https://book.play.dev.cardano.org/environments'}
 export CARDANO_DB_PATH=${CARDANO_DB_PATH:-"./tmp"}
 export NODE_CONFIG_PATH="./tmp/${NETWORK}"
+CARDANO_NODE_PID=""
+OGMIOS_PID=""
+
+cleanup() {
+    if [[ -n "${CARDANO_NODE_PID}" ]] && kill -0 "${CARDANO_NODE_PID}" 2>/dev/null; then
+        echo "Stopping cardano-node with SIGINT..."
+        kill -INT "${CARDANO_NODE_PID}" || true
+        wait "${CARDANO_NODE_PID}" || true
+        echo "  ...CARDANO-NODE STOPPED"
+    fi
+
+    if [[ -n "${OGMIOS_PID}" ]] && kill -0 "${OGMIOS_PID}" 2>/dev/null; then
+        echo "Stopping ogmios..."
+        kill -TERM "${OGMIOS_PID}" || true
+        wait "${OGMIOS_PID}" || true
+        echo "  ...OGMIOS STOPPED"
+    fi
+
+    exit 0
+}
+
+trap cleanup INT TERM QUIT ABRT
 
 if [[ "$@" != *"--host"* ]]
 then
@@ -107,13 +129,14 @@ fi
 # Workaround for Mithril not outputting the protocolMagicId
 cat ${NODE_CONFIG_PATH}/shelley-genesis.json | jq -r .networkMagic > ${NODE_DB}/protocolMagicId
 
-exec ./tmp/cardano-node/bin/cardano-node run \
+./tmp/cardano-node/bin/cardano-node run \
     --config ${NODE_CONFIG_PATH}/config.json \
     --topology ${NODE_CONFIG_PATH}/topology.json \
     --database-path ${NODE_DB} \
     --port 3000 \
     --host-addr 0.0.0.0 \
-    --socket-path ${SOCKET_PATH} 2>&1 | stdbuf -oL -eL egrep --line-buffered '\b(startup:Info:|local socket:|ChainDB:Notice:|:Critical:|Validating chunk)\b' &
+    --socket-path ${SOCKET_PATH} > >(stdbuf -oL -eL egrep --line-buffered '\b(startup:Info:|local socket:|ChainDB:Notice:|:Critical:|Validating chunk)\b') 2>&1 &
+CARDANO_NODE_PID=$!
 
 ###############################################
 #                  OGMIOS                     #
@@ -128,4 +151,7 @@ if ! pgrep -x "ogmios" > /dev/null
 then
     echo "Starting Ogmios - connecting to ${SOCKET_PATH}"
     ./tmp/ogmios/bin/ogmios $HOST $NODE_CONFIG $NODE_SOCKET $@ --include-transaction-cbor --log-level Error &
+    OGMIOS_PID=$!
 fi
+
+wait

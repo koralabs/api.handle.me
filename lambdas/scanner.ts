@@ -42,9 +42,11 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
     const missingInProvider = [...apiBlockHashes].some((x) => x && !providerBlockHashes.has(x));
 
     if (missingInApi || missingInProvider) {
+        Logger.local("Rollback detected")
         // This should be a notify since we are very rarely expecting in this range
         // and may need to adjust the number 20 above accordingly
-        Logger.log({ message: `Rollback after 20 blocks detected! Missing in API: ${missingInApi}, Missing in Provider: ${missingInProvider}`, event: 'RollbackLambda' });
+        if (rollbackOffset == 2160)
+            Logger.log({ message: `Rollback after 20 blocks detected! Missing in API: ${missingInApi}, Missing in Provider: ${missingInProvider}`, event: 'RollbackLambda' });
         // If there are any missing delete/replay
         const handles: string[] = [];
         for (const utxo of utxos) {
@@ -260,7 +262,7 @@ const scan = async (currentBlockHash: string) => {
             const builtUTxOs = buildUTxOsFromKoiosTxs(txList ?? []);
 
             const handleNames = builtUTxOs.flatMap((u) => u.handles?.flatMap((h) => h[1].map((assetName) => getHandleNameFromAssetName(assetName).name)) ?? []) ?? [];
-            console.log(`Processing block ${block.id} at slot ${block.slot} with ${builtUTxOs.length} UTxOs containing ${handleNames.join(', ')} handles from ${txList.length} transactions`);
+            Logger.local(`Processing block ${block.id} at slot ${block.slot} with ${builtUTxOs.length} UTxOs containing ${handleNames.join(', ')} handles from ${txList.length} transactions`);
 
             builtUTxOs.forEach((utxo) => {
                 // ********** BURNS ************* //
@@ -304,7 +306,7 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context: AWSLambd
     const metrics = handlesRepo.getMetrics();
     if (metrics.lockLambdas) {
         // we probably need some recovery checks/notify here
-        console.log(`Lambda is locked with: ${metrics.lockLambdas}, skipping`);
+        Logger.local(`Lambda is locked with: ${metrics.lockLambdas}, skipping`);
 
         // If it's locked because of scannin for longer than 5 minutes, we have a problem
         if (metrics.lockLambdas === LockedLambdaReason.SCANNING && metrics.lockLambdasTimestamp && Date.now() - metrics.lockLambdasTimestamp > 5 * 60 * 1000) {

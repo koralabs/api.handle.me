@@ -86,10 +86,20 @@ export const getHandleNameFromAssetName = (asset: string): AssetDetailsFromAsset
     };
 };
 
-export const fetchHealth = async (): Promise<HealthResponseBody | null> => {
+export const fetchHealth = async (host = OGMIOS_HOST): Promise<HealthResponseBody | null> => {
     let ogmiosResults = null;
     try {
-        const ogmiosResponse = await fetch(`${OGMIOS_HOST}/health`);
+        const healthUrl = new URL(host);
+        if (healthUrl.protocol === 'ws:') {
+            healthUrl.protocol = 'http:';
+        } else if (healthUrl.protocol === 'wss:') {
+            healthUrl.protocol = 'https:';
+        }
+        healthUrl.pathname = '/health';
+        healthUrl.search = '';
+        healthUrl.hash = '';
+
+        const ogmiosResponse = await fetch(healthUrl.toString());
         ogmiosResults = await ogmiosResponse.json();
     } catch (error: any) {
         Logger.log({ message: error.message, category: LogCategory.ERROR, event: 'fetchOgmiosHealth.error' });

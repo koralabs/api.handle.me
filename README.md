@@ -79,7 +79,7 @@ All of the options below can be passed into the container using `-e ENV_VAR=valu
 
 > `OGMIOS_HOST=<http url with port>` Required for running with `MODE=api-only`.
 
-> `DISABLE_NODE_SNAPSHOT=true` By default, the container will try and download a cardano-node snapshot with Mithril to reduce spin-up time. Use this option to skip the snapshot download and start cardano-node from origin. **🚩WARNING:** this can take a few days.
+> `DISABLE_NODE_SNAPSHOT=true` If no existing Cardano DB is found at `NODE_DB` (default `/db`), the container downloads a Mithril snapshot by default to reduce spin-up time. Use this option to skip the snapshot download and start cardano-node from origin. Existing DB data is reused if present. **🚩WARNING:** starting from origin can take a few days.
 
 > `DISABLE_HANDLES_SNAPSHOT=true` By default, the container will try and download a Handles snapshot from S3 to reduce spin-up time. Use this option to skip the snapshot download and start the Ogmios Handles scan from origin. **🚩WARNING:** this can take a few hours.
 
@@ -97,3 +97,11 @@ The containers are setup for graceful cardano-node shutdown, but if you have to 
 ```sh
 kill -SIGINT $(pidof cardano-node) 
 ```
+
+For clean shutdowns (to avoid full immutable chunk validation from chunk `0` on next startup), make sure all of these are true:
+- Stop with `SIGINT`/`SIGTERM` and allow enough time to exit (`docker stop --time 120 <container>` is a good baseline).
+- Do not force kill the process/container (`SIGKILL`, `docker kill`, OOM kill).
+- Reuse the same mounted DB path (for this image, `/db`).
+- Do not run cardano-node with `--validate-db` unless you intentionally want full validation.
+
+Clean startup signal to look for: absence of `ChainDB is not clean. Validating all immutable chunks`.

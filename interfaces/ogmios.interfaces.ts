@@ -127,8 +127,10 @@ export interface HealthResponseBody {
     startTime: string;
     lastKnownTip: {
         slot: number;
-        hash: string;
-        blockNo: number;
+        id?: string;
+        hash?: string;
+        height?: number;
+        blockNo?: number;
     };
     lastTipUpdate: string;
     networkSynchronization: number;

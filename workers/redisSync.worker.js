@@ -11,7 +11,7 @@ export const getRedisPort = () => {
 
 async function getClient() {
     if (!glideClient) {
-        //console.log('REDIS_HOST_WORKER', process.env.REDIS_HOST_US_EAST_1, process.env.AWS_REGION, `REDIS_HOST_${process.env.AWS_REGION}`.toUpperCase().replace(/-/g, '_'))
+        //Logger.local('REDIS_HOST_WORKER', process.env.REDIS_HOST_US_EAST_1, process.env.AWS_REGION, `REDIS_HOST_${process.env.AWS_REGION}`.toUpperCase().replace(/-/g, '_'))
         glideClient = await GlideClient.createClient({
             addresses: [{ host: REDIS_HOST, port: getRedisPort() }],
             useTLS: process.env.REDIS_USE_TLS ? process.env.REDIS_USE_TLS == 'true' : true,
@@ -41,10 +41,10 @@ if (parentPort) {
                     break;
                 }
                 case 'batch': {
-                    //console.log('BATCH');
+                    //Logger.local('BATCH');
                     const pipeline = new Batch(true);
                     for (const [cmd, args] of payload.args[0]) {
-                        //console.log(cmd, args);
+                        //Logger.local(cmd, args);
                         pipeline[cmd](...args);
                     }
                     const result = await client.exec(pipeline, true, { timeout: 20_000 });
@@ -52,7 +52,7 @@ if (parentPort) {
                     break;
                 }
                 default: {
-                    //console.log('VALKEY', payload.cmd, payload.args);
+                    //Logger.local('VALKEY', payload.cmd, payload.args);
                     const result = await client[payload.cmd](...payload.args);
                     reply.postMessage({ id, ok: true, result });
                     break;
@@ -72,12 +72,12 @@ if (parentPort) {
 
 function logKeyRequest(key, payload) {
     if (payload.args && payload.args.length > 0 && typeof payload.args[0] == string && payload.args[0].startsWith(key)) {
-        console.log(`Valkey request for ${payload.args[0]}`, payload);
+        Logger.local(`Valkey request for ${payload.args[0]}`, payload);
     }
 }
 
 function logKeyResult(key, payload, result) {
     if (payload.args && payload.args.length > 0 && typeof payload.args[0] == string && payload.args[0].startsWith(key)) {
-        console.log(`Valkey result for ${payload.args[0]}`, result);
+        Logger.local(`Valkey result for ${payload.args[0]}`, result);
     }
 }

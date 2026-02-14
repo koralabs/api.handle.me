@@ -1,5 +1,5 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { IHandleFileContent, IndexNames, MintingData, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { IHandleFileContent, IndexNames, Logger, MintingData, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import fs from 'fs';
 import stdOut from 'node:readline';
 import zlib from 'zlib';
@@ -31,7 +31,7 @@ const getRedisItems = async () => {
     try {
         const redisHandleStore = new RedisHandlesStore();
         await redisHandleStore.initialize();
-        // console.log('Connected to Valkey');
+        // Logger.local('Connected to Valkey');
 
         let cursor = '0';
         let totalKeys = 0;
@@ -88,7 +88,7 @@ const getRedisItems = async () => {
                         redisHandleStore.getValuesFromIndexedSet(IndexNames.MINT, mintKey);
                     }
                 });
-                // console.log('PIPELINE RESULTS LENGTH', pipelineResults, pipelineResults.length);
+                // Logger.local('PIPELINE RESULTS LENGTH', pipelineResults, pipelineResults.length);
                 for (let i = 0; i < pipelineResults.length; i++) {
                     const item = pipelineResults[i];
                     const filteredResults: MintingData[] = item
@@ -104,8 +104,8 @@ const getRedisItems = async () => {
         console.error('Error counting keys:', error);
     }
 
-    console.log(`Total UTxOs: ${utxos.size.toLocaleString()}`);
-    console.log(`Total Mints: ${mints.size.toLocaleString()}`);
+    Logger.local(`Total UTxOs: ${utxos.size.toLocaleString()}`);
+    Logger.local(`Total Mints: ${mints.size.toLocaleString()}`);
 
     return {
         utxos,
@@ -173,7 +173,7 @@ export const handler = async (event: any) => {
             })
         );
 
-        console.log(`s3Result ${JSON.stringify(s3Result)}`);
+        Logger.local(`s3Result ${JSON.stringify(s3Result)}`);
     }
 
     return {
