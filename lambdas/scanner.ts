@@ -17,6 +17,7 @@ const ensureInitialized = async () => {
 };
 
 const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSlot: number; rollbackOffset: number }) => {
+    Logger.local(`Running rollback check - ${rollbackOffset}`);
     const latestBlockResponse = await blockfrostApiCall('blocks/latest');
     if (!latestBlockResponse.ok) {
         throw new Error('Not good!');
@@ -28,28 +29,46 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
     // Get all blocks/txs/UTxOs from Bf/Ko
     const blockList: BlockfrostBlock[] = await fetchPaginatedResults(`blocks/${blockHeight}/next`);
     const [firstBlock] = blockList;
+    if (!firstBlock) return;
+
+    const providerBlocks = blockList.filter((b) => b.slot <= currentSlot).sort((a, b) => a.slot - b.slot);
+    if (!providerBlocks.length) return;
+
     // Get all of the UTxOs from db after that slot
     const utxoIds = store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 0, { start: firstBlock.slot }) as string[];
     const utxos = store.pipeline(() => {
         utxoIds.forEach((utxoId) => handlesRepo.getUTxO(utxoId));
     }) as (UTxOWithTxInfo | null)[];
 
-    const apiBlockHashes = new Set(utxos.filter(Boolean).map((u) => u!.blockHash));
-    const providerBlockHashes = new Set(blockList.filter((b) => b.slot <= currentSlot).map((b) => b.hash));
+    const apiBlocks = [...new Map(utxos.filter((u): u is UTxOWithTxInfo => !!u && !!u.blockHash).map((u) => [`${u.slot}:${u.blockHash}`, { slot: u.slot, hash: u.blockHash }])).values()];
+    apiBlocks.sort((a, b) => a.slot - b.slot);
+
+    const apiBlockHashes = new Set(apiBlocks.map((u) => u.hash));
+    const providerBlockHashes = new Set(providerBlocks.map((b) => b.hash));
     // Check for  API <--  missing UTxOs --> Bf/Ko
 
-    const missingInApi = [...providerBlockHashes].some((x) => !apiBlockHashes.has(x));
-    const missingInProvider = [...apiBlockHashes].some((x) => x && !providerBlockHashes.has(x));
+    const firstMissingInApi = providerBlocks.find((block) => !apiBlockHashes.has(block.hash));
+    const firstMissingInProvider = apiBlocks.find((block) => !providerBlockHashes.has(block.hash));
 
-    if (missingInApi || missingInProvider) {
-        Logger.local("Rollback detected")
+    if (firstMissingInApi || firstMissingInProvider) {
+        const rollbackStartSlot = Math.min(firstMissingInApi?.slot ?? Number.POSITIVE_INFINITY, firstMissingInProvider?.slot ?? Number.POSITIVE_INFINITY);
+        if (!Number.isFinite(rollbackStartSlot)) return;
+
+        const rollbackBlocks = providerBlocks.filter((block) => block.slot >= rollbackStartSlot);
+        const firstMissingHeight = firstMissingInApi?.height ?? rollbackBlocks[0]?.height;
+        const distanceFromTip = typeof firstMissingHeight === 'number' ? Math.max(0, latestBlock.height - firstMissingHeight) : null;
+
+        Logger.local(`Rollback detected from slot ${rollbackStartSlot}${distanceFromTip === null ? '' : ` (~${distanceFromTip} blocks from tip)`}`);
+
+        const rollbackUtxos = utxos.filter((utxo): utxo is UTxOWithTxInfo => !!utxo && utxo.slot >= rollbackStartSlot);
+        
         // This should be a notify since we are very rarely expecting in this range
         // and may need to adjust the number 20 above accordingly
-        if (rollbackOffset == 2160)
-            Logger.log({ category: LogCategory.NOTIFY, message: `Rollback after 20 blocks detected! Missing in API: ${missingInApi}, Missing in Provider: ${missingInProvider}`, event: 'RollbackLambda' });
+        if (distanceFromTip! > 20)
+            Logger.log({ category: LogCategory.NOTIFY, message: `Rollback at ${distanceFromTip} blocks detected! Block: ${firstMissingHeight}`, event: 'RollbackLambda' });
         // If there are any missing delete/replay
         const handles: string[] = [];
-        for (const utxo of utxos) {
+        for (const utxo of rollbackUtxos) {
             for (const assets of utxo?.handles ?? []) {
                 assets[1].forEach((assetName) => {
                     const { name } = getHandleNameFromAssetName(assetName);
@@ -70,7 +89,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
                 if (mintingDataSet) {
                     mintingDataSet.forEach((md) => {
                         const mintingData = JSON.parse(md) as MintingData;
-                        if (mintingData.created_slot >= firstBlock.slot) {
+                        if (mintingData.created_slot >= rollbackStartSlot) {
                             store.removeValueFromIndexedSet(IndexNames.MINT, handleName, md);
                         }
                     });
@@ -105,13 +124,13 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
         });
 
         // delete all UTxOs after that slot and replay them all
-        const utxoIdsToRemove = utxos.filter((utxo): utxo is UTxOWithTxInfo => !!utxo && utxo.slot >= firstBlock.slot).map((utxo) => utxo.id);
+        const utxoIdsToRemove = rollbackUtxos.map((utxo) => utxo.id);
         if (utxoIdsToRemove.length) {
             handlesRepo.removeUTxOs(utxoIdsToRemove);
         }
 
         // repopulate utxo store and minting data from Bf/Ko
-        for (const block of blockList) {
+        for (const block of rollbackBlocks) {
             const txList = await fetchTxList(block.hash);
             const utxos = buildUTxOsFromKoiosTxs(txList);
             handlesRepo.addUTxOsWithMintData(utxos);
@@ -249,6 +268,7 @@ const processReindex = async () => {
 };
 
 const scan = async (currentBlockHash: string) => {
+    Logger.local(`Running scan...`);
     // Is scanning fast enough to do this without MAX_TIP_SLOTS? Or a much higher one?
     handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.SCANNING, lockLambdasTimestamp: startTime });
     try {

@@ -183,8 +183,8 @@ describe('Scanner lambda e2e', () => {
     it('keeps lock healthy and skips rollback replay when hashes match', async () => {
         mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ height: 5000 }) } as never);
         mockedHelpers.fetchPaginatedResults
-            .mockResolvedValueOnce([{ hash: 'provider_block', slot: 100 }] as never)
-            .mockResolvedValueOnce([] as never);
+            .mockResolvedValueOnce([] as never)
+            .mockResolvedValueOnce([{ hash: 'provider_block', slot: 100 }] as never);
         mockedHelpers.fetchTxList.mockResolvedValue([] as never);
         mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
         mockedHelpers.fetchKoios.mockResolvedValue([] as never);
@@ -210,8 +210,8 @@ describe('Scanner lambda e2e', () => {
 
         mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ height: 5000 }) } as never);
         mockedHelpers.fetchPaginatedResults
-            .mockResolvedValueOnce([{ hash: 'provider_block', slot: 100 }] as never)
-            .mockResolvedValueOnce([] as never);
+            .mockResolvedValueOnce([] as never)
+            .mockResolvedValueOnce([{ hash: 'provider_block', slot: 100 }] as never);
         mockedHelpers.fetchTxList.mockResolvedValue([{ source: 'block' }] as never);
         mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
             if (path === 'asset_utxos') return [{ tx_hash: 'replay_tx' }] as never;
@@ -238,6 +238,7 @@ describe('Scanner lambda e2e', () => {
 
     it('clears lock even when rollback provider call fails', async () => {
         mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: false } as never);
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
 
         await expect(lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context)).rejects.toThrow('Not good!');
 

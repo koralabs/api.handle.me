@@ -224,7 +224,7 @@ export class RedisHandlesStore implements IApiStore {
         const metrics = this.getMetrics();
         Logger.log(`UTxO storage starting at slot: ${slot} and hash: ${id} with ${metrics.handleCount} Handles`);
 
-        this.setMetrics({ utxoSchemaVersion: currentUTxOSchemaVersion, currentBlockHash: id, currentSlot: slot, startTimestamp: Date.now() });
+        this.setMetrics({ utxoSchemaVersion: currentUTxOSchemaVersion, indexSchemaVersion: this.getIndexSchemaVersion(), currentBlockHash: id, currentSlot: slot, startTimestamp: Date.now() });
         return { id, slot };
     }
 

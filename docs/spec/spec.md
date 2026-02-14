@@ -116,6 +116,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - Scanner lambda now also owns rollback/reconciliation and reindex checks.
 - Rollback reconciliation runs in short and periodic long windows and remains intentionally two-phase:
   first persist replayed UTxOs + mint history without index updates, then run index updates from provider `tx_info`.
+- Rollback cutoff is computed from the first divergent block (provider/API mismatch) within the checked window, and cleanup/replay is applied from that block forward (not from the beginning of the window).
 - Rollback lock behavior is fail-safe: rollback attempts always clear `lockLambdas` in a `finally` path so scanner cron loops do not deadlock after provider/API failures.
 - Snapshot lambda can emit compressed UTxO snapshots for fast restore.
 - Reindex lock behavior is fail-safe: reindex attempts must always clear `lockLambdas` in both success and error paths to avoid deadlocking scanner flows.

@@ -169,10 +169,10 @@ describe('Scanner lambda unit tests', () => {
 
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/2840/next');
         expect(handlesRepo.setMetrics).toHaveBeenNthCalledWith(
-            1,
+            2,
             expect.objectContaining({ lockLambdas: LockedLambdaReason.ROLLBACK_2160, lockLambdasTimestamp: expect.any(Number) })
         );
-        expect(handlesRepo.setMetrics).toHaveBeenNthCalledWith(2, { lastMaxRollbackCheck: expect.any(Number) });
+        expect(handlesRepo.setMetrics).toHaveBeenNthCalledWith(3, { lastMaxRollbackCheck: expect.any(Number) });
         expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
     });
 
@@ -252,6 +252,57 @@ describe('Scanner lambda unit tests', () => {
         expect(handlesRepo.removeUTxOs).toHaveBeenCalledWith(['u1']);
         expect(handlesRepo.addUTxOsWithMintData).toHaveBeenCalledWith([expect.objectContaining({ id: 'replay_block#0' })]);
         expect(handlesRepo.updateHandleIndexes).toHaveBeenCalledWith(expect.objectContaining({ id: 'replay_tx_info#0' }), expect.any(Map), expect.any(Map));
+    });
+
+    it('uses the first divergent block as rollback cutoff for filtering and replay', async () => {
+        const { handlesRepo, pipelineResponses, scannerModule, store } = setup();
+        store.getValuesFromOrderedSet.mockReturnValue(['u1', 'u2']);
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([
+            { hash: 'provider_a', slot: 200, height: 4990 },
+            { hash: 'provider_b', slot: 201, height: 4991 }
+        ] as never);
+
+        mockedGetHandleNameFromAssetName.mockImplementation((assetName: string) => {
+            if (assetName === 'asset-a') {
+                return { name: 'handle-a', ownerTokenHex: 'asset-a', isCip67: false, assetLabel: null };
+            }
+            return { name: assetName, ownerTokenHex: assetName, isCip67: false, assetLabel: null };
+        });
+
+        const mintToKeep = JSON.stringify({ created_slot: 200, metadata: {}, txHash: 'mint-keep' });
+        const mintToRemove = JSON.stringify({ created_slot: 201, metadata: {}, txHash: 'mint-remove' });
+
+        pipelineResponses.push(
+            [
+                buildUtxo({ id: 'u1', slot: 200, blockHash: 'provider_a', assetName: 'asset-a' }),
+                buildUtxo({ id: 'u2', slot: 201, blockHash: 'api_wrong', assetName: 'asset-a' })
+            ],
+            [new Set([mintToKeep, mintToRemove])],
+            [],
+            [{ name: 'handle-a', policy: 'policy-a', hex: 'asset-a', resolved_addresses: { ada: knownAddress } }],
+            [new Set(['handle-a'])],
+            [],
+            [],
+            [new Set([mintToKeep])]
+        );
+
+        mockedHelpers.fetchTxList.mockImplementation(async (hash: string) => [{ source: hash }] as never);
+        mockedHelpers.fetchKoios.mockResolvedValue([] as never);
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockImplementation((txs: any[]) => {
+            if (txs?.[0]?.source === 'provider_b') {
+                return [buildUtxo({ id: 'replay_provider_b#0', slot: 201, blockHash: 'provider_b', assetName: 'asset-a' })] as never;
+            }
+            return [] as never;
+        });
+
+        await scannerModule.Internal.checkRollback({ currentSlot: 300, lastMaxRollbackCheck: Date.now() });
+
+        expect(store.removeValueFromIndexedSet).toHaveBeenCalledWith(IndexNames.MINT, 'handle-a', mintToRemove);
+        expect(store.removeValueFromIndexedSet).not.toHaveBeenCalledWith(IndexNames.MINT, 'handle-a', mintToKeep);
+        expect(handlesRepo.removeUTxOs).toHaveBeenCalledWith(['u2']);
+        expect(mockedHelpers.fetchTxList).toHaveBeenCalledTimes(1);
+        expect(mockedHelpers.fetchTxList).toHaveBeenCalledWith('provider_b');
+        expect(handlesRepo.addUTxOsWithMintData).toHaveBeenCalledWith([expect.objectContaining({ id: 'replay_provider_b#0' })]);
     });
 
     it('batches tx_info requests when tx hash payload grows', async () => {
