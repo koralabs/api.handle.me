@@ -124,7 +124,6 @@ describe('Scanner lambda e2e', () => {
         mockedHelpers.fetchPaginatedResults
             .mockResolvedValueOnce([{ hash: 'ignored_future', slot: 999 }] as never)
             .mockResolvedValueOnce([{ hash: 'next_hash', slot: 101, confirmations: 21 }] as never);
-        mockedHelpers.fetchTxList.mockResolvedValue([{ inputs: [] }] as never);
         mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([buildMintedUTxO(handleName)]);
         mockedHelpers.fetchKoios.mockResolvedValue([] as never);
 
@@ -168,6 +167,21 @@ describe('Scanner lambda e2e', () => {
         expect(finalMetrics.indexSchemaVersion).toBeDefined();
     });
 
+    it('runs recovery reindex when recovery flag is set', async () => {
+        store.redisClientCall('set', 'scanner:recovery', 'rollback');
+        repo.setMetrics({
+            lockLambdas: LockedLambdaReason.UNLOCKED,
+            indexSchemaVersion: Number(store.getIndexSchemaVersion()),
+            currentBlockHash: 'provider_block',
+            currentSlot: 140
+        });
+
+        const result = await lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
+
+        expect(result).toBeUndefined();
+        expect(store.redisClientCall('get', 'scanner:recovery')).toBeFalsy();
+    });
+
     it('unlocks lambdas when reindexing fails', async () => {
         repo.setMetrics({ indexSchemaVersion: 0, lockLambdas: LockedLambdaReason.UNLOCKED });
         const repopulateSpy = jest.spyOn(RedisHandlesStore.prototype, 'repopulateIndexesFromUTxOs').mockImplementation(() => {
@@ -185,7 +199,6 @@ describe('Scanner lambda e2e', () => {
         mockedHelpers.fetchPaginatedResults
             .mockResolvedValueOnce([] as never)
             .mockResolvedValueOnce([{ hash: 'provider_block', slot: 100 }] as never);
-        mockedHelpers.fetchTxList.mockResolvedValue([] as never);
         mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
             if (path === 'block_txs') return [{ tx_hash: 'rollback_tx' }] as never;
             if (path === 'asset_utxos') return [{ tx_hash: 'rollback_tx' }] as never;
@@ -203,7 +216,6 @@ describe('Scanner lambda e2e', () => {
 
         expect(repo.getMetrics().lockLambdas).toBe(LockedLambdaReason.UNLOCKED);
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next');
-        expect(mockedHelpers.fetchTxList).not.toHaveBeenCalled();
         expect(mockedHelpers.fetchKoios).toHaveBeenCalledWith('block_txs', 'POST', expect.any(String));
         expect(repo.getUTxO('rollback_tx#0')).toEqual(expect.objectContaining({ tx_id: 'rollback_tx' }));
     });

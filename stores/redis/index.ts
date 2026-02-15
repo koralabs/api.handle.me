@@ -25,8 +25,15 @@ export class RedisHandlesStore implements IApiStore {
     public initialize(): IApiStore {
         if (!RedisHandlesStore._worker) {
             const worker = new Worker('./workers/redisSync.worker.js');
-            worker.on('error', (e) => Logger.log({ message: `Error: ${e}`, category: LogCategory.ERROR, event: 'ValkeySyncWorker.Error' }));
-            worker.on('exit', (e) => Logger.log({ message: `Error: ${e}`, category: LogCategory.ERROR, event: 'ValkeySyncWorker.Exit' }));
+            worker.on('error', (error: any) => Logger.log({ message: `Valkey sync worker error: ${error?.message ?? error}`, category: LogCategory.ERROR, event: 'ValkeySyncWorker.Error' }));
+            worker.on('exit', (code: number) => {
+                // worker.terminate() resolves with exit code 1 by design; treat that as expected shutdown noise.
+                if (code === 0 || code === 1) {
+                    Logger.local(`Valkey sync worker exited with code ${code}`);
+                    return;
+                }
+                Logger.log({ message: `Valkey sync worker exited unexpectedly with code ${code}`, category: LogCategory.ERROR, event: 'ValkeySyncWorker.Exit' });
+            });
             RedisHandlesStore._worker = worker;
         }
         //const interval = setInterval(() => {Logger.local('TIMINGS', JSON.stringify(Object.entries(redisTimings).sort((a, b) => b[1] - a[1])))}, 10_000)

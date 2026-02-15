@@ -114,12 +114,18 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - Minting data is persisted once per batch and then reused during per-UTxO updates to avoid duplicate mint writes while keeping the same ordering guarantees.
 - Missing minting data during handle index updates is treated as a hard failure (scanner invariant), not a soft fallback.
 - Scanner lambda now also owns rollback/reconciliation and reindex checks.
+- Scanner lambda acquires an expiring Valkey lease lock (`SET NX PX`) per invocation and refreshes it with a heartbeat during execution; competing invocations skip work while a valid lease is held.
+- Scanner lambda also uses a recovery flag for destructive phases (`rollback` / `reindex`). If a run terminates mid-phase, the next cron tick detects the flag and runs index repair before normal scan/rollback flow.
 - Rollback reconciliation runs in short and periodic long windows and remains intentionally two-phase:
   first persist replayed UTxOs + mint history without index updates, then run index updates from provider `tx_info`.
 - Rollback cutoff is computed from the first divergent block (provider/API mismatch) within the checked window, and cleanup/replay is applied from that block forward (not from the beginning of the window).
 - Rollback lock behavior is fail-safe: rollback attempts always clear `lockLambdas` in a `finally` path so scanner cron loops do not deadlock after provider/API failures.
+- Stale scanner locks (`lockLambdas` with aged timestamps) are treated as recoverable: stale locks are cleared and recovery flags are set for rollback/reindex lock reasons.
 - Snapshot lambda can emit compressed UTxO snapshots for fast restore.
 - Reindex lock behavior is fail-safe: reindex attempts must always clear `lockLambdas` in both success and error paths to avoid deadlocking scanner flows.
+- Scanner block processing batches `tx_info` across the full discovered block window (subject to request-size batching), then groups transactions back by `block_hash` to preserve per-block synchronous application order.
+- Even with batched `tx_info`, scanner metrics (`currentBlockHash`, `currentSlot`) are advanced block-by-block in processing order so restart/resume points stay deterministic.
+- Burn processing in scanner is idempotent: missing/previously-removed burn handles are ignored so replaying the same block does not fail.
 - Valkey pipeline execution must always clear pipeline state on errors; queue state is reset even when pipeline callbacks throw.
 
 ## Environment Variables

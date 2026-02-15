@@ -1,58 +1,91 @@
 # AGENTS.md
 
-## // ROLE
-- You are a senior software and platform engineer focused on elegant, readable, maintainable code and prefer simplicity to over-engineering. KISS and YAGNI are your mantras.
-- You are OWASP aware and will advise the user when you notice OWASP concerns.
+## 1) Role
+- Act as a senior software/platform engineer.
+- Prefer simple, elegant, maintainable solutions (KISS, YAGNI).
+- Be OWASP-aware and call out security concerns when relevant.
 
-## // RULES
-- A task isn't complete until both unit and e2e tests are added and all tests pass  - unless the changes are documentation only (/scripts/* don't need tests)
-- Always update documentation. Keep product requirements in the PRD and specification details in the spec. 
-- APIs are documented in swagger and always maintained
-- Always update types and maintain type integrity
-- Use idiomatic code and provide comments only when algorithms get heavy, or the code doesn't explain the "why" very well, or in any areas where confusion might arise.
-- Don't delete comments tagged wtih "IMPORTANT", or comments in all uppercase, or comments with `-----` or `*****`
-- In general, don't delete comments - unless you just edited that area and the comment purpose no longer exists
-- Please keep individual comments updated relevant to edited code so they don't get outdated
-- Before starting a task you should have a significant understanding of the code and documentation (compensate at your discretion for token usage optimization)
-- Don't make writes to Valkey/Redis on the default port `(6379)`. Use a different `REDIS_PORT` if you need to troubleshoot writes. You're free to read the default port all you want for troubleshooting though.
-- Temporary files belong in the `/tmp` folder.
+## 2) Default Development Style
+- Keep implementations minimal and readable.
+- Do not over-engineer or add fallback/robustness mechanisms unless explicitly requested.
+- Prefer vanilla TypeScript/JavaScript/Python over adding dependencies unless the dependency is a well-known staple and clearly justified.
 
-## // DOCUMENTATION
-- In the docs folder you should see a product requirements document (PRD) and a spec. Keep the PRD and spec in mind when building out the application. DO NOT attempt to build a feature unless asked to do so. The dev process will be step-by-step with the user controlling the feature order/output. The docs are there simply for your understanding so you can make more informed design decisions.
-- While building out features the user has asked you to build, if you notice that either the PRD or the spec (whichever is relevant or both) doesn't cover the feature/requirment/route/endpoint/field/definition, then default to updating the document(s). 
-- Maintain links between documents and the table of contents (index.md)
-- If there is a swagger file, maintain it.
-- site.env is a glossary of expected application environment variables. It contains comments, optionality, default values, and examples. It IS NOT to be used for actual values. Please keep this file updated as you add, update, or remove application environment variables. Group environment variables by logical groupings to help organization.
-- Ignore human_notes/notes.md - that is my personal notes for this repo
+## 3) Completion Requirements
+- A task is complete only when:
+  - unit and e2e tests are added/updated, and
+  - all relevant tests pass.
+- Exception:
+  - documentation-only changes do not require tests.
+  - files under `/scripts/*` do not require tests.
+- Always maintain type integrity.
 
-## // APPLICATION FLOW/MECHANICS
-- This app can be ran locally for development. `npm run ogmios` starts cardano-node, Ogmios, and Valkey. `npm run api` is the app entrypoint when ran locally and begins/resumes scanning either from Ogmios or the locally ran lambda scanner.
-- Other teams may decide to use the code repo or run from our Docker repository. `shell/entrypoint.sh` runs the app and relevant services. 
-- In production, we use ALB fronted AWS Lambdas and a Valkey store. Each of the `/lambdas` are the entry points for their role.
-- It is important that the scanning side of the code remains synchronous (no async calls) as the order of UTxO processing matters.
-- The API side can and should take advantage of async calls.
-- The store pipeline is a way to batch many valkey calls, but can be tricky with code that expects an imnmediate result (since the call will be queued and batched later). Keep this in mind when troubleshooting or designing a new feature.
+## 4) Documentation Requirements
+- Keep documentation current when behavior changes.
+- PRD contains product requirements; spec contains implementation details.
+- If a requested feature is missing from PRD/spec, update the relevant document(s).
+- Maintain links between docs and `docs/index.md` table of contents.
+- Keep Swagger/OpenAPI docs up to date when API contracts change.
+- Keep `site.env` up to date for env var definitions (comments, defaults, examples, optionality).
+- Do not use `site.env` for real values.
+- Ignore `human_notes/notes.md`.
 
-## // DEPLOYMENT
-- Most of the deplolymnet code is in a separate private repository to keep deployment secrets secret.
+## 5) Code & Comment Rules
+- Use idiomatic code; comment only where the "why" is unclear or logic is non-trivial.
+- Do not delete comments tagged `IMPORTANT`, comments in all caps, or comments containing `-----` / `*****`.
+- In general, do not delete comments unless the commented behavior no longer exists and you edited that area.
+- Keep edited comments accurate.
 
-## // CRITICAL UNDERSTANDING
-- A Handle address has to be correct 100% of the time. There are NO exceptions. If a single address is wrong, the whole protocol, project, and business is a failure. 
-- Handles can NEVER double mint. If a double mint ever happens and isn't immediately remedied (duplicate is burned), the whole protocol, project, and business is a failure.
-- All other Handle properties MUST be accurate. It's a blockchain, Handles are first class resolvers - accuracy is demanded.
+## 6) Operational Safety Rules
+- Never write to Valkey/Redis on default port `6379`.
+- Reading from `6379` is allowed for troubleshooting.
+- If write testing is needed, use a different `REDIS_PORT`.
+- Temporary files must be created in `/tmp`.
 
-## // SIBLING PROJECTS
-- You can also edit these projects if needed to support a feature in this project.
-- Dont edit on the main/master branch in these sibling projects. Create a `codex` branch, or a `feature/<name>` branch.
-- Inform the user if the related project needs to be merged/built/deployed, or if it is blocking progress
-- For `@koralabs/<package-name>` npm packages, the project is located at `../<package-name>`. Feel free to build and npm link the output `./lib` folder in that project. Also notify the user of the needed publish before deployment. Bump both the package.json version and associated dependency.
-- Sites are at the same name as the primary domain.
-    - Example: https://handle.me (sometimes preceded by preview./preprod.) will be at `../handle.me`
-    - Example: https://docs.handle.me (sometimes preceded by preview./preprod.) will be at `../docs.handle.me`
-- api.handle.me is at `../handle-public-api`
-- Related Cardano validators/contracts:
-  - Personalization (a.k.a. "Pz") & Virtual SubHandles (100 asset label): `../handles-personalization`
+## 7) Application Flow / Mechanics
+- Local dev:
+  - `npm run ogmios` starts cardano-node, Ogmios, and Valkey.
+  - `npm run api` is the local app entrypoint and starts/resumes scanning.
+- Container runtime:
+  - `shell/entrypoint.sh` starts the app and supporting services.
+- Production runtime:
+  - ALB-fronted AWS Lambdas + Valkey.
+  - each `/lambdas` file is an entrypoint.
+- Scanning must remain synchronous (UTxO order matters).
+- API handlers can and should use async concurrency where appropriate.
+- Store pipeline batching can defer execution/results; account for this in design and debugging.
+
+## 8) Deployment
+- Most deployment code lives in a separate private repo to protect secrets.
+
+## 9) Critical Correctness
+- Handle addresses must be correct 100% of the time.
+- Handles must never double-mint.
+- All handle properties must remain chain-accurate.
+
+## 10) Logging Rules
+- Use `Logger.local()` for local-only/noisy troubleshooting.
+- Use `Logger.log({ message, category, event })` for operationally important logs.
+- CloudWatch subscriptions monitor `WARN`, `ERROR`, and `NOTIFY` and forward to team alerts.
+- `WARN` is rate-limited downstream; `NOTIFY` is emergency-level only.
+- Do not emit `Logger.log()` inside highly iterative loops unless it is a necessary `WARN`/`ERROR`/`NOTIFY`.
+- Do not use raw `console.*` in runtime app paths unless explicitly justified and documented.
+- Existing exception: `utils/util.ts` `debugLog` helper is allowed for manual local debugging.
+
+## 11) Sibling Projects
+- You may edit related projects when required for cross-project features.
+- Do not work on `main`/`master` in sibling repos; create `codex` or `feature/<name>` branches.
+- Tell the user when related project changes need merge/build/deploy or block progress.
+- `@koralabs/<package-name>` projects live at `../<package-name>`.
+  - You may build and `npm link` `./lib` as needed.
+  - Notify user when publish is required before deployment.
+  - Bump package version and dependent version together.
+- Domain-to-folder conventions:
+  - `handle.me` (or preview/preprod variants) -> `../handle.me`
+  - `docs.handle.me` (or preview/preprod variants) -> `../docs.handle.me`
+  - `api.handle.me` -> `../handle-public-api`
+- Related Cardano validator/contract repos:
+  - Personalization / Virtual SubHandles (100): `../handles-personalization`
   - Marketplace: `../handles-marketplace-contracts`
-  - SubHandle Settings (001 asset label): `../handles-subhandle-settings`
-  - Handles Minting (DeMi & Legacy): `../decentralized-minting`
-  - Pz Background RFT (444) Minting: `../cip-68-444-minting`
+  - SubHandle Settings (001): `../handles-subhandle-settings`
+  - Handles Minting (DeMi/Legacy): `../decentralized-minting`
+  - Pz Background RFT (444): `../cip-68-444-minting`

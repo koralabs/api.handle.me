@@ -33,6 +33,10 @@ export const dynamicallyLoad = async (folderPath: string, type: DynamicLoadType)
     );
 };
 
+/**************************************
+ This debugLog doesn't need to conform to Logger.log/local requirements
+ Treat is as an exception
+***************************************/
 export const debugLog = (msg: string, blockSlot: number, handle?: StoredHandle | null) => {
     console.log('**************************************************************');
     console.log(msg);

@@ -1,5 +1,5 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { IHandleFileContent, IndexNames, Logger, MintingData, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { IHandleFileContent, IndexNames, LogCategory, Logger, MintingData, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import fs from 'fs';
 import stdOut from 'node:readline';
 import zlib from 'zlib';
@@ -100,8 +100,8 @@ const getRedisItems = async () => {
                 }
             }
         } while (cursor !== '0');
-    } catch (error) {
-        console.error('Error counting keys:', error);
+    } catch (error: any) {
+        Logger.log({ message: `Error counting keys: ${error?.message ?? error}`, category: LogCategory.ERROR, event: 'snapshot.getRedisItems' });
     }
 
     Logger.local(`Total UTxOs: ${utxos.size.toLocaleString()}`);

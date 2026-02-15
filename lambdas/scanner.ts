@@ -1,19 +1,73 @@
-import { Transaction } from '@cardano-ogmios/schema';
 import { AssetNameLabel, asyncForEach, buildHolderInfo, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { BlockfrostBlock, KoiosAssetUTxO, KoiosTxInfo } from '../interfaces/provider.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { RedisHandlesStore } from '../stores/redis';
-import { blockfrostApiCall, buildUTxOsFromKoiosTxs, defaultKoiosSettings, fetchKoios, fetchPaginatedResults, fetchTxList } from '../utils/helpers';
+import { blockfrostApiCall, buildUTxOsFromKoiosTxs, defaultKoiosSettings, fetchKoios, fetchPaginatedResults } from '../utils/helpers';
 
-const startTime = Date.now();
 const store = new RedisHandlesStore(); // I hate this
 const handlesRepo = new HandlesRepository(store);
 let initialized = false;
+
+const SCANNER_LEASE_KEY = 'scanner:lease';
+const SCANNER_RECOVERY_KEY = 'scanner:recovery';
+const SCANNER_LEASE_TTL_MS = 60_000;
+const SCANNER_LEASE_HEARTBEAT_MS = 20_000;
+const RECOVERY_REASON_ROLLBACK = 'rollback';
+const RECOVERY_REASON_REINDEX = 'reindex';
+
+const staleLockTimeouts: Partial<Record<LockedLambdaReason, number>> = {
+    [LockedLambdaReason.SCANNING]: 5 * 60 * 1000,
+    [LockedLambdaReason.ROLLBACK_20]: 5 * 60 * 1000,
+    [LockedLambdaReason.ROLLBACK_2160]: 5 * 60 * 1000,
+    [LockedLambdaReason.REINDEX]: 10 * 60 * 1000
+};
+
 const ensureInitialized = async () => {
     if (initialized) return;
     await handlesRepo.initialize();
     initialized = true;
+};
+
+const acquireScannerLease = (owner: string): boolean => {
+    const result = store.redisClientCall('set', SCANNER_LEASE_KEY, owner, {
+        conditionalSet: 'onlyIfDoesNotExist',
+        expiry: { type: 'PX', count: SCANNER_LEASE_TTL_MS }
+    });
+    return result === 'OK';
+};
+
+const renewScannerLease = (owner: string): boolean => {
+    const currentOwner = store.redisClientCall('get', SCANNER_LEASE_KEY);
+    if (currentOwner !== owner) return false;
+    const updated = store.redisClientCall('pexpire', SCANNER_LEASE_KEY, SCANNER_LEASE_TTL_MS);
+    return !!updated;
+};
+
+const releaseScannerLease = (owner: string): void => {
+    const currentOwner = store.redisClientCall('get', SCANNER_LEASE_KEY);
+    if (currentOwner === owner) {
+        store.redisClientCall('del', [SCANNER_LEASE_KEY]);
+    }
+};
+
+const setRecoveryFlag = (reason: string): void => {
+    store.redisClientCall('set', SCANNER_RECOVERY_KEY, reason);
+};
+
+const getRecoveryFlag = (): string | undefined => {
+    return store.redisClientCall('get', SCANNER_RECOVERY_KEY);
+};
+
+const clearRecoveryFlag = (): void => {
+    store.redisClientCall('del', [SCANNER_RECOVERY_KEY]);
+};
+
+const isLockStale = (reason: LockedLambdaReason, lockTimestamp?: number): boolean => {
+    if (!lockTimestamp) return false;
+    const timeout = staleLockTimeouts[reason];
+    if (!timeout) return false;
+    return Date.now() - lockTimestamp > timeout;
 };
 
 const getKoiosBatches = (list: string[], keyName: string) => {
@@ -36,14 +90,20 @@ const getKoiosBatches = (list: string[], keyName: string) => {
     return batchedList;
 };
 
-const getBatchedUTxOs = async (txHashes: string[]) => {
+const getBatchedTxInfo = async (txHashes: string[]) => {
     const batchedTxHashes = getKoiosBatches(txHashes, '_tx_hashes');
-    const utxos: UTxOWithTxInfo[] = [];
-    await asyncForEach(batchedTxHashes, async (txHashes) => {
-        const txs = (await fetchKoios(`tx_info`, 'POST', JSON.stringify({ _tx_hashes: txHashes, ...defaultKoiosSettings }))) as KoiosTxInfo[] | null;
-        const builtUTxOs = buildUTxOsFromKoiosTxs(txs ?? []);
-        utxos.push(...builtUTxOs);
+    const txs: KoiosTxInfo[] = [];
+    await asyncForEach(batchedTxHashes, async (hashBatch) => {
+        const txInfo = (await fetchKoios(`tx_info`, 'POST', JSON.stringify({ _tx_hashes: hashBatch, ...defaultKoiosSettings }))) as KoiosTxInfo[] | null;
+        txs.push(...(txInfo ?? []));
     });
+    return txs;
+};
+
+const getBatchedUTxOs = async (txHashes: string[], txs?: KoiosTxInfo[]) => {
+    const txInfo = txs ?? await getBatchedTxInfo(txHashes);
+    const utxos: UTxOWithTxInfo[] = [];
+    utxos.push(...buildUTxOsFromKoiosTxs(txInfo));
     return utxos;
 };
 
@@ -60,13 +120,16 @@ const getBatchedTxHashes = async (blockHashes: string[]) => {
 const filterUTxOToHandleNames = (utxo: UTxOWithTxInfo, handleNames: Set<string>): UTxOWithTxInfo | undefined => {
     const filterAssets = (assets?: [string, string[]][]) =>
         assets?.map(([policy, names]) => {
-            const filteredNames = names.filter((assetName) => handleNames.has(getHandleNameFromAssetName(assetName).name));
+            const filteredNames = names.filter((assetName) => assetName && handleNames.has(getHandleNameFromAssetName(assetName).name));
             return [policy, filteredNames] as [string, string[]];
         }).filter(([, names]) => names.length > 0);
 
+    const filteredHandles = filterAssets(utxo.handles);
+    if (!filteredHandles?.length) return undefined;
+
     return {
         ...utxo,
-        handles: filterAssets(utxo.handles) ?? [],
+        handles: filteredHandles,
         mint: filterAssets(utxo.mint) ?? []
     };
 };
@@ -92,7 +155,6 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
     // Get all of the UTxOs from db after that slot
     // Using the firstBlock.slot, we might get a UTxO that does not have Handles.
     const utxoIds = store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 0, { start: firstBlock.slot }) as string[];
-    console.log('UTXO_IDS', utxoIds);
     const utxos = store.pipeline(() => {
         utxoIds.forEach((utxoId) => handlesRepo.getUTxO(utxoId));
     }) as UTxOWithTxInfo[];
@@ -179,13 +241,9 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
         return [...latestProviderUTxOsForAffectedHandles, ...utxos].find((u) => u.id === id);
     });
 
-    console.log('DIFFERENCES', differences);
-
     if (differences.length) {
         const rollbackStartSlot = Math.min(...differences.map((u) => u?.slot ?? Infinity));
         if (!Number.isFinite(rollbackStartSlot)) return;
-
-        console.log('ROLLBACK_START_SLOT', rollbackStartSlot);
 
         const providerRollbackUTxOs = providerUTxOs.filter((utxo) => utxo.slot >= rollbackStartSlot);
 
@@ -199,93 +257,101 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
         // and may need to adjust the number 20 above accordingly
         if (distanceFromTip! > 20) Logger.log({ category: LogCategory.NOTIFY, message: `Rollback at ${distanceFromTip} blocks detected! Block: ${firstMissingHeight}`, event: 'RollbackLambda' });
         // If there are any missing delete/replay
+        setRecoveryFlag(RECOVERY_REASON_ROLLBACK);
+        let rollbackComplete = false;
+        try {
+            // build the minting data for all handles in this range
+            const handlesMintingData = store.pipeline(() => {
+                handles.forEach((handleName) => handlesRepo.getHandleMintingData(handleName));
+            }) as Set<string>[];
 
-        // build the minting data for all handles in this range
-        const handlesMintingData = store.pipeline(() => {
-            handles.forEach((handleName) => handlesRepo.getHandleMintingData(handleName));
-        }) as Set<string>[];
+            // gets Handles and remove mints that happened in this range
+            store.pipeline(() => {
+                handles.forEach((handleName, index) => {
+                    const mintingDataSet = handlesMintingData[index];
+                    if (mintingDataSet) {
+                        mintingDataSet.forEach((md) => {
+                            const mintingData = JSON.parse(md) as MintingData;
+                            if (mintingData.created_slot >= rollbackStartSlot) {
+                                store.removeValueFromIndexedSet(IndexNames.MINT, handleName, md);
+                            }
+                        });
+                    }
+                });
+            });
 
-        // gets Handles and remove mints that happened in this range
-        store.pipeline(() => {
-            handles.forEach((handleName, index) => {
-                const mintingDataSet = handlesMintingData[index];
-                if (mintingDataSet) {
-                    mintingDataSet.forEach((md) => {
-                        const mintingData = JSON.parse(md) as MintingData;
-                        if (mintingData.created_slot >= rollbackStartSlot) {
-                            store.removeValueFromIndexedSet(IndexNames.MINT, handleName, md);
-                        }
-                    });
+            const stakeAddresses = storedHandles.map((h) => buildHolderInfo(h.resolved_addresses.ada).address);
+
+            // get a full list of holders so we can pass it into the updateHolder function later
+            const holderHandles = store.pipeline(() => {
+                stakeAddresses.forEach((address) => store.getValuesFromIndexedSet(IndexNames.HOLDER, address));
+            }) as Set<string>[]; // array of sets of handle names for each holder address
+
+            const holdersMap = new Map<string, Set<string>>();
+            stakeAddresses.forEach((address, index) => {
+                holdersMap.set(address, holderHandles[index]);
+            });
+
+            // update handle holders
+            store.pipeline(() => {
+                storedHandles.forEach((handle) => {
+                    handlesRepo.updateHolder(handle, holdersMap);
+                });
+            });
+
+            // delete all UTxOs after that slot and replay them all
+            const utxoIdsToRemove = apiRollbackUtxos.map((utxo) => utxo.id);
+            if (utxoIdsToRemove.length) {
+                handlesRepo.removeUTxOs(utxoIdsToRemove);
+            }
+
+            // repopulate utxo store and minting data from Bf/Ko
+            handlesRepo.addUTxOsWithMintData(providerRollbackUTxOs);
+
+            const storedHandlesMap = new Map<string, StoredHandle>(storedHandles.map((h) => [h.name, h]));
+
+            const retrievedMintingData = store.pipeline(() => {
+                handles.forEach((handleName) => {
+                    handlesRepo.getHandleMintingData(handleName);
+                });
+            }) as Set<string>[];
+
+            const mintValueIndex: Map<string, MintingData[]> = new Map();
+            retrievedMintingData.forEach((md, i) => {
+                const handleName = handles[i];
+                mintValueIndex.set(
+                    handleName,
+                    Array.from(md).map((md) => JSON.parse(md))
+                );
+            });
+
+            const rollbackHandleSet = new Set(handles);
+            store.pipeline(() => {
+                for (const utxo of latestUTxOsForAffectedHandles) {
+                    const filteredUTxO = filterUTxOToHandleNames(utxo, rollbackHandleSet);
+                    if (!filteredUTxO) continue;
+                    handlesRepo.updateHandleIndexes(filteredUTxO, mintValueIndex, storedHandlesMap);
                 }
             });
-        });
 
-        const stakeAddresses = storedHandles.map((h) => buildHolderInfo(h.resolved_addresses.ada).address);
-
-        // get a full list of holders so we can pass it into the updateHolder function later
-        const holderHandles = store.pipeline(() => {
-            stakeAddresses.forEach((address) => store.getValuesFromIndexedSet(IndexNames.HOLDER, address));
-        }) as Set<string>[]; // array of sets of handle names for each holder address
-
-        const holdersMap = new Map<string, Set<string>>();
-        stakeAddresses.forEach((address, index) => {
-            holdersMap.set(address, holderHandles[index]);
-        });
-
-        // update handle holders
-        store.pipeline(() => {
-            storedHandles.forEach((handle) => {
-                handlesRepo.updateHolder(handle, holdersMap);
-            });
-        });
-
-        // delete all UTxOs after that slot and replay them all
-        const utxoIdsToRemove = apiRollbackUtxos.map((utxo) => utxo.id);
-        if (utxoIdsToRemove.length) {
-            handlesRepo.removeUTxOs(utxoIdsToRemove);
+            rollbackComplete = true;
+        } finally {
+            if (rollbackComplete) clearRecoveryFlag();
         }
-
-        // repopulate utxo store and minting data from Bf/Ko
-        handlesRepo.addUTxOsWithMintData(providerRollbackUTxOs);
-
-        const storedHandlesMap = new Map<string, StoredHandle>(storedHandles.map((h) => [h.name, h]));
-
-        const retrievedMintingData = store.pipeline(() => {
-            handles.forEach((handleName) => {
-                handlesRepo.getHandleMintingData(handleName);
-            });
-        }) as Set<string>[];
-
-        const mintValueIndex: Map<string, MintingData[]> = new Map();
-        retrievedMintingData.forEach((md, i) => {
-            const handleName = handles[i];
-            mintValueIndex.set(
-                handleName,
-                Array.from(md).map((md) => JSON.parse(md))
-            );
-        });
-
-        store.pipeline(() => {
-            for (const utxo of latestUTxOsForAffectedHandles) {
-                const filteredUTxO = filterUTxOToHandleNames(utxo, new Set(handles));
-                if (!filteredUTxO) continue;
-                handlesRepo.updateHandleIndexes(filteredUTxO, mintValueIndex, storedHandlesMap);
-            }
-        });
     }
 };
 
 const checkRollback = async () => {
-    const { currentSlot = 0, lastMaxRollbackCheck = 0 } = handlesRepo.getMetrics();
+    const { currentSlot = 0 } = handlesRepo.getMetrics();
     try {
-        handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.ROLLBACK_20, lockLambdasTimestamp: startTime });
+        handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.ROLLBACK_20, lockLambdasTimestamp: Date.now() });
         // 20 confirmation range once a minute
         // Get "20 ago block" (Blockfrost supports get by height/number)
         await processRollback({ currentSlot, rollbackOffset: 20 });
 
-        // if (Date.now() - lastMaxRollbackCheck > 60 * 60 * 1000) {
+        // if (Date.now() - (handlesRepo.getMetrics().lastMaxRollbackCheck ?? 0) > 60 * 60 * 1000) {
         //     // Get "2160 ago block" (Blockfrost supports get by height/number)
-        //     handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.ROLLBACK_2160, lockLambdasTimestamp: startTime });
+        //     handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.ROLLBACK_2160, lockLambdasTimestamp: Date.now() });
         //     await processRollback({ currentSlot, rollbackOffset: 2160 });
         //     // Update last2160check
         //     handlesRepo.setMetrics({ lastMaxRollbackCheck: Date.now() });
@@ -296,8 +362,9 @@ const checkRollback = async () => {
 };
 
 const processReindex = async () => {
+    setRecoveryFlag(RECOVERY_REASON_REINDEX);
     // Pause the lambdas (cron lock in redis)
-    handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.REINDEX, lockLambdasTimestamp: startTime });
+    handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.REINDEX, lockLambdasTimestamp: Date.now() });
 
     Logger.log({ message: `Repopulating indexes from UTxOs to schema version ${store.getIndexSchemaVersion()}`, category: LogCategory.INFO, event: 'getStartingPoint.repopulateIndexesFromUTxOs' });
     try {
@@ -306,11 +373,10 @@ const processReindex = async () => {
             [UTxOFunctionName.ADD_UTXO]: handlesRepo.addUTxO.bind(handlesRepo),
             [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: handlesRepo.updateHandleIndexes.bind(handlesRepo)
         });
-        // Unpause the lambdas and set the new schema version
-        handlesRepo.setMetrics({ indexSchemaVersion: store.getIndexSchemaVersion(), lockLambdas: LockedLambdaReason.UNLOCKED });
-    } catch (error) {
+        handlesRepo.setMetrics({ indexSchemaVersion: store.getIndexSchemaVersion() });
+        clearRecoveryFlag();
+    } finally {
         handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
-        throw error;
     }
 };
 
@@ -318,32 +384,41 @@ const scan = async () => {
     Logger.local(`Running scan...`);
     const metrics = handlesRepo.getMetrics();
     // Is scanning fast enough to do this without MAX_TIP_SLOTS? Or a much higher one?
-    handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.SCANNING, lockLambdasTimestamp: startTime });
+    handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.SCANNING, lockLambdasTimestamp: Date.now() });
     try {
         const bResp: { hash: string; slot: number; confirmations: number }[] = await fetchPaginatedResults(`blocks/${metrics.currentBlockHash}/next`);
         bResp.sort((a, b) => b.confirmations - a.confirmations);
-        // TODO: use getKoiosBatches & getBatchedUTxOs here instead
+        const txHashes = [...new Set(await getBatchedTxHashes(bResp.map((b) => b.hash)))];
+        const txList = await getBatchedTxInfo(txHashes);
+        const txInfoByBlockHash = new Map<string, KoiosTxInfo[]>();
+        for (const tx of txList) {
+            const blockHash = tx?.block_hash;
+            if (!blockHash) continue;
+            const existing = txInfoByBlockHash.get(blockHash) ?? [];
+            existing.push(tx);
+            txInfoByBlockHash.set(blockHash, existing);
+        }
         for (const b of bResp) {
-            const block = { id: b.hash, slot: b.slot, confirmations: b.confirmations, transactions: [] as Transaction[] };
-
-            const txList = await fetchTxList(b.hash);
-
-            const builtUTxOs = buildUTxOsFromKoiosTxs(txList ?? []);
+            const block = { id: b.hash, slot: b.slot, confirmations: b.confirmations };
+            const blockTxList = txInfoByBlockHash.get(b.hash) ?? [];
+            const builtUTxOs = buildUTxOsFromKoiosTxs(blockTxList);
 
             const handleNames = builtUTxOs.flatMap((u) => u.handles?.flatMap((h) => h[1].map((assetName) => getHandleNameFromAssetName(assetName).name)) ?? []) ?? [];
-            Logger.local(`Processing block ${block.id} at slot ${block.slot} with ${builtUTxOs.length} UTxOs containing ${handleNames.join(', ')} handles from ${txList.length} transactions`);
+            Logger.local(`Processing block ${block.id} at slot ${block.slot} with ${builtUTxOs.length} UTxOs containing ${handleNames.join(', ')} handles from ${blockTxList.length} transactions`);
 
             builtUTxOs.forEach((utxo) => {
                 // ********** BURNS ************* //
-                const burnHandles: StoredHandle[] = store.pipeline(() => {
+                const burnHandles = (store.pipeline(() => {
                     utxo.burn
                         ?.flatMap((b) => b[1])
                         .forEach((hex) => {
                             handlesRepo.getHandle(getHandleNameFromAssetName(hex).name);
                         });
-                });
+                }) as (StoredHandle | undefined)[]).filter((burned): burned is StoredHandle => !!burned);
+
+                const uniqueBurnHandles = Array.from(new Map(burnHandles.map((handle) => [handle.name, handle])).values());
                 store.pipeline(() => {
-                    burnHandles.forEach((burned) => {
+                    uniqueBurnHandles.forEach((burned) => {
                         handlesRepo.removeHandle(burned);
                     });
                 });
@@ -353,7 +428,8 @@ const scan = async () => {
             handlesRepo.addUTxOsWithMintDataAndUpdateIndexes(builtUTxOs);
 
             // ******** SPENT UTxOs *********** //
-            handlesRepo.removeUTxOs(txList.flatMap((tx) => tx.inputs).map((i) => `${i.tx_hash}#${i.tx_index}`));
+            const spentUtxoIds = blockTxList.flatMap((tx) => tx.inputs).map((input) => `${input.tx_hash}#${input.tx_index}`);
+            if (spentUtxoIds.length) handlesRepo.removeUTxOs(spentUtxoIds);
 
             handlesRepo.setMetrics({
                 currentSlot: block.slot,
@@ -371,45 +447,80 @@ const scan = async () => {
 };
 
 export const lambdaHandler = async (event: AWSLambda.ALBEvent, context: AWSLambda.Context) => {
-    await ensureInitialized();
-    const metrics = handlesRepo.getMetrics();
-    if (metrics.lockLambdas) {
-        // we probably need some recovery checks/notify here
-        Logger.local(`Lambda is locked with: ${metrics.lockLambdas}, skipping`);
-
-        // If it's locked because of scannin for longer than 5 minutes, we have a problem
-        if (metrics.lockLambdas === LockedLambdaReason.SCANNING && metrics.lockLambdasTimestamp && Date.now() - metrics.lockLambdasTimestamp > 5 * 60 * 1000) {
-            Logger.log({ message: `Scanner lambda has been locked for scanning for over 5 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.lockedTooLong' });
-        }
-
-        // If it's locked because of rollback for longer than 5 minutes, we have a problem
-        if ([LockedLambdaReason.ROLLBACK_20, LockedLambdaReason.ROLLBACK_2160].includes(metrics.lockLambdas) && metrics.lockLambdasTimestamp && Date.now() - metrics.lockLambdasTimestamp > 5 * 60 * 1000) {
-            Logger.log({ message: `Scanner lambda has been locked for rollback for over 5 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.rollbackLockedTooLong' });
-        }
-
-        // If it's locked because of reindexing for longer than 10 minutes, we have a problem
-        if (metrics.lockLambdas === LockedLambdaReason.REINDEX && metrics.lockLambdasTimestamp && Date.now() - metrics.lockLambdasTimestamp > 10 * 60 * 1000) {
-            Logger.log({ message: `Scanner lambda has been locked for reindexing for over 10 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.reindexLockedTooLong' });
-        }
-
+    const leaseOwner = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    if (!acquireScannerLease(leaseOwner)) {
+        Logger.local('Scanner lease is active in another invocation, skipping');
         return;
     }
 
-    // ******** REINDEXING CHECK ********* //
-    if (Number(store.getIndexSchemaVersion()) > (handlesRepo.getMetrics().indexSchemaVersion ?? 0)) {
-        await processReindex();
-        return;
+    let heartbeat: NodeJS.Timeout | undefined;
+    try {
+        heartbeat = setInterval(() => {
+            try {
+                if (!renewScannerLease(leaseOwner)) {
+                    Logger.local('Scanner lease renewal failed, another invocation may take over soon');
+                }
+            } catch (error: any) {
+                Logger.log({ message: `Scanner lease heartbeat failed: ${error.message}`, category: LogCategory.ERROR, event: 'scannerLambda.leaseHeartbeat' });
+            }
+        }, SCANNER_LEASE_HEARTBEAT_MS);
+        heartbeat.unref?.();
+
+        await ensureInitialized();
+        const metrics = handlesRepo.getMetrics();
+        if (metrics.lockLambdas) {
+            // we probably need some recovery checks/notify here
+            Logger.local(`Lambda is locked with: ${metrics.lockLambdas}, skipping`);
+            if (isLockStale(metrics.lockLambdas, metrics.lockLambdasTimestamp)) {
+                if (metrics.lockLambdas === LockedLambdaReason.SCANNING) {
+                    Logger.log({ message: `Scanner lambda has been locked for scanning for over 5 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.lockedTooLong' });
+                }
+
+                if ([LockedLambdaReason.ROLLBACK_20, LockedLambdaReason.ROLLBACK_2160].includes(metrics.lockLambdas)) {
+                    Logger.log({ message: `Scanner lambda has been locked for rollback for over 5 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.rollbackLockedTooLong' });
+                    setRecoveryFlag(RECOVERY_REASON_ROLLBACK);
+                }
+
+                if (metrics.lockLambdas === LockedLambdaReason.REINDEX) {
+                    Logger.log({ message: `Scanner lambda has been locked for reindexing for over 10 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.reindexLockedTooLong' });
+                    setRecoveryFlag(RECOVERY_REASON_REINDEX);
+                }
+
+                handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
+            } else {
+                return;
+            }
+        }
+
+        const recoveryFlag = getRecoveryFlag();
+        if (recoveryFlag) {
+            Logger.log({ message: `Recovery flag '${recoveryFlag}' detected. Running index repair before scan.`, category: LogCategory.NOTIFY, event: 'scannerLambda.recoveryFlag' });
+            await processReindex();
+            return;
+        }
+
+        // ******** REINDEXING CHECK ********* //
+        if (Number(store.getIndexSchemaVersion()) > (handlesRepo.getMetrics().indexSchemaVersion ?? 0)) {
+            await processReindex();
+            return;
+        }
+
+        await scan();
+        await checkRollback();
+
+        return {
+            isBase64Encoded: false,
+            statusCode: 200,
+            body: ''
+        };
+    } finally {
+        if (heartbeat) clearInterval(heartbeat);
+        try {
+            releaseScannerLease(leaseOwner);
+        } catch (error: any) {
+            Logger.log({ message: `Failed to release scanner lease: ${error.message}`, category: LogCategory.ERROR, event: 'scannerLambda.leaseRelease' });
+        }
     }
-
-    await scan();
-
-    await checkRollback();
-
-    return {
-        isBase64Encoded: false,
-        statusCode: 200,
-        body: ''
-    };
 };
 
 export const Internal = {

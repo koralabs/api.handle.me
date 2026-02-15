@@ -1,4 +1,4 @@
-import { IS_LOCAL, Logger } from '@koralabs/kora-labs-common';
+import { IS_LOCAL, LogCategory, Logger } from '@koralabs/kora-labs-common';
 import cors from 'cors';
 import express from 'express';
 import fs from 'fs';
@@ -40,7 +40,7 @@ class App {
         await this.initialize();
         this.app.set('trust proxy', 1); 
         const server = this.app.listen(this.port, () => {
-            Logger.log(`🚀 ${this.env} app listening on port ${this.port}`);
+            Logger.log({ message: `🚀 ${this.env} app listening on port ${this.port} 🚀`, category: LogCategory.INFO, event: 'app.listen' });
         });
         server.keepAliveTimeout = 61 * 1000;
         await this.initializeOgmios();
@@ -107,7 +107,7 @@ class App {
                     const scanner = await import('./lambdas/scanner');
                     scanner.lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
                     setInterval(() => {
-                        Logger.log(`Running scanner lambda...`);
+                        Logger.local('Running scanner lambda...');
                         scanner.lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
                     }, 60000);
                 })();
@@ -132,7 +132,7 @@ class App {
             const swaggerDoc = parse(fs.readFileSync(swaggerFile).toString());
             this.app.use('/swagger', swaggerUi.serve, swaggerUi.setup(swaggerDoc, options));
         } catch (error: any) {
-            Logger.log(`Unable to load swagger with error: ${error}`);
+            Logger.log({ message: `Unable to load swagger with error: ${error?.message ?? error}`, category: LogCategory.ERROR, event: 'app.swagger.load' });
         }
     }
 }

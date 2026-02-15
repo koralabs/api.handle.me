@@ -60,7 +60,7 @@ export const buildOnChainObject = <T>(cborData: any): T | null => {
         const stringifiedMetadata = parseCborObject(cborData);
         return JSON.parse(stringifiedMetadata) as T;
     } catch (error: any) {
-        Logger.log(`Error building metadata: ${error.message}`);
+        Logger.log({ message: `Error building metadata: ${error.message}`, category: LogCategory.ERROR, event: 'buildOnChainObject' });
         return null;
     }
 };

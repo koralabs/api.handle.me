@@ -69,12 +69,45 @@ const loadScannerModule = () => {
 
 const setup = () => {
     const pipelineResponses: any[] = [];
+    const kvStore = new Map<string, string>();
     const store = {
         getValuesFromIndexedSet: jest.fn(),
         getValuesFromOrderedSet: jest.fn(),
         pipeline: jest.fn((commands: CallableFunction) => {
             commands();
             return pipelineResponses.shift() ?? [];
+        }),
+        redisClientCall: jest.fn((cmd: string, ...args: any[]) => {
+            if (cmd === 'set') {
+                const [key, value, options] = args;
+                const existing = kvStore.get(key);
+                if (options?.conditionalSet === 'onlyIfDoesNotExist') {
+                    if (existing !== undefined) return null;
+                    kvStore.set(key, value);
+                    return 'OK';
+                }
+                if (options?.conditionalSet === 'onlyIfEqual') {
+                    if (existing !== options.comparisonValue) return null;
+                    kvStore.set(key, value);
+                    return 'OK';
+                }
+                kvStore.set(key, value);
+                return 'OK';
+            }
+            if (cmd === 'get') {
+                const [key] = args;
+                return kvStore.get(key);
+            }
+            if (cmd === 'pexpire') {
+                const [key] = args;
+                return kvStore.has(key) ? 1 : 0;
+            }
+            if (cmd === 'del') {
+                const [keys] = args as [string[]];
+                for (const key of keys) kvStore.delete(key);
+                return keys.length;
+            }
+            return undefined;
         }),
         removeValueFromIndexedSet: jest.fn(),
         getIndexSchemaVersion: jest.fn().mockReturnValue(1),
@@ -101,7 +134,6 @@ const setup = () => {
     MockedRepoClass.mockImplementation(() => handlesRepo);
     mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ height: 5000 }) } as any);
     mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'provider_block', slot: 100 }] as never);
-    mockedHelpers.fetchTxList.mockResolvedValue([] as never);
     mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
     mockedHelpers.fetchKoios.mockResolvedValue([] as never);
     mockedGetHandleNameFromAssetName.mockImplementation((assetName: string) => ({
@@ -188,7 +220,6 @@ describe('Scanner lambda unit tests', () => {
 
         await scannerModule.Internal.checkRollback({ currentSlot: 130, lastMaxRollbackCheck: Date.now() });
 
-        expect(mockedHelpers.fetchTxList).not.toHaveBeenCalled();
         expect(mockedHelpers.fetchKoios).toHaveBeenCalledWith('block_txs', 'POST', expect.any(String));
     });
 
@@ -471,7 +502,8 @@ describe('Scanner lambda unit tests', () => {
 
         await scannerModule.Internal.processReindex();
 
-        expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ indexSchemaVersion: 3, lockLambdas: LockedLambdaReason.UNLOCKED });
+        expect(handlesRepo.setMetrics).toHaveBeenCalledWith({ indexSchemaVersion: 3 });
+        expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
     });
 
     it('processReindex unlocks lambdas when repopulation fails', async () => {
@@ -590,17 +622,32 @@ describe('Scanner lambda unit tests', () => {
             { hash: 'block_newer', slot: 101, confirmations: 5 },
             { hash: 'block_older', slot: 100, confirmations: 1 }
         ] as never);
-        mockedHelpers.fetchTxList.mockImplementation(async (hash: string) => {
-            if (hash === 'block_newer') return [{ marker: hash, inputs: [{ tx_hash: 'input_newer', tx_index: 0 }] }] as never;
-            return [{ marker: hash, inputs: [{ tx_hash: 'input_older', tx_index: 1 }] }] as never;
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') {
+                const parsedBody = JSON.parse(body ?? '{}');
+                return (parsedBody._block_hashes ?? []).flatMap((blockHash: string) => {
+                    if (blockHash === 'block_newer') return [{ tx_hash: 'tx_newer' }];
+                    if (blockHash === 'block_older') return [{ tx_hash: 'tx_older' }];
+                    return [];
+                }) as never;
+            }
+            if (path === 'tx_info') {
+                const parsedBody = JSON.parse(body ?? '{}');
+                return (parsedBody._tx_hashes ?? []).flatMap((txHash: string) => {
+                    if (txHash === 'tx_newer') return [{ tx_hash: 'tx_newer', block_hash: 'block_newer', inputs: [{ tx_hash: 'input_newer', tx_index: 0 }] }];
+                    if (txHash === 'tx_older') return [{ tx_hash: 'tx_older', block_hash: 'block_older', inputs: [{ tx_hash: 'input_older', tx_index: 1 }] }];
+                    return [];
+                }) as never;
+            }
+            return [] as never;
         });
         mockedGetHandleNameFromAssetName.mockImplementation((assetName: string) => {
             if (assetName === 'burn-hex') return { name: 'burn-handle', ownerTokenHex: 'burn-hex', isCip67: false, assetLabel: null };
             return { name: assetName, ownerTokenHex: assetName, isCip67: false, assetLabel: null };
         });
         mockedHelpers.buildUTxOsFromKoiosTxs.mockImplementation((txs: any[]) => {
-            const marker = txs?.[0]?.marker;
-            if (marker === 'block_newer') {
+            const blockHash = txs?.[0]?.block_hash;
+            if (blockHash === 'block_newer') {
                 const utxo = buildUtxo({ id: 'scan_newer#0', slot: 101, blockHash: 'block_newer', assetName: 'asset-a' });
                 utxo.burn = [[policy, ['burn-hex']]];
                 return [utxo] as never;
@@ -623,6 +670,10 @@ describe('Scanner lambda unit tests', () => {
             2,
             [expect.objectContaining({ id: 'scan_older#0' })]
         );
+        const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
+        expect(txInfoCalls).toHaveLength(1);
+        expect(txInfoCalls[0][2]).toEqual(expect.stringContaining('tx_newer'));
+        expect(txInfoCalls[0][2]).toEqual(expect.stringContaining('tx_older'));
         expect(handlesRepo.removeUTxOs).toHaveBeenNthCalledWith(1, ['input_newer#0']);
         expect(handlesRepo.removeUTxOs).toHaveBeenNthCalledWith(2, ['input_older#1']);
         expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
@@ -642,20 +693,48 @@ describe('Scanner lambda unit tests', () => {
         expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
     });
 
+    it('scan ignores missing burn handles (idempotent burn replay)', async () => {
+        const { handlesRepo, pipelineResponses, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs' && body?.includes('block_newer')) return [{ tx_hash: 'tx_newer' }] as never;
+            if (path === 'tx_info' && body?.includes('tx_newer')) return [{ marker: 'block_newer', inputs: [] }] as never;
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockImplementation((txs: any[]) => {
+            if (txs?.[0]?.marker === 'block_newer') {
+                const utxo = buildUtxo({ id: 'scan_newer#0', slot: 101, blockHash: 'block_newer', assetName: 'asset-a' });
+                utxo.burn = [[policy, ['burn-hex']]];
+                return [utxo] as never;
+            }
+            return [] as never;
+        });
+
+        pipelineResponses.push([undefined], []);
+
+        await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+        expect(handlesRepo.removeHandle).not.toHaveBeenCalled();
+    });
+
     it.each([
         { reason: LockedLambdaReason.SCANNING, ageMs: 6 * 60 * 1000 },
         { reason: LockedLambdaReason.ROLLBACK_20, ageMs: 6 * 60 * 1000 },
         { reason: LockedLambdaReason.REINDEX, ageMs: 11 * 60 * 1000 }
-    ])('logs notify for stale lambda lock: $reason', async ({ reason, ageMs }) => {
+    ])('recovers stale lambda lock: $reason', async ({ reason, ageMs }) => {
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({
             lockLambdas: reason,
             lockLambdasTimestamp: Date.now() - ageMs,
-            currentSlot: 100
+            currentSlot: 100,
+            currentBlockHash: 'start_hash',
+            indexSchemaVersion: 1
         });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
 
-        await expect(scannerModule.lambdaHandler({} as any, {} as any)).resolves.toBeUndefined();
-        expect(mockedHelpers.blockfrostApiCall).not.toHaveBeenCalled();
+        await scannerModule.lambdaHandler({} as any, {} as any);
+        expect(handlesRepo.setMetrics).toHaveBeenCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
     });
 
     it('lambdaHandler runs reindex path and exits before scan when schema is behind', async () => {
@@ -671,6 +750,33 @@ describe('Scanner lambda unit tests', () => {
         await expect(scannerModule.lambdaHandler({} as any, {} as any)).resolves.toBeUndefined();
 
         expect(store.repopulateIndexesFromUTxOs).toHaveBeenCalledTimes(1);
+        expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
+    });
+
+    it('lambdaHandler skips execution when scanner lease is already held', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        store.redisClientCall.mockImplementationOnce(() => null);
+
+        await expect(scannerModule.lambdaHandler({} as any, {} as any)).resolves.toBeUndefined();
+
+        expect(handlesRepo.initialize).not.toHaveBeenCalled();
+        expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
+    });
+
+    it('lambdaHandler runs recovery reindex when a recovery flag is present', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        store.redisClientCall('set', 'scanner:recovery', 'rollback');
+        handlesRepo.getMetrics.mockReturnValue({
+            lockLambdas: LockedLambdaReason.UNLOCKED,
+            indexSchemaVersion: 1,
+            currentBlockHash: 'start_hash',
+            currentSlot: 100
+        });
+
+        await expect(scannerModule.lambdaHandler({} as any, {} as any)).resolves.toBeUndefined();
+
+        expect(store.repopulateIndexesFromUTxOs).toHaveBeenCalledTimes(1);
+        expect(store.redisClientCall('get', 'scanner:recovery')).toBeUndefined();
         expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
     });
 
@@ -693,5 +799,269 @@ describe('Scanner lambda unit tests', () => {
         expect(result).toEqual({ isBase64Encoded: false, statusCode: 200, body: '' });
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/start_hash/next');
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(2, 'blocks/4980/next');
+    });
+
+    it('reuses scanner initialization across warm invocations', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        store.getIndexSchemaVersion.mockReturnValue(1);
+        handlesRepo.getMetrics.mockReturnValue({
+            lockLambdas: LockedLambdaReason.UNLOCKED,
+            indexSchemaVersion: 1,
+            currentBlockHash: 'start_hash',
+            currentSlot: 100,
+            lastMaxRollbackCheck: Date.now()
+        });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+
+        await scannerModule.lambdaHandler({} as any, {} as any);
+        await scannerModule.lambdaHandler({} as any, {} as any);
+
+        expect(handlesRepo.initialize).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses the default rollback offset when processRollback omits rollbackOffset', async () => {
+        const { scannerModule } = setup();
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+
+        await scannerModule.Internal.processRollback({ currentSlot: 100 });
+
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next');
+    });
+
+    it('returns early when rollback provider blocks are all ahead of current slot', async () => {
+        const { scannerModule, store } = setup();
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'future_block', slot: 200 }] as never);
+
+        await scannerModule.Internal.processRollback({ currentSlot: 100, rollbackOffset: 20 });
+
+        expect(store.getValuesFromOrderedSet).not.toHaveBeenCalled();
+    });
+
+    it('handles null asset_utxos response during rollback handle lookup', async () => {
+        const { handlesRepo, pipelineResponses, scannerModule, store } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentSlot: 300, lockLambdas: LockedLambdaReason.UNLOCKED });
+        store.getValuesFromOrderedSet.mockReturnValue(['u1']);
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'provider_a', slot: 200 }] as never);
+
+        const providerUtxo = buildUtxo({ id: 'u1', slot: 200, blockHash: 'provider_a', assetName: 'asset-a' });
+        pipelineResponses.push(
+            [buildUtxo({ id: 'u1', slot: 200, blockHash: 'provider_a', assetName: 'asset-a' })],
+            [{ name: 'asset-a', policy: 'policy-a', hex: 'asset-a', resolved_addresses: { ada: knownAddress } }]
+        );
+
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'provider_tx_1' }] as never;
+            if (path === 'asset_utxos') return null as never;
+            if (path === 'tx_info' && body?.includes('provider_tx_1')) return [{ source: 'provider' }] as never;
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockImplementation((txs: any[]) => {
+            if (txs?.[0]?.source === 'provider') return [providerUtxo] as never;
+            return [] as never;
+        });
+
+        await scannerModule.Internal.checkRollback();
+
+        expect(mockedHelpers.fetchKoios).toHaveBeenCalledWith('asset_utxos', 'POST', expect.any(String));
+    });
+
+    it('skips rollback index refresh entries with unrelated handles and defaults missing mint to empty', async () => {
+        const { handlesRepo, pipelineResponses, scannerModule, store } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentSlot: 300, lockLambdas: LockedLambdaReason.UNLOCKED });
+        store.getValuesFromOrderedSet.mockReturnValue(['api#0']);
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'provider_a', slot: 200 }] as never);
+
+        mockedGetHandleNameFromAssetName.mockImplementation((assetName: string) => {
+            if (assetName === 'asset-a') return { name: 'handle-a', ownerTokenHex: 'asset-a', isCip67: false, assetLabel: null };
+            if (assetName === 'asset-z') return { name: 'handle-z', ownerTokenHex: 'asset-z', isCip67: false, assetLabel: null };
+            return { name: assetName, ownerTokenHex: assetName, isCip67: false, assetLabel: null };
+        });
+
+        const apiUtxo = buildUtxo({ id: 'api#0', slot: 200, blockHash: 'api_block', assetName: 'asset-a' });
+        apiUtxo.handles = undefined;
+        const retainedMintData = JSON.stringify({ created_slot: 150, metadata: {}, txHash: 'mint-keep' });
+
+        pipelineResponses.push(
+            [apiUtxo],
+            [{ name: 'handle-a', policy: 'policy-a', hex: 'asset-a', resolved_addresses: { ada: knownAddress } }],
+            [new Set([retainedMintData])],
+            [new Set(['handle-a'])],
+            [],
+            [new Set([retainedMintData])]
+        );
+
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'provider_tx_1' }] as never;
+            if (path === 'asset_utxos') return [{ tx_hash: 'latest_tx_1' }] as never;
+            if (path === 'tx_info' && body?.includes('provider_tx_1')) return [{ source: 'provider' }] as never;
+            if (path === 'tx_info' && body?.includes('latest_tx_1')) return [{ source: 'latest' }] as never;
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockImplementation((txs: any[]) => {
+            if (txs?.[0]?.source === 'provider') {
+                return [buildUtxo({ id: 'provider#0', slot: 201, blockHash: 'provider_a', assetName: 'asset-a' })] as never;
+            }
+            if (txs?.[0]?.source === 'latest') {
+                const unrelated = buildUtxo({ id: 'latest_unrelated#0', slot: 202, blockHash: 'provider_a', assetName: 'asset-z' });
+                const matching = buildUtxo({ id: 'provider#0', slot: 202, blockHash: 'provider_a', assetName: 'asset-a' });
+                matching.mint = undefined;
+                return [unrelated, matching] as never;
+            }
+            return [] as never;
+        });
+
+        await scannerModule.Internal.checkRollback();
+
+        expect(handlesRepo.updateHandleIndexes).toHaveBeenCalledTimes(1);
+        const [filteredUtxo] = handlesRepo.updateHandleIndexes.mock.calls[0];
+        expect(filteredUtxo.mint).toEqual([]);
+        expect(filteredUtxo.handles).toEqual([[policy, ['asset-a']]]);
+    });
+
+    it('uses currentSlot default in checkRollback when metrics omit it', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+
+        await scannerModule.Internal.checkRollback();
+
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next');
+    });
+
+    it('scan tolerates null block_txs responses', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') return null as never;
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        await scannerModule.Internal.scan();
+
+        expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenCalledWith([]);
+        expect(handlesRepo.removeUTxOs).not.toHaveBeenCalled();
+    });
+
+    it('scan tolerates null tx_info responses and missing handles on UTxOs', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs' && body?.includes('block_newer')) return [{ tx_hash: 'tx_newer' }] as never;
+            if (path === 'tx_info' && body?.includes('tx_newer')) return null as never;
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([
+            { ...buildUtxo({ id: 'scan_newer#0', slot: 101, blockHash: 'block_newer', assetName: 'asset-a' }), handles: undefined }
+        ] as never);
+
+        await scannerModule.Internal.scan();
+
+        expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenCalledTimes(1);
+        expect(handlesRepo.removeUTxOs).not.toHaveBeenCalled();
+    });
+
+    it('scan defaults handleNames to empty when UTxO collection flatMap returns undefined', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
+        mockedHelpers.fetchKoios.mockResolvedValue([] as never);
+        const builtUtxos: any[] = [];
+        (builtUtxos as any).flatMap = () => undefined;
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue(builtUtxos as never);
+
+        await scannerModule.Internal.scan();
+
+        expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenCalledWith(expect.anything());
+    });
+
+    it('returns early for locked lambdas without stale timeout configuration', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({
+            lockLambdas: 'UNKNOWN_LOCK' as any,
+            lockLambdasTimestamp: Date.now() - 20 * 60 * 1000
+        });
+
+        await scannerModule.lambdaHandler({} as any, {} as any);
+
+        expect(handlesRepo.setMetrics).not.toHaveBeenCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
+        expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
+    });
+
+    it('does not renew lease when heartbeat sees a different owner', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        handlesRepo.getMetrics.mockReturnValue({
+            lockLambdas: LockedLambdaReason.UNLOCKED,
+            indexSchemaVersion: 1,
+            currentBlockHash: 'start_hash',
+            currentSlot: 100,
+            lastMaxRollbackCheck: Date.now()
+        });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+
+        const originalRedisClientCall = store.redisClientCall.getMockImplementation();
+        const setIntervalSpy = jest.spyOn(global, 'setInterval').mockImplementation(((callback: TimerHandler) => {
+            (callback as CallableFunction)();
+            return { unref: jest.fn() } as any;
+        }) as any);
+        store.redisClientCall.mockImplementation((cmd: string, ...args: any[]) => {
+            if (cmd === 'get' && args[0] === 'scanner:lease') return 'another-owner';
+            return originalRedisClientCall?.(cmd, ...args);
+        });
+
+        try {
+            await scannerModule.lambdaHandler({} as any, {} as any);
+        } finally {
+            setIntervalSpy.mockRestore();
+        }
+
+        expect(store.redisClientCall).not.toHaveBeenCalledWith('pexpire', 'scanner:lease', expect.any(Number));
+    });
+
+    it('handles lease release errors without failing the invocation', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        handlesRepo.getMetrics.mockReturnValue({
+            lockLambdas: LockedLambdaReason.UNLOCKED,
+            indexSchemaVersion: 1,
+            currentBlockHash: 'start_hash',
+            currentSlot: 100,
+            lastMaxRollbackCheck: Date.now()
+        });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+
+        const originalRedisClientCall = store.redisClientCall.getMockImplementation();
+        const setIntervalSpy = jest.spyOn(global, 'setInterval').mockImplementation((() => ({ unref: jest.fn() }) as any) as any);
+        store.redisClientCall.mockImplementation((cmd: string, ...args: any[]) => {
+            if (cmd === 'get' && args[0] === 'scanner:lease') {
+                throw new Error('release failed');
+            }
+            return originalRedisClientCall?.(cmd, ...args);
+        });
+
+        try {
+            await expect(scannerModule.lambdaHandler({} as any, {} as any)).resolves.toEqual({
+                isBase64Encoded: false,
+                statusCode: 200,
+                body: ''
+            });
+        } finally {
+            setIntervalSpy.mockRestore();
+        }
+    });
+
+    it('treats missing indexSchemaVersion metric as zero for schema upgrade checks', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        store.getIndexSchemaVersion.mockReturnValue(1);
+        handlesRepo.getMetrics.mockReturnValue({
+            lockLambdas: LockedLambdaReason.UNLOCKED,
+            currentBlockHash: 'head',
+            currentSlot: 10
+        });
+
+        await scannerModule.lambdaHandler({} as any, {} as any);
+
+        expect(store.repopulateIndexesFromUTxOs).toHaveBeenCalledTimes(1);
     });
 });

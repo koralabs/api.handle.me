@@ -71,13 +71,13 @@ if (parentPort) {
 }
 
 function logKeyRequest(key, payload) {
-    if (payload.args && payload.args.length > 0 && typeof payload.args[0] == string && payload.args[0].startsWith(key)) {
-        Logger.local(`Valkey request for ${payload.args[0]}`, payload);
+    if (payload.args && payload.args.length > 0 && typeof payload.args[0] == 'string' && payload.args[0].startsWith(key)) {
+        Logger.local({ message: `Valkey request for ${payload.args[0]}: ${JSON.stringify(payload)}` });
     }
 }
 
 function logKeyResult(key, payload, result) {
-    if (payload.args && payload.args.length > 0 && typeof payload.args[0] == string && payload.args[0].startsWith(key)) {
-        Logger.local(`Valkey result for ${payload.args[0]}`, result);
+    if (payload.args && payload.args.length > 0 && typeof payload.args[0] == 'string' && payload.args[0].startsWith(key)) {
+        Logger.local({ message: `Valkey result for ${payload.args[0]}: ${JSON.stringify(result)}` });
     }
 }
