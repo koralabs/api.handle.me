@@ -145,6 +145,39 @@ describe('Scanner lambda e2e', () => {
         expect(repo.getMetrics().currentSlot).toBeGreaterThanOrEqual(101);
     });
 
+    it('retries tx_info when Koios returns a PGRST003 pool timeout response object', async () => {
+        const handleName = `scanner-pgrst-${Date.now()}`;
+        let txInfoAttempts = 0;
+
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ height: 5000 }) } as never);
+        mockedHelpers.fetchPaginatedResults
+            .mockResolvedValueOnce([{ hash: 'next_hash', slot: 101, confirmations: 21 }] as never)
+            .mockResolvedValueOnce([] as never);
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'scan_tx' }] as never;
+            if (path === 'tx_info') {
+                txInfoAttempts++;
+                if (txInfoAttempts === 1) {
+                    return {
+                        code: 'PGRST003',
+                        details: null,
+                        hint: null,
+                        message: 'Timed out acquiring connection from connection pool.'
+                    } as never;
+                }
+                return [{ tx_hash: 'scan_tx', block_hash: 'next_hash', inputs: [] }] as never;
+            }
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([buildMintedUTxO(handleName)]);
+
+        const result = await lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
+
+        expect(result).toEqual({ isBase64Encoded: false, statusCode: 200, body: '' });
+        expect(txInfoAttempts).toBe(2);
+        expect(repo.getHandle(handleName)).toEqual(expect.objectContaining({ name: handleName, utxo: 'scan_tx#0' }));
+    });
+
     it('returns early without making changes when lambdas are locked', async () => {
         repo.setMetrics({ lockLambdas: LockedLambdaReason.REINDEX });
         const initialMetrics = repo.getMetrics();

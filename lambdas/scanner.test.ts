@@ -693,6 +693,109 @@ describe('Scanner lambda unit tests', () => {
         expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
     });
 
+    it('retries tx_info on UND_ERR_SOCKET terminated errors and logs troubleshooting curl context', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
+
+        let txInfoAttempts = 0;
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'tx_a' }, { tx_hash: 'tx_b' }] as never;
+            if (path === 'tx_info') {
+                txInfoAttempts++;
+                if (txInfoAttempts === 1) {
+                    const error: any = new Error('terminated');
+                    error.cause = { code: 'UND_ERR_SOCKET', message: 'other side closed' };
+                    throw error;
+                }
+                const parsedBody = JSON.parse(body ?? '{}');
+                return (parsedBody._tx_hashes ?? []).map((txHash: string) => ({ tx_hash: txHash, block_hash: 'block_newer', inputs: [] })) as never;
+            }
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        try {
+            await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+            const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
+            expect(txInfoCalls).toHaveLength(2);
+            const logEntries = [...warnSpy.mock.calls, ...errorSpy.mock.calls].map(([entry]) => `${entry}`);
+            expect(
+                logEntries.some((entry) => entry.includes('scannerLambda.koiosTxInfo.requestFailed'))
+            ).toBe(true);
+            expect(logEntries.some((entry) => entry.includes('UND_ERR_SOCKET'))).toBe(true);
+            expect(logEntries.some((entry) => entry.includes('curl -v --http1.1'))).toBe(true);
+        } finally {
+            warnSpy.mockRestore();
+            errorSpy.mockRestore();
+        }
+    });
+
+    it('retries tx_info on Koios PGRST003 pool timeout response objects', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
+
+        let txInfoAttempts = 0;
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'tx_a' }] as never;
+            if (path === 'tx_info') {
+                txInfoAttempts++;
+                if (txInfoAttempts === 1) {
+                    return {
+                        code: 'PGRST003',
+                        details: null,
+                        hint: null,
+                        message: 'Timed out acquiring connection from connection pool.'
+                    } as never;
+                }
+                const parsedBody = JSON.parse(body ?? '{}');
+                return (parsedBody._tx_hashes ?? []).map((txHash: string) => ({ tx_hash: txHash, block_hash: 'block_newer', inputs: [] })) as never;
+            }
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+        const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
+        expect(txInfoCalls).toHaveLength(2);
+    });
+
+    it('splits tx_info batches after retries are exhausted and continues scanning', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
+
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'tx_a' }, { tx_hash: 'tx_b' }, { tx_hash: 'tx_c' }, { tx_hash: 'tx_d' }] as never;
+            if (path === 'tx_info') {
+                const parsedBody = JSON.parse(body ?? '{}');
+                const txHashes = parsedBody._tx_hashes ?? [];
+                if (txHashes.length === 4) {
+                    throw new Error('Payload too large, body length was 5305. Please ensure your request body size is below 5120 bytes');
+                }
+                return txHashes.map((txHash: string) => ({ tx_hash: txHash, block_hash: 'block_newer', inputs: [] })) as never;
+            }
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        try {
+            await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+            const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
+            expect(txInfoCalls.length).toBeGreaterThanOrEqual(5);
+            expect(
+                warnSpy.mock.calls.some(([entry]) => `${entry}`.includes('"event": "scannerLambda.koiosTxInfo.splitBatch"'))
+            ).toBe(true);
+        } finally {
+            warnSpy.mockRestore();
+        }
+    });
+
     it('scan ignores missing burn handles (idempotent burn replay)', async () => {
         const { handlesRepo, pipelineResponses, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });

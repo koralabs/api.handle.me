@@ -1,4 +1,4 @@
-import { AssetNameLabel, asyncForEach, buildHolderInfo, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, asyncForEach, buildHolderInfo, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, NETWORK, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { BlockfrostBlock, KoiosAssetUTxO, KoiosTxInfo } from '../interfaces/provider.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
@@ -13,6 +13,8 @@ const SCANNER_LEASE_KEY = 'scanner:lease';
 const SCANNER_RECOVERY_KEY = 'scanner:recovery';
 const SCANNER_LEASE_TTL_MS = 60_000;
 const SCANNER_LEASE_HEARTBEAT_MS = 20_000;
+const KOIOS_TX_INFO_MAX_RETRIES = 2;
+const KOIOS_TX_INFO_RETRY_BASE_DELAY_MS = 500;
 const RECOVERY_REASON_ROLLBACK = 'rollback';
 const RECOVERY_REASON_REINDEX = 'reindex';
 
@@ -90,11 +92,90 @@ const getKoiosBatches = (list: string[], keyName: string) => {
     return batchedList;
 };
 
+const delayMs = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const getTxInfoBody = (hashBatch: string[]) => JSON.stringify({ _tx_hashes: hashBatch, ...defaultKoiosSettings });
+
+const getKoiosTxInfoDebugCurl = (body: string) => {
+    const host = NETWORK.toLowerCase() === 'mainnet' ? 'api' : NETWORK.toLowerCase();
+    return `curl -v --http1.1 'https://${host}.koios.rest/api/v1/tx_info' -H 'Content-Type: application/json' -H 'Authorization: Bearer <YOUR_KOIOS_BEARER_TOKEN>' --data-binary '${body}'`;
+};
+
+const isRetriableKoiosTxInfoError = (error: any): boolean => {
+    const message = `${error?.message ?? ''} ${error?.cause?.message ?? ''}`.toLowerCase();
+    const koiosResponseMessage = `${error?.koiosResponse?.message ?? error?.koiosResponse?.error ?? ''}`.toLowerCase();
+    const code = `${error?.code ?? ''}`.toLowerCase();
+    const koiosCode = `${error?.koiosResponse?.code ?? ''}`.toLowerCase();
+    const causeCode = `${error?.cause?.code ?? ''}`.toLowerCase();
+    const status = Number(error?.status ?? error?.statusCode ?? error?.status_code ?? error?.koiosResponse?.status ?? error?.koiosResponse?.status_code);
+
+    if ([429, 502, 503, 504].includes(status)) return true;
+    if (koiosCode === 'pgrst003') return true;
+    if (code === 'und_err_socket' || causeCode === 'und_err_socket') return true;
+    if (message.includes('terminated')) return true;
+    if (message.includes('socket')) return true;
+    if (message.includes('econnreset')) return true;
+    if (message.includes('fetch failed')) return true;
+    if (message.includes('gateway timeout')) return true;
+    if (message.includes('too many requests')) return true;
+    if (message.includes('payload too large')) return true;
+    if (message.includes('timed out acquiring connection from connection pool')) return true;
+    if (koiosResponseMessage.includes('gateway timeout')) return true;
+    if (koiosResponseMessage.includes('too many requests')) return true;
+    if (koiosResponseMessage.includes('payload too large')) return true;
+    if (koiosResponseMessage.includes('timed out acquiring connection from connection pool')) return true;
+
+    return false;
+};
+
+const fetchTxInfoBatchWithRetryAndSplit = async (hashBatch: string[], attempt = 0): Promise<KoiosTxInfo[]> => {
+    const body = getTxInfoBody(hashBatch);
+    try {
+        const txInfo = (await fetchKoios(`tx_info`, 'POST', body)) as KoiosTxInfo[] | null | { [key: string]: any };
+        if (!txInfo) return [];
+        if (!Array.isArray(txInfo)) {
+            const error: any = new Error(`Unexpected tx_info response type`);
+            error.koiosResponse = txInfo;
+            throw error;
+        }
+        return txInfo;
+    } catch (error: any) {
+        const retriable = isRetriableKoiosTxInfoError(error);
+        Logger.log({
+            message: `tx_info request failed. retriable=${retriable} attempt=${attempt + 1}/${KOIOS_TX_INFO_MAX_RETRIES + 1} hashCount=${hashBatch.length} bodyLength=${body.length} firstHash=${hashBatch[0] ?? ''} lastHash=${hashBatch[hashBatch.length - 1] ?? ''} code=${error?.code ?? ''} causeCode=${error?.cause?.code ?? ''} error=${error?.message ?? error} cause=${error?.cause?.message ?? ''} curl="${getKoiosTxInfoDebugCurl(body)}"`,
+            category: LogCategory.WARN,
+            event: 'scannerLambda.koiosTxInfo.requestFailed'
+        });
+
+        if (!retriable) throw error;
+
+        if (attempt < KOIOS_TX_INFO_MAX_RETRIES) {
+            const backoff = KOIOS_TX_INFO_RETRY_BASE_DELAY_MS * (attempt + 1);
+            await delayMs(backoff);
+            return fetchTxInfoBatchWithRetryAndSplit(hashBatch, attempt + 1);
+        }
+
+        if (hashBatch.length <= 1) throw error;
+
+        const midpoint = Math.ceil(hashBatch.length / 2);
+        const leftBatch = hashBatch.slice(0, midpoint);
+        const rightBatch = hashBatch.slice(midpoint);
+        Logger.log({
+            message: `Splitting tx_info batch after retries. originalCount=${hashBatch.length} leftCount=${leftBatch.length} rightCount=${rightBatch.length}`,
+            category: LogCategory.WARN,
+            event: 'scannerLambda.koiosTxInfo.splitBatch'
+        });
+
+        const [leftTxInfo, rightTxInfo] = [await fetchTxInfoBatchWithRetryAndSplit(leftBatch), await fetchTxInfoBatchWithRetryAndSplit(rightBatch)];
+        return [...leftTxInfo, ...rightTxInfo];
+    }
+};
+
 const getBatchedTxInfo = async (txHashes: string[]) => {
     const batchedTxHashes = getKoiosBatches(txHashes, '_tx_hashes');
     const txs: KoiosTxInfo[] = [];
     await asyncForEach(batchedTxHashes, async (hashBatch) => {
-        const txInfo = (await fetchKoios(`tx_info`, 'POST', JSON.stringify({ _tx_hashes: hashBatch, ...defaultKoiosSettings }))) as KoiosTxInfo[] | null;
+        const txInfo = await fetchTxInfoBatchWithRetryAndSplit(hashBatch);
         txs.push(...(txInfo ?? []));
     });
     return txs;
