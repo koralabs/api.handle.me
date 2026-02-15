@@ -156,10 +156,8 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
     const latestUTxOsForAffectedHandles = await getBatchedUTxOs(handleTxHashes);
 
     // find the intersection of providerUTxOs and latestUTxOsForAffectedHandles to get the latest UTxOs for the affected handles
-    const [providerIds, latestIds] = [new Set(providerUTxOs.map((u) => u.id)), new Set(latestUTxOsForAffectedHandles.map((u) => u.id))];
-    const latestProviderUTxOsForAffectedHandles = [...providerIds.intersection(latestIds)].map((id) => {
-        return [...providerUTxOs, ...latestUTxOsForAffectedHandles].find((u) => u.id === id)!;
-    });
+    const latestIds = latestUTxOsForAffectedHandles.filter((u) => u.slot >= firstBlock.slot && u.slot <= currentSlot).map((u) => u.id);
+    const latestProviderUTxOsForAffectedHandles = providerUTxOs.filter(p => latestIds.includes(p.id));
 
     // then find the differences between that and the utxos from our store to find any discrepancies
     const [latestProviderIds, apiIds] = [new Set(latestProviderUTxOsForAffectedHandles.map((u) => u.id)), new Set(utxos.map((u) => u.id))];
