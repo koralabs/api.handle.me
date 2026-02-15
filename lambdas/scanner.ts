@@ -21,7 +21,7 @@ const RECOVERY_REASON_REINDEX = 'reindex';
 const staleLockTimeouts: Partial<Record<LockedLambdaReason, number>> = {
     [LockedLambdaReason.SCANNING]: 5 * 60 * 1000,
     [LockedLambdaReason.ROLLBACK_20]: 5 * 60 * 1000,
-    [LockedLambdaReason.ROLLBACK_2160]: 5 * 60 * 1000,
+    [LockedLambdaReason.ROLLBACK_2160]: 10 * 60 * 1000,
     [LockedLambdaReason.REINDEX]: 10 * 60 * 1000
 };
 

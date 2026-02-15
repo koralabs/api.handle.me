@@ -75,10 +75,17 @@
 - You may edit related projects when required for cross-project features.
 - Do not work on `main`/`master` in sibling repos; create `codex` or `feature/<name>` branches.
 - Tell the user when related project changes need merge/build/deploy or block progress.
+- If the requested behavior belongs to a shared package (for example `@koralabs/kora-labs-common` types/helpers/logger), make the functional change in that sibling package first instead of adding local app-level overrides in this repo.
+- For logging behavior specifically (`Logger.*`, `LogCategory`, formatting/colors), default implementation target is `../kora-labs-common`.
 - `@koralabs/<package-name>` projects live at `../<package-name>`.
   - You may build and `npm link` `./lib` as needed.
   - Notify user when publish is required before deployment.
   - Bump package version and dependent version together.
+  - Do not mark cross-repo package work complete until all of these are done (unless user explicitly asks to defer):
+    - bump sibling package version in `../<package-name>/package.json`
+    - bump dependent version in this repo `package.json`
+    - update lockfiles in any repo where dependency versions changed
+    - call out the version changes explicitly in the final handoff
 - Domain-to-folder conventions:
   - `handle.me` (or preview/preprod variants) -> `../handle.me`
   - `docs.handle.me` (or preview/preprod variants) -> `../docs.handle.me`
