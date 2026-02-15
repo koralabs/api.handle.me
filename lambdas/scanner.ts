@@ -57,6 +57,20 @@ const getBatchedTxHashes = async (blockHashes: string[]) => {
     return txHashes;
 };
 
+const filterUTxOToHandleNames = (utxo: UTxOWithTxInfo, handleNames: Set<string>): UTxOWithTxInfo | undefined => {
+    const filterAssets = (assets?: [string, string[]][]) =>
+        assets?.map(([policy, names]) => {
+            const filteredNames = names.filter((assetName) => handleNames.has(getHandleNameFromAssetName(assetName).name));
+            return [policy, filteredNames] as [string, string[]];
+        }).filter(([, names]) => names.length > 0);
+
+    return {
+        ...utxo,
+        handles: filterAssets(utxo.handles) ?? [],
+        mint: filterAssets(utxo.mint) ?? []
+    };
+};
+
 const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSlot: number; rollbackOffset: number }) => {
     Logger.local(`Running rollback check - ${rollbackOffset}`);
     const latestBlockResponse = await blockfrostApiCall('blocks/latest');
@@ -253,7 +267,9 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
 
         store.pipeline(() => {
             for (const utxo of latestUTxOsForAffectedHandles) {
-                handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap);
+                const filteredUTxO = filterUTxOToHandleNames(utxo, new Set(handles));
+                if (!filteredUTxO) continue;
+                handlesRepo.updateHandleIndexes(filteredUTxO, mintValueIndex, storedHandlesMap);
             }
         });
     }
@@ -267,13 +283,13 @@ const checkRollback = async () => {
         // Get "20 ago block" (Blockfrost supports get by height/number)
         await processRollback({ currentSlot, rollbackOffset: 20 });
 
-        if (Date.now() - lastMaxRollbackCheck > 60 * 60 * 1000) {
-            // Get "2160 ago block" (Blockfrost supports get by height/number)
-            handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.ROLLBACK_2160, lockLambdasTimestamp: startTime });
-            await processRollback({ currentSlot, rollbackOffset: 2160 });
-            // Update last2160check
-            handlesRepo.setMetrics({ lastMaxRollbackCheck: Date.now() });
-        }
+        // if (Date.now() - lastMaxRollbackCheck > 60 * 60 * 1000) {
+        //     // Get "2160 ago block" (Blockfrost supports get by height/number)
+        //     handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.ROLLBACK_2160, lockLambdasTimestamp: startTime });
+        //     await processRollback({ currentSlot, rollbackOffset: 2160 });
+        //     // Update last2160check
+        //     handlesRepo.setMetrics({ lastMaxRollbackCheck: Date.now() });
+        // }
     } finally {
         handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
     }
@@ -285,7 +301,6 @@ const processReindex = async () => {
 
     Logger.log({ message: `Repopulating indexes from UTxOs to schema version ${store.getIndexSchemaVersion()}`, category: LogCategory.INFO, event: 'getStartingPoint.repopulateIndexesFromUTxOs' });
     try {
-        // TODO: This should process in chunks of 10k or so then stop the lambda and it should restart and pick up where it left off.
         // This function already chunks at a rate of about 20K every 10 seconds. 300K handles should take about 5 minutes
         store.repopulateIndexesFromUTxOs({
             [UTxOFunctionName.ADD_UTXO]: handlesRepo.addUTxO.bind(handlesRepo),
@@ -307,6 +322,7 @@ const scan = async () => {
     try {
         const bResp: { hash: string; slot: number; confirmations: number }[] = await fetchPaginatedResults(`blocks/${metrics.currentBlockHash}/next`);
         bResp.sort((a, b) => b.confirmations - a.confirmations);
+        // TODO: use getKoiosBatches & getBatchedUTxOs here instead
         for (const b of bResp) {
             const block = { id: b.hash, slot: b.slot, confirmations: b.confirmations, transactions: [] as Transaction[] };
 

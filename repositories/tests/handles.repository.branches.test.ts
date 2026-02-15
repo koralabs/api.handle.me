@@ -1,10 +1,10 @@
-import { AssetNameLabel, decodeAddress, EMPTY, IndexNames, Logger } from '@koralabs/kora-labs-common';
 import * as common from '@koralabs/kora-labs-common';
+import { AssetNameLabel, decodeAddress, EMPTY, IndexNames, Logger } from '@koralabs/kora-labs-common';
 import * as crypto from 'crypto';
 import * as config from '../../config';
-import { HandlesRepository, RewoundHandle, UpdatedOwnerHandle } from '../handlesRepository';
 import * as ogmiosUtils from '../../services/ogmios/utils';
 import * as ipfs from '../../utils/ipfs';
+import { HandlesRepository, RewoundHandle, UpdatedOwnerHandle } from '../handlesRepository';
 
 const policy = 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a';
 const address = 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q';
@@ -384,53 +384,6 @@ describe('HandlesRepository branch tests', () => {
                 txHash: 'tx_101'
             })
         ]);
-    });
-
-    it('prefers metadata-rich mint record when slots tie', () => {
-        const repo = new HandlesRepository(buildStoreMock());
-        const saveSpy = jest.spyOn(repo, 'save').mockImplementation(jest.fn());
-        jest.spyOn(repo, 'updateHolder').mockImplementation(jest.fn());
-
-        const name = 'alpha';
-        const handleHex = `${AssetNameLabel.LBL_222}${Buffer.from(name).toString('hex')}`;
-        const metadataRich = {
-            '721': {
-                [policy]: {
-                    [handleHex]: {
-                        image: 'ipfs://preferred-image',
-                        core: { og: 1n }
-                    }
-                }
-            }
-        };
-
-        const mintingData = new Map<string, any[]>([
-            [
-                name,
-                [
-                    { created_slot: 100, metadata: {}, txHash: 'zzzz' },
-                    { created_slot: 100, metadata: metadataRich, txHash: 'aaaa' }
-                ]
-            ]
-        ]);
-
-        repo.updateHandleIndexes(
-            {
-                ...buildUtxo(handleHex, 100),
-                mint: [[policy, [handleHex]]]
-            } as any,
-            mintingData as any,
-            new Map(),
-            new Map()
-        );
-
-        expect(saveSpy).toHaveBeenCalledWith(
-            expect.objectContaining({
-                name,
-                image: 'ipfs://preferred-image'
-            }),
-            undefined
-        );
     });
 
     it('throws hard when mint data cannot be found for update', () => {

@@ -186,15 +186,26 @@ describe('Scanner lambda e2e', () => {
             .mockResolvedValueOnce([] as never)
             .mockResolvedValueOnce([{ hash: 'provider_block', slot: 100 }] as never);
         mockedHelpers.fetchTxList.mockResolvedValue([] as never);
-        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
-        mockedHelpers.fetchKoios.mockResolvedValue([] as never);
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'rollback_tx' }] as never;
+            if (path === 'asset_utxos') return [{ tx_hash: 'rollback_tx' }] as never;
+            if (path === 'tx_info') return [{ source: 'tx_info' }] as never;
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockImplementation((txs: any[]) => {
+            if (txs?.[0]?.source === 'tx_info') {
+                return [buildTrackedUtxo({ id: 'rollback_tx#0', tx_id: 'rollback_tx', slot: 100, blockHash: 'provider_block' })] as never;
+            }
+            return [] as never;
+        });
 
         await lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
 
         expect(repo.getMetrics().lockLambdas).toBe(LockedLambdaReason.UNLOCKED);
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next');
         expect(mockedHelpers.fetchTxList).not.toHaveBeenCalled();
-        expect(mockedHelpers.fetchKoios).not.toHaveBeenCalled();
+        expect(mockedHelpers.fetchKoios).toHaveBeenCalledWith('block_txs', 'POST', expect.any(String));
+        expect(repo.getUTxO('rollback_tx#0')).toEqual(expect.objectContaining({ tx_id: 'rollback_tx' }));
     });
 
     it('replays divergent rollback blocks and updates handle ownership state', async () => {
@@ -212,16 +223,13 @@ describe('Scanner lambda e2e', () => {
         mockedHelpers.fetchPaginatedResults
             .mockResolvedValueOnce([] as never)
             .mockResolvedValueOnce([{ hash: 'provider_block', slot: 100 }] as never);
-        mockedHelpers.fetchTxList.mockResolvedValue([{ source: 'block' }] as never);
         mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'replay_tx' }] as never;
             if (path === 'asset_utxos') return [{ tx_hash: 'replay_tx' }] as never;
             if (path === 'tx_info') return [{ source: 'tx_info' }] as never;
             return [] as never;
         });
         mockedHelpers.buildUTxOsFromKoiosTxs.mockImplementation((txs: any[]) => {
-            if (txs?.[0]?.source === 'block') {
-                return [buildTrackedUtxo({ id: 'replay_tx#0', tx_id: 'replay_tx', slot: 101, blockHash: 'provider_block' })] as never;
-            }
             if (txs?.[0]?.source === 'tx_info') {
                 return [buildTrackedUtxo({ id: 'replay_tx#0', tx_id: 'replay_tx', slot: 101, blockHash: 'provider_block' })] as never;
             }
