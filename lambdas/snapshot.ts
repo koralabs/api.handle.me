@@ -32,7 +32,6 @@ const getRedisItems = async () => {
     try {
         const redisHandleStore = new RedisHandlesStore();
         await redisHandleStore.initialize();
-        // Logger.local('Connected to Valkey');
 
         let cursor = '0';
         let totalKeys = 0;

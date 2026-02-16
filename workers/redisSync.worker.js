@@ -19,7 +19,7 @@ async function getClient() {
         });
         const status = await glideClient.ping();
         if (status == 'PONG') {
-            Logger.log('Connected to Valkey');
+            Logger.local('Connected to Valkey');
         }
     }
     return glideClient;
