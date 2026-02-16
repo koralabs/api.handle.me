@@ -631,6 +631,65 @@ describe('Scanner lambda unit tests', () => {
         ]);
     });
 
+    it('scan logs when there are no new blocks to process', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        try {
+            await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+            expect(logSpy.mock.calls.some(([entry]) => `${entry}`.includes('No new blocks to process from start_hash'))).toBe(true);
+        } finally {
+            logSpy.mockRestore();
+        }
+
+        const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
+        expect(txInfoCalls).toHaveLength(0);
+    });
+
+    it('scan runs rollback_20 when stale head is near tip', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'stale_hash', currentSlot: 100, lockLambdas: LockedLambdaReason.UNLOCKED });
+
+        mockedHelpers.fetchPaginatedResults
+            .mockResolvedValueOnce([] as never)
+            .mockResolvedValueOnce([] as never);
+        mockedHelpers.blockfrostApiCall.mockImplementation(async (endpoint: string) => {
+            if (endpoint === 'blocks/latest') return { ok: true, json: async () => ({ slot: 103, height: 5000 }) } as any;
+            return { ok: true, json: async () => ({}) } as any;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/stale_hash/next');
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(2, 'blocks/4980/next');
+        const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
+        expect(txInfoCalls).toHaveLength(0);
+    });
+
+    it('scan runs rollback_2160 when stale head is far behind tip', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'stale_hash', currentSlot: 100, lockLambdas: LockedLambdaReason.UNLOCKED });
+
+        mockedHelpers.fetchPaginatedResults
+            .mockResolvedValueOnce([] as never)
+            .mockResolvedValueOnce([] as never);
+        mockedHelpers.blockfrostApiCall.mockImplementation(async (endpoint: string) => {
+            if (endpoint === 'blocks/latest') return { ok: true, json: async () => ({ slot: 1000, height: 5000 }) } as any;
+            return { ok: true, json: async () => ({}) } as any;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/stale_hash/next');
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(2, 'blocks/2840/next');
+        const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
+        expect(txInfoCalls).toHaveLength(0);
+    });
+
     it('scan processes burns, updates, spent inputs, and unlocks', async () => {
         const { handlesRepo, pipelineResponses, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });

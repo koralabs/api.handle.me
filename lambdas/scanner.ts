@@ -17,6 +17,7 @@ const KOIOS_TX_INFO_MAX_RPS = 15;
 const KOIOS_TX_INFO_MIN_INTERVAL_MS = Math.ceil(1000 / KOIOS_TX_INFO_MAX_RPS);
 const KOIOS_TX_INFO_MAX_RETRIES = 2;
 const KOIOS_TX_INFO_RETRY_BASE_DELAY_MS = 500;
+const ROLLBACK_20_SLOT_WINDOW = 400; // 20 blocks * ~20 seconds per block
 const RECOVERY_REASON_ROLLBACK = 'rollback';
 const RECOVERY_REASON_REINDEX = 'reindex';
 process.env.ENABLE_OGMIOS_SCANNING = 'false';
@@ -220,7 +221,7 @@ const filterUTxOToHandleNames = (utxo: UTxOWithTxInfo, handleNames: Set<string>)
     };
 };
 
-const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSlot: number; rollbackOffset: number }) => {
+const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotify = false }: { currentSlot: number; rollbackOffset: number; suppressNotify?: boolean }) => {
     Logger.local(`Running rollback check - ${rollbackOffset}`);
     const latestBlockResponse = await blockfrostApiCall('blocks/latest');
     if (!latestBlockResponse.ok) {
@@ -341,7 +342,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
 
         // This should be a notify since we are very rarely expecting in this range
         // and may need to adjust the number 20 above accordingly
-        if (distanceFromTip! > 20) Logger.log({ category: LogCategory.NOTIFY, message: `Rollback at ${distanceFromTip} blocks detected! Block: ${firstMissingHeight}`, event: 'RollbackLambda' });
+        if (!suppressNotify && distanceFromTip! > 20) Logger.log({ category: LogCategory.NOTIFY, message: `Rollback at ${distanceFromTip} blocks detected! Block: ${firstMissingHeight}`, event: 'RollbackLambda' });
         // If there are any missing delete/replay
         setRecoveryFlag(RECOVERY_REASON_ROLLBACK);
         let rollbackComplete = false;
@@ -513,8 +514,31 @@ const scan = async () => {
     // Is scanning fast enough to do this without MAX_TIP_SLOTS? Or a much higher one?
     handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.SCANNING, lockLambdasTimestamp: Date.now() });
     try {
-        const bResp: { hash: string; slot: number; confirmations: number }[] = await fetchPaginatedResults(`blocks/${metrics.currentBlockHash}/next`);
+        let bResp: { hash: string; slot: number; confirmations: number }[] = await fetchPaginatedResults(`blocks/${metrics.currentBlockHash}/next`);
         bResp.sort((a, b) => b.confirmations - a.confirmations);
+        if (!bResp.length) {
+            const latestBlockResponse = await blockfrostApiCall('blocks/latest');
+            if (!latestBlockResponse.ok) {
+                throw new Error('Unable to fetch latest block while checking scanner head');
+            }
+            const latestBlock = await latestBlockResponse.json();
+            const latestSlot = Number(latestBlock?.slot ?? 0);
+            const currentSlot = Number(metrics.currentSlot ?? 0);
+
+            if (latestSlot > currentSlot && metrics.currentBlockHash && currentSlot > 0) {
+                const rollbackOffset = latestSlot - currentSlot > ROLLBACK_20_SLOT_WINDOW ? 2160 : 20;
+                Logger.log({
+                    message: `No forward blocks found from ${metrics.currentBlockHash} while latest slot=${latestSlot} is ahead of current slot=${currentSlot}. Running rollback_${rollbackOffset}.`,
+                    category: LogCategory.WARN,
+                    event: 'scannerLambda.rollbackOnStaleHead'
+                });
+                await processRollback({ currentSlot, rollbackOffset, suppressNotify: true });
+                return;
+            }
+
+            Logger.local(`No new blocks to process from ${metrics.currentBlockHash}`);
+            return;
+        }
         const txHashes = [...new Set(await getBatchedTxHashes(bResp.map((b) => b.hash)))];
         const txList = await getBatchedTxInfo(txHashes);
         const txInfoByBlockHash = new Map<string, KoiosTxInfo[]>();
