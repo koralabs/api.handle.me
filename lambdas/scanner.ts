@@ -426,6 +426,16 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
             if (rollbackComplete) clearRecoveryFlag();
         }
     }
+
+    const recoveredHead = providerBlocks[providerBlocks.length - 1];
+    const recoveredMetrics: Partial<{ currentBlockHash: string; currentSlot: number; tipBlockHash: string; lastSlot: number }> = {
+        currentBlockHash: recoveredHead.hash,
+        currentSlot: recoveredHead.slot
+    };
+    const latestSlot = Number(latestBlock?.slot ?? 0);
+    if (latestBlock?.hash) recoveredMetrics.tipBlockHash = latestBlock.hash;
+    if (latestSlot > 0) recoveredMetrics.lastSlot = latestSlot;
+    handlesRepo.setMetrics(recoveredMetrics);
 };
 
 const checkRollback = async () => {

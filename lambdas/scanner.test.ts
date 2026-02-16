@@ -669,6 +669,46 @@ describe('Scanner lambda unit tests', () => {
         expect(txInfoCalls).toHaveLength(0);
     });
 
+    it('scan realigns stale head metrics when rollback state already matches provider', async () => {
+        const { handlesRepo, pipelineResponses, scannerModule, store } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'stale_hash', currentSlot: 100, lockLambdas: LockedLambdaReason.UNLOCKED });
+        store.getValuesFromOrderedSet.mockReturnValue(['u1']);
+
+        mockedHelpers.fetchPaginatedResults
+            .mockResolvedValueOnce([] as never)
+            .mockResolvedValueOnce([{ hash: 'provider_block', slot: 100 }] as never);
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ slot: 103, height: 5000, hash: 'tip_hash' }) } as never);
+
+        pipelineResponses.push(
+            [buildUtxo({ id: 'u1', slot: 100, blockHash: 'provider_block', assetName: 'asset-a' })],
+            [{ name: 'asset-a', policy: 'policy-a', hex: 'asset-a', resolved_addresses: { ada: knownAddress } }]
+        );
+
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'provider_tx_1' }] as never;
+            if (path === 'asset_utxos') return [{ tx_hash: 'provider_tx_1' }] as never;
+            if (path === 'tx_info' && body?.includes('provider_tx_1')) return [{ source: 'provider' }] as never;
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockImplementation((txs: any[]) => {
+            if (txs?.[0]?.source === 'provider') {
+                return [buildUtxo({ id: 'u1', slot: 100, blockHash: 'provider_block', assetName: 'asset-a' })] as never;
+            }
+            return [] as never;
+        });
+
+        await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+        expect(handlesRepo.setMetrics).toHaveBeenCalledWith(
+            expect.objectContaining({
+                currentBlockHash: 'provider_block',
+                currentSlot: 100,
+                tipBlockHash: 'tip_hash',
+                lastSlot: 103
+            })
+        );
+    });
+
     it('scan runs rollback_2160 when stale head is far behind tip', async () => {
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'stale_hash', currentSlot: 100, lockLambdas: LockedLambdaReason.UNLOCKED });

@@ -297,7 +297,7 @@ describe('Scanner lambda e2e', () => {
         mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: false } as never);
         mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
 
-        await expect(lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context)).rejects.toThrow('Not good!');
+        await expect(lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context)).rejects.toThrow(/Unable to fetch latest block while checking scanner head|Not good!/);
 
         expect(repo.getMetrics().lockLambdas).toBe(LockedLambdaReason.UNLOCKED);
     });
