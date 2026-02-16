@@ -185,6 +185,7 @@ describe('Scanner lambda unit tests', () => {
 
         await expect(scannerModule.lambdaHandler({} as any, {} as any)).resolves.toBeUndefined();
 
+        expect(handlesRepo.getMetrics).toHaveBeenCalledTimes(1);
         expect(handlesRepo.setMetrics).not.toHaveBeenCalled();
         expect(mockedHelpers.blockfrostApiCall).not.toHaveBeenCalled();
     });
@@ -780,6 +781,34 @@ describe('Scanner lambda unit tests', () => {
         expect(txInfoCalls).toHaveLength(2);
     });
 
+    it('paces tx_info requests to stay under 15 requests per second', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
+
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') {
+                return Array.from({ length: 140 }, (_, index) => ({
+                    tx_hash: `${'a'.repeat(56)}${index.toString().padStart(8, '0')}`
+                })) as never;
+            }
+            if (path === 'tx_info') {
+                const parsedBody = JSON.parse(body ?? '{}');
+                return (parsedBody._tx_hashes ?? []).map((txHash: string) => ({ tx_hash: txHash, block_hash: 'block_newer', inputs: [] })) as never;
+            }
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+        await scannerModule.Internal.scan();
+        const pacingCalls = setTimeoutSpy.mock.calls
+            .map((call) => Number(call[1]))
+            .filter((delay) => Number.isFinite(delay) && delay > 0 && delay < 1_000);
+        setTimeoutSpy.mockRestore();
+        expect(pacingCalls.some((delay) => delay >= 60)).toBe(true);
+    });
+
     it('splits tx_info batches after retries are exhausted and continues scanning', async () => {
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
@@ -840,7 +869,8 @@ describe('Scanner lambda unit tests', () => {
     it.each([
         { reason: LockedLambdaReason.SCANNING, ageMs: 6 * 60 * 1000 },
         { reason: LockedLambdaReason.ROLLBACK_20, ageMs: 6 * 60 * 1000 },
-        { reason: LockedLambdaReason.REINDEX, ageMs: 11 * 60 * 1000 }
+        { reason: LockedLambdaReason.REINDEX, ageMs: 11 * 60 * 1000 },
+        { reason: 'SNAPSHOT' as LockedLambdaReason, ageMs: 11 * 60 * 1000 }
     ])('recovers stale lambda lock: $reason', async ({ reason, ageMs }) => {
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({

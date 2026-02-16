@@ -73,7 +73,8 @@
 
 ## 11) Sibling Projects
 - You may edit related projects when required for cross-project features.
-- Do not work on `main`/`master` in sibling repos; create `codex` or `feature/<name>` branches.
+- Always start sibling-repo work from the latest canonical base branch (`main`, `master`, or `mainnet` as applicable), then create a `codex` or `feature/<name>` branch from that base.
+- If a sibling repo has uncommitted changes that were created earlier in the same assistant session, continue and make the decision to integrate or supersede them without pausing for confirmation.
 - Tell the user when related project changes need merge/build/deploy or block progress.
 - If the requested behavior belongs to a shared package (for example `@koralabs/kora-labs-common` types/helpers/logger), make the functional change in that sibling package first instead of adding local app-level overrides in this repo.
 - For logging behavior specifically (`Logger.*`, `LogCategory`, formatting/colors), default implementation target is `../kora-labs-common`.
