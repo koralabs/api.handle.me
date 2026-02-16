@@ -147,7 +147,7 @@ const fetchTxInfoBatchWithRetryAndSplit = async (hashBatch: string[], attempt = 
         return txInfo;
     } catch (error: any) {
         const retriable = isRetriableKoiosTxInfoError(error);
-        Logger.log({
+        Logger.local({
             message: `tx_info request failed. retriable=${retriable} attempt=${attempt + 1}/${KOIOS_TX_INFO_MAX_RETRIES + 1} hashCount=${hashBatch.length} bodyLength=${body.length} firstHash=${hashBatch[0] ?? ''} lastHash=${hashBatch[hashBatch.length - 1] ?? ''} code=${error?.code ?? ''} causeCode=${error?.cause?.code ?? ''} error=${error?.message ?? error} cause=${error?.cause?.message ?? ''} curl="${getKoiosTxInfoDebugCurl(body)}"`,
             category: LogCategory.WARN,
             event: 'scannerLambda.koiosTxInfo.requestFailed'
@@ -166,7 +166,7 @@ const fetchTxInfoBatchWithRetryAndSplit = async (hashBatch: string[], attempt = 
         const midpoint = Math.ceil(hashBatch.length / 2);
         const leftBatch = hashBatch.slice(0, midpoint);
         const rightBatch = hashBatch.slice(midpoint);
-        Logger.log({
+        Logger.local({
             message: `Splitting tx_info batch after retries. originalCount=${hashBatch.length} leftCount=${leftBatch.length} rightCount=${rightBatch.length}`,
             category: LogCategory.WARN,
             event: 'scannerLambda.koiosTxInfo.splitBatch'
@@ -527,7 +527,7 @@ const scan = async () => {
 
             if (latestSlot > currentSlot && metrics.currentBlockHash && currentSlot > 0) {
                 const rollbackOffset = latestSlot - currentSlot > ROLLBACK_20_SLOT_WINDOW ? 2160 : 20;
-                Logger.log({
+                Logger.local({
                     message: `No forward blocks found from ${metrics.currentBlockHash} while latest slot=${latestSlot} is ahead of current slot=${currentSlot}. Running rollback_${rollbackOffset}.`,
                     category: LogCategory.WARN,
                     event: 'scannerLambda.rollbackOnStaleHead'
