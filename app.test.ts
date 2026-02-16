@@ -16,12 +16,12 @@ const mockedOgmiosClass = OgmiosService as unknown as jest.Mock;
 const mockedDynamicallyLoad = dynamicallyLoad as jest.MockedFunction<typeof dynamicallyLoad>;
 
 describe('App lifecycle', () => {
-    const originalReadOnlyStore = process.env.READ_ONLY_STORE;
+    const originalEnableOgmiosScanning = process.env.ENABLE_OGMIOS_SCANNING;
     const originalUseLambdaScanner = process.env.USE_LAMBDA_SCANNER;
     const originalDynamicLoadDir = process.env.DYNAMIC_LOAD_DIR;
 
     beforeEach(() => {
-        process.env.READ_ONLY_STORE = '';
+        process.env.ENABLE_OGMIOS_SCANNING = '';
         process.env.USE_LAMBDA_SCANNER = '';
         delete process.env.DYNAMIC_LOAD_DIR;
 
@@ -45,7 +45,7 @@ describe('App lifecycle', () => {
     });
 
     afterEach(() => {
-        process.env.READ_ONLY_STORE = originalReadOnlyStore;
+        process.env.ENABLE_OGMIOS_SCANNING = originalEnableOgmiosScanning;
         process.env.USE_LAMBDA_SCANNER = originalUseLambdaScanner;
         process.env.DYNAMIC_LOAD_DIR = originalDynamicLoadDir;
         jest.restoreAllMocks();
@@ -112,7 +112,7 @@ describe('App lifecycle', () => {
         mockedOgmiosClass.mockImplementation(() => ({ initialize: ogmiosInitialize }));
         const intervalSpy = jest.spyOn(global, 'setInterval').mockReturnValue(1 as any);
 
-        process.env.READ_ONLY_STORE = 'true';
+        process.env.ENABLE_OGMIOS_SCANNING = 'false';
         process.env.USE_LAMBDA_SCANNER = 'true';
 
         const app = new App();
@@ -128,7 +128,7 @@ describe('App lifecycle', () => {
         const ogmiosInitialize = jest.fn().mockResolvedValue(undefined);
         mockedOgmiosClass.mockImplementation(() => ({ initialize: ogmiosInitialize }));
 
-        process.env.READ_ONLY_STORE = 'false';
+        process.env.ENABLE_OGMIOS_SCANNING = 'true';
 
         const app = new App();
         (app as any).env = 'production';

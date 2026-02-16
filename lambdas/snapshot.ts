@@ -5,6 +5,7 @@ import stdOut from 'node:readline';
 import zlib from 'zlib';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { RedisHandlesStore } from '../stores/redis';
+process.env.ENABLE_OGMIOS_SCANNING = 'false';
 
 declare global {
     interface Console {

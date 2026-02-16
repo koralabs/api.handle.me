@@ -26,7 +26,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - Scanning mode:
   - Default: Ogmios WebSocket scanner (`services/ogmios/ogmios.service.ts`)
   - Optional local fallback in dev/test: scanner lambda loop (`USE_LAMBDA_SCANNER=true`)
-- Lambda mode (`lambdas/api.ts`) forces `READ_ONLY_STORE=true` and serves API only.
+- Lambda mode (`lambdas/api.ts`) forces `ENABLE_OGMIOS_SCANNING=false` and serves API only.
 
 ## Data Freshness Contract
 - API returns `200` when store is caught up.
@@ -134,7 +134,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 ## Environment Variables
 See `site.env` for the operator-facing glossary. Commonly used ones include:
 - `NETWORK`, `OGMIOS_HOST`
-- `READ_ONLY_STORE`, `USE_LAMBDA_SCANNER`
+- `ENABLE_OGMIOS_SCANNING`, `USE_LAMBDA_SCANNER`
 - `ENABLE_DATUM_ENDPOINT`
 - `RATE_LIMITER_ENABLED`, `WHITELISTED_API_KEYS`
 - `IPFS_GATEWAY`, `IPFS_GATEWAY_BACKUP`, `PINATA_GATEWAY_TOKEN`

@@ -44,11 +44,11 @@ class HealthController {
                 status = HealthStatus.STORAGE_BEHIND;
             }
             let ogmios: HealthResponseBody  | string | null = null;
-            if (process.env.READ_ONLY_STORE == 'true') {
-                ogmios = '(store is in read_only mode)';
+            if (process.env.ENABLE_OGMIOS_SCANNING?.toLocaleLowerCase() == 'false') {
+                ogmios = '(ogmios scanning is disabled)';
             }
             else {
-                // We don't try to connect to ogmios in READ_ONLY mode
+                // We don't try to connect to ogmios when scanning is disabled
                 ogmios = await fetchHealth();
                 if ((ogmios?.networkSynchronization ?? 0) < 1) {
                     status = HealthStatus.OGMIOS_BEHIND;

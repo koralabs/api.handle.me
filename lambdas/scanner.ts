@@ -17,6 +17,7 @@ const KOIOS_TX_INFO_MAX_RETRIES = 2;
 const KOIOS_TX_INFO_RETRY_BASE_DELAY_MS = 500;
 const RECOVERY_REASON_ROLLBACK = 'rollback';
 const RECOVERY_REASON_REINDEX = 'reindex';
+process.env.ENABLE_OGMIOS_SCANNING = 'false';
 
 const staleLockTimeouts: Partial<Record<LockedLambdaReason, number>> = {
     [LockedLambdaReason.SCANNING]: 5 * 60 * 1000,

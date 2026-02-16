@@ -53,15 +53,15 @@ afterAll(async () => {
 
 describe('Health Routes Test', () => {
     let app: App | null;
-    const originalReadOnlyStore = process.env.READ_ONLY_STORE;
+    const originalEnableOgmiosScanning = process.env.ENABLE_OGMIOS_SCANNING;
     beforeEach(async () => {
-        process.env.READ_ONLY_STORE = '';
+        process.env.ENABLE_OGMIOS_SCANNING = '';
         app = await new App().initialize();
     });
 
     afterEach(() => {
         jest.clearAllMocks();
-        process.env.READ_ONLY_STORE = originalReadOnlyStore;
+        process.env.ENABLE_OGMIOS_SCANNING = originalEnableOgmiosScanning;
     });
 
     const getMockResponse = ({ networkSynchronization = 0 }: { networkSynchronization?: number }): HealthResponseBody => ({
@@ -97,6 +97,34 @@ describe('Health Routes Test', () => {
     });
 
     describe('[GET] /health', () => {
+        it('Should skip ogmios health checks when scanning is disabled', async () => {
+            process.env.ENABLE_OGMIOS_SCANNING = 'false';
+            const fetchHealthSpy = jest.spyOn(ogmiosUtils, 'fetchHealth');
+            caughtUp.mockReturnValue(true);
+
+            const response = await request(app?.getServer()).get('/health');
+
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual({
+                ogmios: '(ogmios scanning is disabled)',
+                stats: {
+                    current_block_hash: expect.any(String),
+                    index_memory_size: expect.any(Number),
+                    current_slot: expect.any(Number),
+                    estimated_sync_time: expect.any(String),
+                    memory_size: expect.any(Number),
+                    handle_count: expect.any(Number),
+                    holder_count: expect.any(Number),
+                    percentage_complete: expect.any(Number),
+                    slot_date: expect.any(String),
+                    index_schema_version: expect.any(Number),
+                    utxo_schema_version: expect.any(Number)
+                },
+                status: 'current'
+            });
+            expect(fetchHealthSpy).not.toHaveBeenCalled();
+        });
+
         it('Should return 503 and health stats when ogmios does not connect', async () => {
             jest.spyOn(ogmiosUtils, 'fetchHealth').mockResolvedValue(null);
             const response = await request(app?.getServer()).get('/health');
