@@ -330,7 +330,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20 }: { currentSl
 
         const firstMissingHeight = Math.min(...differences.map((u) => u?.blockNum ?? Infinity));
         const distanceFromTip = latestBlock.height - firstMissingHeight;
-        Logger.local(`Rollback detected from slot ${rollbackStartSlot}${distanceFromTip === null ? '' : ` (${distanceFromTip} blocks from tip)`}`);
+        Logger.log(`Rollback detected from slot ${rollbackStartSlot}${distanceFromTip === null ? '' : ` (${distanceFromTip} blocks from tip)`}`);
 
         const apiRollbackUtxos = utxos.filter((utxo): utxo is UTxOWithTxInfo => !!utxo && utxo.slot >= rollbackStartSlot);
 
@@ -461,6 +461,22 @@ const processReindex = async () => {
     }
 };
 
+const ensureUTxOsReady = async () => {
+    const { currentBlockHash, currentSlot, utxoSchemaVersion = 0 } = handlesRepo.getMetrics();
+    const currentUTxOSchemaVersion = Number(store.getUTxOSchemaVersion());
+    if (currentUTxOSchemaVersion <= Number(utxoSchemaVersion) && currentBlockHash && currentSlot) return;
+
+    Logger.log({
+        message: `UTxOs are repopulating. currentBlockHash=${currentBlockHash ?? ''} currentSlot=${currentSlot ?? ''} storedUTxOSchemaVersion=${utxoSchemaVersion} targetUTxOSchemaVersion=${currentUTxOSchemaVersion}`,
+        category: LogCategory.WARN,
+        event: 'scannerLambda.repopulateUTxOs'
+    });
+    await handlesRepo.getStartingPoint({
+        [UTxOFunctionName.ADD_UTXO]: handlesRepo.addUTxO.bind(handlesRepo),
+        [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: handlesRepo.updateHandleIndexes.bind(handlesRepo)
+    });
+};
+
 const scan = async () => {
     Logger.local(`Running scan...`);
     const metrics = handlesRepo.getMetrics();
@@ -581,6 +597,7 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context: AWSLambd
         }
 
         // ******** REINDEXING CHECK ********* //
+        await ensureUTxOsReady();
         if (Number(store.getIndexSchemaVersion()) > (handlesRepo.getMetrics().indexSchemaVersion ?? 0)) {
             await processReindex();
             return;

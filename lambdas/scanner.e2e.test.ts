@@ -111,6 +111,7 @@ describe('Scanner lambda e2e', () => {
             currentBlockHash: 'provider_block',
             tipBlockHash: 'provider_block',
             lastMaxRollbackCheck: Date.now(),
+            utxoSchemaVersion: Number(store.getUTxOSchemaVersion()),
             indexSchemaVersion: Number(store.getIndexSchemaVersion()),
             lockLambdas: LockedLambdaReason.UNLOCKED
         });
@@ -260,6 +261,7 @@ describe('Scanner lambda e2e', () => {
             currentSlot: 140,
             currentBlockHash: 'api_block',
             lastMaxRollbackCheck: Date.now(),
+            utxoSchemaVersion: Number(store.getUTxOSchemaVersion()),
             indexSchemaVersion: Number(store.getIndexSchemaVersion()),
             lockLambdas: LockedLambdaReason.UNLOCKED
         });

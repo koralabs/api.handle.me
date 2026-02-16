@@ -111,6 +111,7 @@ const setup = () => {
         }),
         removeValueFromIndexedSet: jest.fn(),
         getIndexSchemaVersion: jest.fn().mockReturnValue(1),
+        getUTxOSchemaVersion: jest.fn().mockReturnValue(1),
         repopulateIndexesFromUTxOs: jest.fn()
     };
 
@@ -121,7 +122,15 @@ const setup = () => {
         addUTxOsWithMintDataAndUpdateIndexes: jest.fn(),
         getHandle: jest.fn(),
         getHandleMintingData: jest.fn(),
-        getMetrics: jest.fn().mockReturnValue({ currentSlot: 130, lastMaxRollbackCheck: Date.now(), lockLambdas: LockedLambdaReason.UNLOCKED }),
+        getMetrics: jest.fn().mockReturnValue({
+            currentSlot: 130,
+            currentBlockHash: 'start_hash',
+            utxoSchemaVersion: 1,
+            indexSchemaVersion: 1,
+            lastMaxRollbackCheck: Date.now(),
+            lockLambdas: LockedLambdaReason.UNLOCKED
+        }),
+        getStartingPoint: jest.fn().mockResolvedValue({ id: 'start_hash', slot: 130 }),
         getUTxO: jest.fn(),
         removeHandle: jest.fn(),
         removeUTxOs: jest.fn(),
@@ -278,7 +287,13 @@ describe('Scanner lambda unit tests', () => {
             return [] as never;
         });
 
-        await scannerModule.Internal.checkRollback({ currentSlot: 300, lastMaxRollbackCheck: Date.now() });
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        try {
+            await scannerModule.Internal.checkRollback({ currentSlot: 300, lastMaxRollbackCheck: Date.now() });
+            expect(logSpy.mock.calls.some(([entry]) => `${entry}`.includes('Rollback detected from slot'))).toBe(true);
+        } finally {
+            logSpy.mockRestore();
+        }
 
         expect(store.removeValueFromIndexedSet).toHaveBeenCalledWith(IndexNames.MINT, 'handle-a', mintToRemove);
         expect(handlesRepo.removeUTxOs).toHaveBeenCalledWith(['u1']);
@@ -840,6 +855,35 @@ describe('Scanner lambda unit tests', () => {
         expect(handlesRepo.setMetrics).toHaveBeenCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
     });
 
+    it('refreshes UTxOs before scan when stored UTxO schema version is behind', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        store.getUTxOSchemaVersion.mockReturnValue(2);
+        handlesRepo.getMetrics.mockReturnValue({
+            lockLambdas: LockedLambdaReason.UNLOCKED,
+            indexSchemaVersion: 1,
+            utxoSchemaVersion: 1,
+            currentBlockHash: 'start_hash',
+            currentSlot: 100,
+            lastMaxRollbackCheck: Date.now()
+        });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        try {
+            await scannerModule.lambdaHandler({} as any, {} as any);
+            expect(warnSpy.mock.calls.some(([entry]) => `${entry}`.includes('scannerLambda.repopulateUTxOs'))).toBe(true);
+        } finally {
+            warnSpy.mockRestore();
+        }
+
+        expect(handlesRepo.getStartingPoint).toHaveBeenCalledWith(
+            expect.objectContaining({
+                [UTxOFunctionName.ADD_UTXO]: expect.any(Function),
+                [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: expect.any(Function)
+            })
+        );
+    });
+
     it('lambdaHandler runs reindex path and exits before scan when schema is behind', async () => {
         const { handlesRepo, scannerModule, store } = setup();
         store.getIndexSchemaVersion.mockReturnValue(3);
@@ -879,6 +923,7 @@ describe('Scanner lambda unit tests', () => {
         await expect(scannerModule.lambdaHandler({} as any, {} as any)).resolves.toBeUndefined();
 
         expect(store.repopulateIndexesFromUTxOs).toHaveBeenCalledTimes(1);
+        expect(handlesRepo.getStartingPoint).not.toHaveBeenCalled();
         expect(store.redisClientCall('get', 'scanner:recovery')).toBeUndefined();
         expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
     });

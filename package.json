@@ -11,7 +11,7 @@
   "scripts": {
     "ogmios": "chmod +x ./shell/start_local.sh && ./shell/start_local.sh",
     "api": "tsx -r tsconfig-paths/register -r dotenv/config express.ts",
-    "readonly": "READ_ONLY_STORE=true PORT=3142 tsx -r tsconfig-paths/register -r dotenv/config express.ts",
+    "readonly": "READ_ONLY_STORE=true USE_LAMBDA_SCANNER=false PORT=3142 tsx -r tsconfig-paths/register -r dotenv/config express.ts",
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "jest -c jest.config.ts --runInBand",
     "test:e2e": "chmod +x ./shell/local_valkey.sh && REDIS_HOST=127.0.0.1 REDIS_PORT=6380 ./shell/local_valkey.sh && (export NETWORK=preview REDIS_HOST=127.0.0.1 REDIS_PORT=6380; jest -c jest.e2e.config.ts --forceExit --runInBand)",
