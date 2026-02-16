@@ -127,3 +127,4 @@ tmp
 handles_utxos.json
 handles_utxos.gz
 .tmp_*.ts
+build
