@@ -62,7 +62,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 
 ### Core
 - `GET /` health ping style empty body response
-- `GET /health` sync status + ogmios + stats
+- `GET /health` sync status + stats (+ `ogmios` when Ogmios scanning is enabled)
 - `GET /stats` total handles/holders
 - `GET /deployment` `deployment_info.json`
 

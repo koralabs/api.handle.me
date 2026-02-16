@@ -106,7 +106,6 @@ describe('Health Routes Test', () => {
 
             expect(response.status).toEqual(200);
             expect(response.body).toEqual({
-                ogmios: '(ogmios scanning is disabled)',
                 stats: {
                     current_block_hash: expect.any(String),
                     index_memory_size: expect.any(Number),
@@ -122,6 +121,7 @@ describe('Health Routes Test', () => {
                 },
                 status: 'current'
             });
+            expect(response.body).not.toHaveProperty('ogmios');
             expect(fetchHealthSpy).not.toHaveBeenCalled();
         });
 

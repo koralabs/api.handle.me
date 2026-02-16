@@ -43,11 +43,9 @@ class HealthController {
             if (!handleRepo.isCaughtUp()) {
                 status = HealthStatus.STORAGE_BEHIND;
             }
-            let ogmios: HealthResponseBody  | string | null = null;
-            if (process.env.ENABLE_OGMIOS_SCANNING?.toLocaleLowerCase() == 'false') {
-                ogmios = '(ogmios scanning is disabled)';
-            }
-            else {
+            const ogmiosScanningEnabled = process.env.ENABLE_OGMIOS_SCANNING?.toLocaleLowerCase() !== 'false';
+            let ogmios: HealthResponseBody | null = null;
+            if (ogmiosScanningEnabled) {
                 // We don't try to connect to ogmios when scanning is disabled
                 ogmios = await fetchHealth();
                 if ((ogmios?.networkSynchronization ?? 0) < 1) {
@@ -67,7 +65,7 @@ class HealthController {
             
             res.status(statusCode).json({
                 status,
-                ogmios,
+                ...(ogmiosScanningEnabled ? { ogmios } : {}),
                 stats
             });
         } catch (error: any) {
