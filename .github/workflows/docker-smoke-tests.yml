@@ -1,0 +1,53 @@
+name: Docker Smoke Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+    paths:
+      - Dockerfile
+      - package.json
+      - package-lock.json
+      - rollup.lambda.config.js
+      - rollup.package.json
+      - app.ts
+      - express.ts
+      - ioc/**
+      - lambdas/**
+      - middlewares/**
+      - routes/**
+      - shell/entrypoint.sh
+      - shell/install.sh
+      - shell/test-container.sh
+      - workers/**
+  pull_request:
+    branches: [ master, develop ]
+    paths:
+      - Dockerfile
+      - package.json
+      - package-lock.json
+      - rollup.lambda.config.js
+      - rollup.package.json
+      - app.ts
+      - express.ts
+      - ioc/**
+      - lambdas/**
+      - middlewares/**
+      - routes/**
+      - shell/entrypoint.sh
+      - shell/install.sh
+      - shell/test-container.sh
+      - workers/**
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:container

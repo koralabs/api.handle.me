@@ -9,11 +9,6 @@
   "type": "module",
   "module": "esnext",
   "scripts": {
-    "stop:forever": "pkill -f \"tsx -r tsconfig-paths/register -r dotenv/config express.ts\" || true",
-    "start:forever": "mkdir -p forever && nohup npm run api >> ./forever/api.log 2>&1 &",
-    "copy-dist-files": "mkdir -p dist && cp rollup.package.json dist/package.json && cp docs/swagger.yml dist/swagger.yml",
-    "build:lambda": "npm run copy-dist-files && (cd dist && npm install) && npm exec -c 'rollup -c rollup.lambda.config.js'",
-    "build:docker": "npm run build:production && docker build -t koralabs/handles-api .",
     "ogmios": "chmod +x ./shell/start_local.sh && ./shell/start_local.sh",
     "api": "tsx -r tsconfig-paths/register -r dotenv/config express.ts",
     "readonly": "READ_ONLY_STORE=true PORT=3142 tsx -r tsconfig-paths/register -r dotenv/config express.ts",
@@ -21,7 +16,11 @@
     "test:unit": "jest -c jest.config.ts --runInBand",
     "test:e2e": "chmod +x ./shell/local_valkey.sh && REDIS_HOST=127.0.0.1 REDIS_PORT=6380 ./shell/local_valkey.sh && (export NETWORK=preview REDIS_HOST=127.0.0.1 REDIS_PORT=6380; jest -c jest.e2e.config.ts --forceExit --runInBand)",
     "test:critical": "chmod +x ./shell/local_valkey.sh && REDIS_HOST=127.0.0.1 REDIS_PORT=6380 ./shell/local_valkey.sh && (export NETWORK=preview REDIS_HOST=127.0.0.1 REDIS_PORT=6380; jest -c jest.critical.config.ts --forceExit --runInBand)",
-    "lint": "ESLINT_USE_FLAT_CONFIG=false eslint --ext=.js,.ts --fix --max-warnings=0 ."
+    "test:container": "bash ./shell/test-container.sh",
+    "build:lambda": "npm run copy-dist-files && (cd dist && npm install) && npm exec -c 'rollup -c rollup.lambda.config.js'",
+    "build:docker": "npm run build:production && docker build -t koralabs/handles-api .",
+    "lint": "ESLINT_USE_FLAT_CONFIG=false eslint --ext=.js,.ts --fix --max-warnings=0 .",
+    "copy-dist-files": "mkdir -p dist && cp rollup.package.json dist/package.json && cp docs/swagger.yml dist/swagger.yml"
   },
   "overrides": {
     "diff": "4.0.4",

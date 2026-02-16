@@ -4,8 +4,17 @@ CARDANO_NODE_VER=${CARDANO_NODE_VER:-10.5.3}
 OGMIOS_VER=${OGMIOS_VER:-6.11.2}
 CONFIG_FILES_BASE_URL=${CONFIG_FILES_BASE_URL:-'https://book.world.dev.cardano.org/environments'}
 SOCKET_PATH=${SOCKET_PATH:-/ipc/node.socket}
-sudo apt install -y && sudo apt update -y && sudo apt install -y git curl socat jq unzip tini lz4 zstd valkey
-sudo systemctl enable valkey-server
+if [[ "$(id -u)" -eq 0 ]]; then
+    SUDO=""
+else
+    SUDO="sudo"
+fi
+
+${SUDO} apt update -y
+${SUDO} apt install -y git curl socat jq unzip tini lz4 zstd valkey
+if command -v systemctl >/dev/null 2>&1; then
+    ${SUDO} systemctl enable valkey-server || true
+fi
 curl -fsSL https://github.com/IntersectMBO/cardano-node/releases/download/${CARDANO_NODE_VER}/cardano-node-${CARDANO_NODE_VER}-linux.tar.gz | tar -xz
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
 rm -f ./cardano-node-${CARDANO_NODE_VER}-linux.tar.gz
@@ -29,7 +38,7 @@ do
 done
 curl -sL https://github.com/CardanoSolutions/ogmios/releases/download/v${OGMIOS_VER}/ogmios-v${OGMIOS_VER}-x86_64-linux.zip -o ogmios.zip
 unzip ogmios.zip -d ./ogmios-install && rm ogmios.zip
-sudo cp ./ogmios-install/bin/ogmios /bin/ogmios && sudo chmod +x /bin/ogmios && rm -rf ./ogmios-install
+${SUDO} cp ./ogmios-install/bin/ogmios /bin/ogmios && ${SUDO} chmod +x /bin/ogmios && rm -rf ./ogmios-install
 source ~/.nvm/nvm.sh
 export TMPDIR=/tmp
 nvm install 21

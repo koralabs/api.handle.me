@@ -16,18 +16,48 @@ NODE_DB=${NODE_DB:-'/db'}
 SOCKET_PATH=${SOCKET_PATH:-'/ipc/node.socket'}
 CARDANO_NODE_PATH=${CARDANO_NODE_PATH:-'./cardano-node'}
 NODE_CONFIG_PATH=${NODE_CONFIG_PATH:-"./${NETWORK}"}
+HOST=""
+NODE_CONFIG=""
+NODE_SOCKET=""
+OGMIOS_PID=""
+API_PID=""
 CARDANO_NODE_PID=""
+SOCAT_PID=""
+CHILD_PIDS=()
 mkdir -p "$(dirname "$SOCKET_PATH")"
 
 function cleanup {
+  local exit_code=${1:-0}
+  trap - INT TERM QUIT ABRT
+
+  if [[ -n "${API_PID}" ]] && kill -0 "${API_PID}" 2>/dev/null; then
+    kill -TERM "${API_PID}" || true
+  fi
+
+  if [[ -n "${OGMIOS_PID}" ]] && kill -0 "${OGMIOS_PID}" 2>/dev/null; then
+    kill -TERM "${OGMIOS_PID}" || true
+  fi
+
+  if [[ -n "${SOCAT_PID}" ]] && kill -0 "${SOCAT_PID}" 2>/dev/null; then
+    kill -TERM "${SOCAT_PID}" || true
+  fi
+
   if [[ -n "${CARDANO_NODE_PID}" ]] && kill -0 "${CARDANO_NODE_PID}" 2>/dev/null; then
     echo "Stopping cardano-node with SIGINT..."
     kill -INT "${CARDANO_NODE_PID}" || true
     wait "${CARDANO_NODE_PID}" || true
     echo "  ...CARDANO-NODE STOPPED"
   fi
-  exit 0
+
+  wait || true
+  exit "${exit_code}"
 }
+
+function register_child {
+  CHILD_PIDS+=("$1")
+}
+
+trap 'cleanup 0' INT TERM QUIT ABRT
 
 if [[ "$@" != *"--host"* ]]
 then
@@ -46,12 +76,8 @@ if [[ "${MODE}" == "ogmios" || "${MODE}" == "both" || "${MODE}" == "all" ]]; the
     # --include-transaction-cbor
     echo "STARTING OGMIOS..."
     ogmios --log-level Error $HOST $NODE_CONFIG $NODE_SOCKET $@ &
-    ogmios_status=$?
-
-    if [ $ogmios_status -ne 0 ]; then
-        echo "Failed to start ogmios: $ogmios_status"
-        exit $ogmios_status
-    fi
+    OGMIOS_PID=$!
+    register_child "${OGMIOS_PID}"
     echo "  ...OGMIOS RUNNING"
 fi
 
@@ -62,7 +88,9 @@ if [[ "${MODE}" == "ogmios" || "${MODE}" == "all" || "${MODE}" == "api-only" ]];
     nvm use 21
     sed -i 's https://api.handle.me http://localhost:3141 ' swagger.yml
     sleep 5
-    NODE_ENV=${NODE_ENV:-production} NETWORK=${NETWORK} OGMIOS_HOST=${OGMIOS_HOST} DISABLE_HANDLES_SNAPSHOT=${DISABLE_HANDLES_SNAPSHOT:-false} npm run start:forever
+    NODE_ENV=${NODE_ENV:-production} NETWORK=${NETWORK} OGMIOS_HOST=${OGMIOS_HOST} DISABLE_HANDLES_SNAPSHOT=${DISABLE_HANDLES_SNAPSHOT:-false} node express.js &
+    API_PID=$!
+    register_child "${API_PID}"
     echo "  ...API RUNNING"
 fi
 
@@ -103,7 +131,6 @@ if [[ "${MODE}" == "cardano-node" || "${MODE}" == "both" || "${MODE}" == "all" ]
         echo "Mithril snapshot downloaded and validated."
     fi
     
-    trap cleanup INT TERM QUIT ABRT
     echo "Starting cardano-node."
 
     # Workaround for Mithril not outputting the protocolMagicId
@@ -117,6 +144,7 @@ if [[ "${MODE}" == "cardano-node" || "${MODE}" == "both" || "${MODE}" == "all" ]
         --host-addr 0.0.0.0 \
         --socket-path ${SOCKET_PATH} &
     CARDANO_NODE_PID=$!
+    register_child "${CARDANO_NODE_PID}"
 
     if [[ "${ENABLE_SOCKET_REDIRECT}" == "true" ]]; then
         until [ -S ${SOCKET_PATH} ]
@@ -125,10 +153,20 @@ if [[ "${MODE}" == "cardano-node" || "${MODE}" == "both" || "${MODE}" == "all" ]
         done
         echo "Found! ${SOCKET_PATH}"
         socat TCP-LISTEN:4001,reuseaddr,fork UNIX-CONNECT:${SOCKET_PATH} &
+        SOCAT_PID=$!
+        register_child "${SOCAT_PID}"
     fi
     echo "  ...CARDANO-NODE RUNNING"
 fi
-if [[ "${MODE}" == "ogmios" || "${MODE}" == "all" || "${MODE}" == "api-only" ]]; then
-    tail -f ./forever/**.log
+
+if [[ ${#CHILD_PIDS[@]} -eq 0 ]]; then
+    echo "No managed services started for MODE=${MODE}. Exiting."
+    exit 0
 fi
-wait
+
+set +e
+wait -n "${CHILD_PIDS[@]}"
+EXIT_CODE=$?
+set -e
+echo "A managed process exited with code ${EXIT_CODE}. Stopping remaining services."
+cleanup "${EXIT_CODE}"
