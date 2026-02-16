@@ -4,6 +4,7 @@ import {
     checkHandlePattern,
     HandlePaginationModel, HandleSearchModel,
     HandleType,
+    HttpException,
     IGetAllQueryParams, IGetHandleRequest,
     ISearchBody,
     isEmpty,
@@ -16,11 +17,19 @@ import {
 import { decodeCborToJson, DefaultTextFormat } from '@koralabs/kora-labs-common/utils/cbor';
 import { NextFunction, Request, Response } from 'express';
 import { isDatumEndpointEnabled } from '../config';
+import { MAX_PAGINATED_RESULTS } from '../config/constants';
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandleViewModel } from '../models/view/handle.view.model';
 import { HandlesRepository } from '../repositories/handlesRepository';
 
 class HandlesController {
+    private static validateRecordsPerPage(recordsPerPage?: string): void {
+        const count = Number(recordsPerPage);
+        if (recordsPerPage && Number.isFinite(count) && count > MAX_PAGINATED_RESULTS) {
+            throw new HttpException(400, `'records_per_page' must be ${MAX_PAGINATED_RESULTS} or less`);
+        }
+    }
+
     private static async getHandleFromRepo (req: Request<IGetHandleRequest, {}, {}>): Promise<{ code: number; message: string | null; handle: StoredHandle | null; }> {
         const handleName = req.params.handle;
         const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
@@ -52,6 +61,7 @@ class HandlesController {
 
     public static parseQueryAndSearchHandles(req: Request<Request, {}, {}, IGetAllQueryParams>, handleRepo: HandlesRepository, handles?: ISearchBody) {
         const { records_per_page, page, characters, length, rarity, numeric_modifiers, slot_number, search: searchQuery, holder_address, og, handle_type, sort, personalized } = req.query;
+        HandlesController.validateRecordsPerPage(records_per_page);
 
         const search = new HandleSearchModel({
             characters,

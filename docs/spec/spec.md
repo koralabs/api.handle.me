@@ -84,7 +84,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - `GET /handles/:handle/script`
 
 ### Holder & Root Handle Views
-- `GET /holders`
+- `GET /holders` (summary list; does not include per-holder `handles` arrays)
 - `GET /holders/:address`
 - `GET /root-handles` (supports handle search filters and `minting_type` filter)
 - `GET /holders` defaults to `sort=desc` by `total_handles` (highest holder counts first); `sort=asc` returns smallest holder counts first.
@@ -98,6 +98,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - Handles endpoints support:
   - `search`, `characters`, `length`, `rarity`, `numeric_modifiers`, `og`, `personalized`, `handle_type`, `holder_address`
   - pagination via `records_per_page` + `page` OR `slot_number`
+  - `records_per_page` maximum is `250`
 - Content negotiation:
   - `Accept: text/plain` returns newline-delimited handle names
   - `Accept: application/json` returns JSON objects

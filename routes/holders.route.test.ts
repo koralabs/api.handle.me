@@ -20,6 +20,7 @@ jest.mock('../repositories/handlesRepository', () => ({
         getAllHolders: () => {
             return [
                 {
+                    handles: ['burritos', 'tacos'],
                     total_handles: 1001,
                     default_handle: 'my_default',
                     manually_set: false,
@@ -70,6 +71,13 @@ describe('Testing Holders Routes', () => {
 
             expect(response.status).toEqual(400);
             expect(response.body.message).toEqual(ERROR_TEXT.HANDLE_SORT_INVALID);
+        });
+
+        it('should throw error if records_per_page exceeds 250', async () => {
+            const response = await request(app?.getServer()).get('/holders?records_per_page=251');
+
+            expect(response.status).toEqual(400);
+            expect(response.body.message).toEqual("'records_per_page' must be 250 or less");
         });
 
         it('should return holders', async () => {

@@ -338,6 +338,13 @@ describe('Testing Handles Routes', () => {
             expect(response.body.message).toEqual(ERROR_TEXT.HANDLE_LIMIT_INVALID_FORMAT);
         });
 
+        it('should throw error if records_per_page exceeds 250', async () => {
+            const response = await request(app?.getServer()).get('/handles?records_per_page=251');
+
+            expect(response.status).toEqual(400);
+            expect(response.body.message).toEqual("'records_per_page' must be 250 or less");
+        });
+
         it('should throw error if sort is invalid', async () => {
             const response = await request(app?.getServer()).get('/handles?records_per_page=1&sort=hmm');
 
@@ -414,6 +421,13 @@ describe('Testing Handles Routes', () => {
             const response = await request(app?.getServer()).post('/handles/list?records_per_page=two');
             expect(response.status).toEqual(400);
             expect(response.body.message).toEqual(ERROR_TEXT.HANDLE_LIMIT_INVALID_FORMAT);
+        });
+
+        it('should throw error if records_per_page exceeds 250', async () => {
+            const response = await request(app?.getServer()).post('/handles/list?records_per_page=251');
+
+            expect(response.status).toEqual(400);
+            expect(response.body.message).toEqual("'records_per_page' must be 250 or less");
         });
 
         it('should throw error if sort is invalid', async () => {

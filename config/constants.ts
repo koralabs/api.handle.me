@@ -48,6 +48,7 @@ export const ORDERED_SLOTS: string[] = []
 export const MAX_SETS_PER_PIPE = 5_000;
 export const MAX_ZSETS_PER_PIPE = 5_000;
 export const MAX_HASHES_PER_PIPE = 5_000;
+export const MAX_PAGINATED_RESULTS = 250;
 export const ACCEPTABLE_TIP_PROXIMITY = 1200; // ~20 mins (memory store writes a file every 10 mins + 10 mins to restart)
 
 export const enum ScanningMode {
