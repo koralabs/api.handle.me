@@ -71,6 +71,7 @@ const setup = () => {
     const pipelineResponses: any[] = [];
     const kvStore = new Map<string, string>();
     const store = {
+        initialize: jest.fn(),
         getValuesFromIndexedSet: jest.fn(),
         getValuesFromOrderedSet: jest.fn(),
         pipeline: jest.fn((commands: CallableFunction) => {
@@ -906,6 +907,7 @@ describe('Scanner lambda unit tests', () => {
 
         await expect(scannerModule.lambdaHandler({} as any, {} as any)).resolves.toBeUndefined();
 
+        expect(store.initialize).toHaveBeenCalledTimes(1);
         expect(handlesRepo.initialize).not.toHaveBeenCalled();
         expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
     });

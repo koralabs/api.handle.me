@@ -139,6 +139,7 @@ export const processSnapshot = async (network: string) => {
 export const handler = async (event: any) => {
     const store = new RedisHandlesStore();
     const handlesRepo = new HandlesRepository(store);
+    store.initialize();
     const { lockLambdas, lastMaxRollbackCheck } = handlesRepo.getMetrics();
 
     if (lockLambdas) {

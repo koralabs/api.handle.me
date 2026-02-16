@@ -545,6 +545,7 @@ const scan = async () => {
 };
 
 export const lambdaHandler = async (event: AWSLambda.ALBEvent, context: AWSLambda.Context) => {
+    store.initialize();
     const leaseOwner = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     if (!acquireScannerLease(leaseOwner)) {
         Logger.local('Scanner lease is active in another invocation, skipping');

@@ -112,4 +112,14 @@ describe('Snapshot lambda e2e', () => {
         expect(storedUtxo).not.toBeNull();
         expect(store.getValuesFromIndexedSet(IndexNames.MINT, 'papagoose')?.size).toBe(1);
     });
+
+    it('initializes the redis worker before lock checks on cold starts', async () => {
+        const sendSpy = jest.spyOn(mockedS3Instance, 'send');
+        (RedisHandlesStore as any)._worker = undefined;
+
+        const result = await lambda.handler({});
+
+        expect(result).toEqual({ body: '', statusCode: 200 });
+        expect(sendSpy).toHaveBeenCalledTimes(3);
+    });
 });
