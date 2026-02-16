@@ -13,16 +13,20 @@ const SCANNER_LEASE_KEY = 'scanner:lease';
 const SCANNER_RECOVERY_KEY = 'scanner:recovery';
 const SCANNER_LEASE_TTL_MS = 60_000;
 const SCANNER_LEASE_HEARTBEAT_MS = 20_000;
+const KOIOS_TX_INFO_MAX_RPS = 15;
+const KOIOS_TX_INFO_MIN_INTERVAL_MS = Math.ceil(1000 / KOIOS_TX_INFO_MAX_RPS);
 const KOIOS_TX_INFO_MAX_RETRIES = 2;
 const KOIOS_TX_INFO_RETRY_BASE_DELAY_MS = 500;
 const RECOVERY_REASON_ROLLBACK = 'rollback';
 const RECOVERY_REASON_REINDEX = 'reindex';
+const LOCK_REASON_SNAPSHOT = 'SNAPSHOT' as LockedLambdaReason;
 
 const staleLockTimeouts: Partial<Record<LockedLambdaReason, number>> = {
     [LockedLambdaReason.SCANNING]: 5 * 60 * 1000,
     [LockedLambdaReason.ROLLBACK_20]: 5 * 60 * 1000,
     [LockedLambdaReason.ROLLBACK_2160]: 10 * 60 * 1000,
-    [LockedLambdaReason.REINDEX]: 10 * 60 * 1000
+    [LockedLambdaReason.REINDEX]: 10 * 60 * 1000,
+    [LOCK_REASON_SNAPSHOT]: 6 * 60 * 1000
 };
 
 const ensureInitialized = async () => {
@@ -177,7 +181,7 @@ const getBatchedTxInfo = async (txHashes: string[]) => {
     await asyncForEach(batchedTxHashes, async (hashBatch) => {
         const txInfo = await fetchTxInfoBatchWithRetryAndSplit(hashBatch);
         txs.push(...(txInfo ?? []));
-    });
+    }, KOIOS_TX_INFO_MIN_INTERVAL_MS);
     return txs;
 };
 
@@ -461,6 +465,31 @@ const processReindex = async () => {
     }
 };
 
+const clearStaleLockIfNeeded = (metrics: ReturnType<HandlesRepository['getMetrics']>) => {
+    if (!metrics.lockLambdas || !isLockStale(metrics.lockLambdas, metrics.lockLambdasTimestamp)) return false;
+
+    if (metrics.lockLambdas === LockedLambdaReason.SCANNING) {
+        Logger.log({ message: `Scanner lambda has been locked for scanning for over 5 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.lockedTooLong' });
+    }
+
+    if ([LockedLambdaReason.ROLLBACK_20, LockedLambdaReason.ROLLBACK_2160].includes(metrics.lockLambdas)) {
+        Logger.log({ message: `Scanner lambda has been locked for rollback for over 5 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.rollbackLockedTooLong' });
+        setRecoveryFlag(RECOVERY_REASON_ROLLBACK);
+    }
+
+    if (metrics.lockLambdas === LockedLambdaReason.REINDEX) {
+        Logger.log({ message: `Scanner lambda has been locked for reindexing for over 10 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.reindexLockedTooLong' });
+        setRecoveryFlag(RECOVERY_REASON_REINDEX);
+    }
+
+    if (metrics.lockLambdas === LOCK_REASON_SNAPSHOT) {
+        Logger.log({ message: `Scanner lambda has been locked for snapshotting for over 10 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.snapshotLockedTooLong' });
+    }
+
+    handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
+    return true;
+};
+
 const scan = async () => {
     Logger.local(`Running scan...`);
     const metrics = handlesRepo.getMetrics();
@@ -550,27 +579,8 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context: AWSLambd
         await ensureInitialized();
         const metrics = handlesRepo.getMetrics();
         if (metrics.lockLambdas) {
-            // we probably need some recovery checks/notify here
             Logger.local(`Lambda is locked with: ${metrics.lockLambdas}, skipping`);
-            if (isLockStale(metrics.lockLambdas, metrics.lockLambdasTimestamp)) {
-                if (metrics.lockLambdas === LockedLambdaReason.SCANNING) {
-                    Logger.log({ message: `Scanner lambda has been locked for scanning for over 5 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.lockedTooLong' });
-                }
-
-                if ([LockedLambdaReason.ROLLBACK_20, LockedLambdaReason.ROLLBACK_2160].includes(metrics.lockLambdas)) {
-                    Logger.log({ message: `Scanner lambda has been locked for rollback for over 5 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.rollbackLockedTooLong' });
-                    setRecoveryFlag(RECOVERY_REASON_ROLLBACK);
-                }
-
-                if (metrics.lockLambdas === LockedLambdaReason.REINDEX) {
-                    Logger.log({ message: `Scanner lambda has been locked for reindexing for over 10 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.reindexLockedTooLong' });
-                    setRecoveryFlag(RECOVERY_REASON_REINDEX);
-                }
-
-                handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
-            } else {
-                return;
-            }
+            if (!clearStaleLockIfNeeded(metrics)) return;
         }
 
         const recoveryFlag = getRecoveryFlag();

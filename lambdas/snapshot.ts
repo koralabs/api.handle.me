@@ -1,5 +1,5 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { IHandleFileContent, IndexNames, LogCategory, Logger, MintingData, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { IHandleFileContent, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import fs from 'fs';
 import stdOut from 'node:readline';
 import zlib from 'zlib';
@@ -19,6 +19,26 @@ console.sameLine = function (message) {
 
 // Run locally with (note your .env): 
 // tsx -r dotenv/config ./lambdas/snapshot.ts local
+
+const LOCK_REASON_SNAPSHOT = 'SNAPSHOT' as LockedLambdaReason;
+const LOCKED_LAMBDA_RETRY_DELAY_MS = 15_000;
+const LOCKED_LAMBDA_MAX_RETRIES = 4;
+
+const delayMs = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const waitForUnlockedLambdas = async (handlesRepo: HandlesRepository) => {
+    let metrics = handlesRepo.getMetrics();
+    let retries = 0;
+
+    while (metrics.lockLambdas) {
+        if (retries >= LOCKED_LAMBDA_MAX_RETRIES) return metrics;
+        retries++;
+        await delayMs(LOCKED_LAMBDA_RETRY_DELAY_MS);
+        metrics = handlesRepo.getMetrics();
+    }
+
+    return metrics;
+};
 
 const getRedisItems = async () => {
     const utxos: Map<string, UTxOWithTxInfo | null> = new Map();
@@ -138,7 +158,8 @@ export const processSnapshot = async (network: string) => {
 export const handler = async (event: any) => {
     const store = new RedisHandlesStore();
     const handlesRepo = new HandlesRepository(store);
-    const { lockLambdas, lastMaxRollbackCheck } = handlesRepo.getMetrics();
+    await handlesRepo.initialize();
+    const { lockLambdas } = await waitForUnlockedLambdas(handlesRepo);
 
     if (lockLambdas) {
         // we probably need some recovery checks/notify here
@@ -148,38 +169,43 @@ export const handler = async (event: any) => {
         };
     }
 
-    const networks = ['mainnet', 'preview', 'preprod']; // We can't do this, each region/network has it's own redis
-    for (let i = 0; i < networks.length; i++) {
-        const fileJson = await processSnapshot(networks[i]);
+    handlesRepo.setMetrics({ lockLambdas: LOCK_REASON_SNAPSHOT, lockLambdasTimestamp: Date.now() });
+    try {
+        const networks = ['mainnet', 'preview', 'preprod']; // We can't do this, each region/network has it's own redis
+        for (let i = 0; i < networks.length; i++) {
+            const fileJson = await processSnapshot(networks[i]);
 
-        const { utxoSchemaVersion = 1 } = fileJson;
-        const fileName = `${networks[i]}/utxo-snapshot/${utxoSchemaVersion}/handles_utxos.gz`;
+            const { utxoSchemaVersion = 1 } = fileJson;
+            const fileName = `${networks[i]}/utxo-snapshot/${utxoSchemaVersion}/handles_utxos.gz`;
 
-        const zippedSnapshots = [
-            {
-                Key: fileName,
-                Body: zlib.deflateSync(JSON.stringify(fileJson))
-            }
-        ];
+            const zippedSnapshots = [
+                {
+                    Key: fileName,
+                    Body: zlib.deflateSync(JSON.stringify(fileJson))
+                }
+            ];
 
-        const s3Result = await Promise.all(
-            zippedSnapshots.map(({ Key, Body }) => {
-                const params = {
-                    Bucket: 'api.handle.me',
-                    Key,
-                    Body
-                };
-                return new S3Client({ region: 'us-west-2' }).send(new PutObjectCommand(params));
-            })
-        );
+            const s3Result = await Promise.all(
+                zippedSnapshots.map(({ Key, Body }) => {
+                    const params = {
+                        Bucket: 'api.handle.me',
+                        Key,
+                        Body
+                    };
+                    return new S3Client({ region: 'us-west-2' }).send(new PutObjectCommand(params));
+                })
+            );
 
-        Logger.local(`s3Result ${JSON.stringify(s3Result)}`);
+            Logger.local(`s3Result ${JSON.stringify(s3Result)}`);
+        }
+
+        return {
+            statusCode: 200,
+            body: ''
+        };
+    } finally {
+        handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
     }
-
-    return {
-        statusCode: 200,
-        body: ''
-    };
 };
 
 if (process.argv[2] === 'local') {

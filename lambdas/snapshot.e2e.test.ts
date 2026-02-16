@@ -111,5 +111,43 @@ describe('Snapshot lambda e2e', () => {
         const storedUtxo = repo.getUTxO('snapshot_tx#0');
         expect(storedUtxo).not.toBeNull();
         expect(store.getValuesFromIndexedSet(IndexNames.MINT, 'papagoose')?.size).toBe(1);
+        expect(repo.getMetrics().lockLambdas).toBe(LockedLambdaReason.UNLOCKED);
+    });
+
+    it('skips snapshot generation when lambdas are already locked', async () => {
+        jest.useFakeTimers();
+        try {
+            const sendSpy = jest.spyOn(mockedS3Instance, 'send');
+            repo.setMetrics({ lockLambdas: LockedLambdaReason.SCANNING });
+
+            const pending = lambda.handler({});
+            await jest.advanceTimersByTimeAsync(15_000 * 4);
+            const result = await pending;
+
+            expect(result).toEqual({ body: '', statusCode: 200 });
+            expect(sendSpy).not.toHaveBeenCalled();
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    it('retries lock checks and continues once unlocked', async () => {
+        jest.useFakeTimers();
+        try {
+            const sendSpy = jest.spyOn(mockedS3Instance, 'send');
+            repo.setMetrics({ lockLambdas: LockedLambdaReason.SCANNING });
+            setTimeout(() => {
+                repo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
+            }, 20_000);
+
+            const pending = lambda.handler({});
+            await jest.advanceTimersByTimeAsync(45_000);
+            const result = await pending;
+
+            expect(result).toEqual({ body: '', statusCode: 200 });
+            expect(sendSpy).toHaveBeenCalledTimes(3);
+        } finally {
+            jest.useRealTimers();
+        }
     });
 });

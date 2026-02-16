@@ -178,15 +178,17 @@ describe('Scanner lambda e2e', () => {
         expect(repo.getHandle(handleName)).toEqual(expect.objectContaining({ name: handleName, utxo: 'scan_tx#0' }));
     });
 
-    it('returns early without making changes when lambdas are locked', async () => {
-        repo.setMetrics({ lockLambdas: LockedLambdaReason.REINDEX });
-        const initialMetrics = repo.getMetrics();
+    it('recovers immediately when a reindex lock is stale', async () => {
+        repo.setMetrics({
+            lockLambdas: LockedLambdaReason.REINDEX,
+            lockLambdasTimestamp: Date.now() - 11 * 60 * 1000
+        });
 
-        await lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
+        const result = await lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
 
+        expect(result).toBeUndefined();
         const finalMetrics = repo.getMetrics();
-        expect(finalMetrics.lockLambdas).toBe(LockedLambdaReason.REINDEX);
-        expect(finalMetrics.indexSchemaVersion).toEqual(initialMetrics.indexSchemaVersion);
+        expect(finalMetrics.lockLambdas).toBe(LockedLambdaReason.UNLOCKED);
     });
 
     it('successfully reindexes and completes unlocked when schema version is behind', async () => {
