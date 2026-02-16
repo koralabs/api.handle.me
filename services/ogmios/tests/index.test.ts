@@ -1,16 +1,16 @@
 import { AssetNameLabel, buildNumericModifiers, getRarity, Logger } from '@koralabs/kora-labs-common';
-import fetch from 'cross-fetch';
 import v8 from 'v8';
 import { buildOgmiosTransaction, buildOnChainObject, fetchHealth, getHandleNameFromAssetName, memoryWatcher } from '../utils';
-
-jest.mock('cross-fetch', () => jest.fn());
 
 type DoesZapCodeSpaceFlag = 0 | 1;
 
 describe('Utils Tests', () => {
+    const originalFetch = global.fetch;
+
     afterEach(() => {
         jest.restoreAllMocks();
-        (fetch as jest.MockedFunction<typeof fetch>).mockReset();
+        if (originalFetch) global.fetch = originalFetch;
+        else delete (global as any).fetch;
     });
 
     describe('buildOnChainObject tests', () => {
@@ -79,7 +79,12 @@ describe('Utils Tests', () => {
             const result = buildOnChainObject(invalidCborObject);
 
             expect(result).toBeNull();
-            expect(loggerSpy).toHaveBeenCalledWith(expect.stringContaining('Error building metadata:'));
+            expect(loggerSpy).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    event: 'buildOnChainObject',
+                    message: expect.stringContaining('Error building metadata:')
+                })
+            );
         });
 
         it('parses non-map objects with numeric values and key commas', () => {
@@ -111,7 +116,8 @@ describe('Utils Tests', () => {
 
     describe('fetchHealth', () => {
         it('returns parsed ogmios health response', async () => {
-            const mockedFetch = fetch as jest.MockedFunction<typeof fetch>;
+            const mockedFetch = jest.fn();
+            global.fetch = mockedFetch as any;
             mockedFetch.mockResolvedValue({
                 json: jest.fn().mockResolvedValue({ networkSynchronization: 100 })
             } as any);
@@ -123,7 +129,8 @@ describe('Utils Tests', () => {
         });
 
         it('logs and returns null on fetch failure', async () => {
-            const mockedFetch = fetch as jest.MockedFunction<typeof fetch>;
+            const mockedFetch = jest.fn();
+            global.fetch = mockedFetch as any;
             mockedFetch.mockRejectedValue(new Error('health-check failed'));
             const loggerSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
 

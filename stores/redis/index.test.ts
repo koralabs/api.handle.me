@@ -44,6 +44,9 @@ describe('RedisHandlesStore critical path tests', () => {
         errorHandler('boom');
         exitHandler(1);
         expect(loggerSpy).toHaveBeenCalledWith(expect.objectContaining({ event: 'ValkeySyncWorker.Error' }));
+        expect(loggerSpy).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'ValkeySyncWorker.Exit' }));
+
+        exitHandler(2);
         expect(loggerSpy).toHaveBeenCalledWith(expect.objectContaining({ event: 'ValkeySyncWorker.Exit' }));
 
         store.initialize();

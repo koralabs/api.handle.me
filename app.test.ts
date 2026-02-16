@@ -147,6 +147,11 @@ describe('App lifecycle', () => {
 
         (app as any).initializeSwagger();
 
-        expect(loggerSpy).toHaveBeenCalledWith(expect.stringContaining('Unable to load swagger with error'));
+        expect(loggerSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                event: 'app.swagger.load',
+                message: expect.stringContaining('Unable to load swagger with error')
+            })
+        );
     });
 });

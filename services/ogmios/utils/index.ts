@@ -1,6 +1,5 @@
 import { Metadatum, Transaction } from '@cardano-ogmios/schema';
 import { AssetNameLabel, checkNameLabel, LogCategory, Logger } from '@koralabs/kora-labs-common';
-import fetch from 'cross-fetch';
 import v8 from 'v8';
 import { NODE_ENV, OGMIOS_HOST } from '../../../config';
 import { AssetDetailsFromAssetName, HealthResponseBody } from '../../../interfaces/ogmios.interfaces';
