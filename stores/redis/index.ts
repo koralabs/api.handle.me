@@ -392,6 +392,15 @@ export class RedisHandlesStore implements IApiStore {
         return;
     }
 
+    public getScoresFromOrderedSet(index: IndexNames, values: string[]): number[] {
+        if (!values.length) return [];
+        const scores = this.redisClientCall('zmscore', `{root}:${index}`, values) as (number | string | null | undefined)[];
+        return scores.map((score) => {
+            if (score == null) return 0;
+            return Number(score.toString());
+        });
+    }
+
     // #endregion
 
     // #region METRICS *****************************

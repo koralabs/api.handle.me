@@ -672,6 +672,20 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(redisSpy).toHaveBeenCalledWith('zrem', '{root}:holder', '7');
     });
 
+    it('reads ordered-set scores for members', () => {
+        const store = new RedisHandlesStore();
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'zmscore') return ['4', null, '11'];
+            return [];
+        });
+
+        const scores = store.getScoresFromOrderedSet(IndexNames.HOLDER_COUNT, ['holder_a', 'holder_b', 'holder_c']);
+
+        expect(scores).toEqual([4, 0, 11]);
+        expect(redisSpy).toHaveBeenCalledWith('zmscore', '{root}:holdercount', ['holder_a', 'holder_b', 'holder_c']);
+    });
+
     it('builds metrics from defaults when cache is empty', () => {
         const store = new RedisHandlesStore();
         jest.spyOn(store as any, 'rehydrateObjectFromCache').mockReturnValue(undefined);

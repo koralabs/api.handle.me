@@ -14,7 +14,7 @@ class HoldersController {
             }
             const pagination = new HolderPaginationModel({ page, sort, recordsPerPage: records_per_page });
             const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
-            const holders = handleRepo.getAllHolders({ pagination }).map(({ handles: _handles, ...holder }) => holder);
+            const holders = handleRepo.getAllHolders({ pagination, includeHandles: false }).map(({ handles: _handles, ...holder }) => holder);
             res.status(handleRepo.currentHttpStatus()).json(holders);
         } catch (error) {
             next(error);

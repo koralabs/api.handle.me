@@ -943,17 +943,17 @@ describe('HandlesRepository branch tests', () => {
                     { name: 'beta', hex: Buffer.from('beta').toString('hex'), holder, resolved_addresses: { ada: address } }
                 ];
             }
-            if (callCount === 2) return [new Set(['alpha', 'beta']), new Set(['alpha', 'beta'])];
-            if (callCount === 3) return [new Set(['alpha']), undefined];
+            if (callCount === 2) return [undefined];
+            if (callCount === 3) return [new Set(['alpha', 'beta'])];
             return [];
         });
 
         const result = repo.search({ page: 1, handlesPerPage: 2, sort: 'asc', slotNumber: 10 } as any);
 
         expect(result.searchTotal).toBe(2);
-        expect((result.handles[0] as any).default_in_wallet).toBe('alpha');
+        expect((result.handles[0] as any).default_in_wallet).toBe('fallback');
         expect((result.handles[1] as any).default_in_wallet).toBe('fallback');
-        expect(getDefaultSpy).toHaveBeenCalled();
+        expect(getDefaultSpy).toHaveBeenCalledTimes(1);
         expect(store.getValuesFromOrderedSet).toHaveBeenCalledWith(
             IndexNames.SLOT,
             0,
@@ -1092,6 +1092,43 @@ describe('HandlesRepository branch tests', () => {
                 orderBy: 'desc',
                 limit: { offset: 0, count: 1 }
             })
+        );
+    });
+
+    it('builds holder summaries without returning handle arrays when includeHandles is false', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        store.getValuesFromOrderedSet.mockReturnValueOnce([holder]);
+        (store as any).getScoresFromOrderedSet = jest.fn().mockReturnValue([1001]);
+
+        let callCount = 0;
+        store.pipeline.mockImplementation((commands: () => void) => {
+            callCount += 1;
+            commands();
+            if (callCount === 1) return [new Set()];
+            if (callCount === 2) return [new Set(['alpha'])];
+            if (callCount === 3) return [{ resolved_addresses: { ada: address } }];
+            return [];
+        });
+
+        const holders = repo.getAllHolders({
+            pagination: { page: 1, recordsPerPage: 1, sort: 'desc' } as any,
+            includeHandles: false
+        });
+
+        expect(holders).toEqual([
+            expect.objectContaining({
+                address: holder,
+                default_handle: 'alpha',
+                total_handles: 1001,
+                handles: []
+            })
+        ]);
+        expect((store as any).getScoresFromOrderedSet).toHaveBeenCalledWith(IndexNames.HOLDER_COUNT, [holder]);
+        expect(store.getValuesFromIndexedSet).toHaveBeenCalledWith(
+            IndexNames.HOLDER,
+            holder,
+            expect.objectContaining({ limit: { offset: 0, count: 1 } })
         );
     });
 

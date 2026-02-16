@@ -91,18 +91,20 @@ export class HandlesRepository {
         return handle;
     }
 
-    public buildHolder(handles: Set<string>, address: string, defaultHandle?: string): Holder | undefined {
+    public buildHolder(handles: Set<string>, address: string, defaultHandle?: string, totalHandles?: number, includeHandles = true, manuallySet?: boolean): Holder | undefined {
         if(!handles || handles.size === 0) return;
+
+        const holderTotal = totalHandles ?? handles.size;
 
         const addressDetails = buildHolderInfo(address);
 
         const holder: Holder = {
-            handles: [...handles],
+            handles: includeHandles ? [...handles] : [],
             default_handle: defaultHandle || `${this.getDefaultHandle(handles ?? new Set())?.name ?? ''}`,
-            manually_set: defaultHandle ? true : false,
+            manually_set: manuallySet ?? (defaultHandle ? true : false),
             type: addressDetails.type,
             known_owner_name: addressDetails.knownOwnerName?.name ?? '',
-            total_handles: handles.size,
+            total_handles: holderTotal,
             address: addressDetails.address
         }
         return holder;
@@ -189,6 +191,35 @@ export class HandlesRepository {
             return { searchTotal, handles: handleNames ?? [] };
         }
 
+        const isUnfilteredPaginatedSearch = filtered.length === 0 && !searchModel?.search && !searchModel?.handles?.length && !pagination?.slotNumber && pagination?.sort !== 'random';
+        if (isUnfilteredPaginatedSearch) {
+            const { handleCount } = this.store.getMetrics();
+            const searchTotalFromMetrics = Number(handleCount);
+            if (Number.isFinite(searchTotalFromMetrics)) {
+                const startIndex = ((pagination?.page ?? 1) - 1) * (pagination?.handlesPerPage ?? 100);
+                const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+                const pageHandleNames = this.store.getKeysFromIndex(IndexNames.HANDLE, {
+                    orderBy: sortOrder,
+                    limit: { offset: startIndex, count: pagination?.handlesPerPage ?? 100 }
+                }) as string[];
+                handles = (this.store.pipeline(() => {
+                    for (const h of pageHandleNames) {
+                        this.store.getHashFromIndex(IndexNames.HANDLE, h);
+                    }
+                }) as StoredHandle[]);
+                const defaultHandlesByHolder = this.resolveDefaultHandlesByHolder(handles);
+                handles = handles.map((handle) => {
+                    if (handle) {
+                        handle.name = `${handle.name}`;
+                        handle.hex = `${handle.hex}`;
+                        handle.default_in_wallet = defaultHandlesByHolder.get(handle.holder) ?? handle.name;
+                        return handle;
+                    }
+                }).filter((h): h is StoredHandle => !!h);
+                return { searchTotal: searchTotalFromMetrics, handles };
+            }
+        }
+
         if (pagination?.slotNumber) {
             const {firstSlot, lastSlot, handleCount} = this.store.getMetrics();
             const handleNamesInSlotRage: string[] = [];
@@ -247,30 +278,66 @@ export class HandlesRepository {
                 this.store.getHashFromIndex(IndexNames.HANDLE, h)
             }
         }) as StoredHandle[])
-
-        const holderHandles = (this.store.pipeline(() => {
-            for (const h of handles) {
-                if (h) this.store.getValuesFromIndexedSet(IndexNames.HOLDER, h.holder) as HolderHandleNames
-            }
-        }) as HolderHandleNames[])
-
-        const defaultHandles = (this.store.pipeline(() => {
-            for (const h of handles) {
-                if (h) this.store.getValuesFromIndexedSet(IndexNames.DEFAULT_HANDLE, h.holder);
-            }
-        }) as (Set<string> | undefined)[])
+        const defaultHandlesByHolder = this.resolveDefaultHandlesByHolder(handles);
 
         handles = handles.map((handle,i) => {
             if (handle) {
                 handle.name = `${handle.name}`
                 handle.hex = `${handle.hex}`
-                handle.default_in_wallet = defaultHandles[i]?.size ? `${[...defaultHandles[i]][0]}` : `${this.getDefaultHandle(holderHandles[i])?.name ?? handle.name}`;
+                handle.default_in_wallet = defaultHandlesByHolder.get(handle.holder) ?? handle.name;
                 return handle;
             }
         }).filter(h => !!h)
     
 
         return { searchTotal, handles };
+    }
+
+    private resolveDefaultHandlesByHolder(handles: StoredHandle[]): Map<string, string> {
+        const defaultsByHolder = new Map<string, string>();
+        const holderAddresses = [...new Set(handles.map((handle) => handle?.holder).filter((holder): holder is string => !!holder))];
+        if (!holderAddresses.length) return defaultsByHolder;
+
+        const explicitDefaultSets = (this.store.pipeline(() => {
+            for (const holderAddress of holderAddresses) {
+                this.store.getValuesFromIndexedSet(IndexNames.DEFAULT_HANDLE, holderAddress);
+            }
+        }) as (Set<string> | undefined)[]);
+
+        const holdersMissingDefault: string[] = [];
+        holderAddresses.forEach((holderAddress, index) => {
+            const defaultSet = explicitDefaultSets[index];
+            if (defaultSet?.size) {
+                defaultsByHolder.set(holderAddress, `${[...defaultSet][0]}`);
+                return;
+            }
+            holdersMissingDefault.push(holderAddress);
+        });
+
+        if (!holdersMissingDefault.length) return defaultsByHolder;
+
+        const holderHandleSets = (this.store.pipeline(() => {
+            for (const holderAddress of holdersMissingDefault) {
+                this.store.getValuesFromIndexedSet(IndexNames.HOLDER, holderAddress) as HolderHandleNames;
+            }
+        }) as HolderHandleNames[]);
+
+        holdersMissingDefault.forEach((holderAddress, index) => {
+            const holderHandles = holderHandleSets[index] ?? new Set<string>();
+            if (holderHandles.size === 1) {
+                defaultsByHolder.set(holderAddress, `${[...holderHandles][0]}`);
+                return;
+            }
+            if (holderHandles.size > 1000) {
+                defaultsByHolder.set(holderAddress, `${[...holderHandles][0] ?? ''}`);
+                return;
+            }
+
+            const fallbackDefault = this.getDefaultHandle(holderHandles)?.name;
+            if (fallbackDefault) defaultsByHolder.set(holderAddress, `${fallbackDefault}`);
+        });
+
+        return defaultsByHolder;
     }
 
     public addUTxO(utxo: UTxOWithTxInfo) {
@@ -491,8 +558,9 @@ export class HandlesRepository {
         })).flat() as string[];
     }
 
-    public getAllHolders(params: { pagination: HolderPaginationModel; }): Holder[] {
+    public getAllHolders(params: { pagination: HolderPaginationModel; includeHandles?: boolean; }): Holder[] {
         const pagination = params.pagination;
+        const includeHandles = params.includeHandles ?? true;
         const startRecord = (pagination.page - 1) * pagination.recordsPerPage;
         const holderAddresses = (this.store.getValuesFromOrderedSet(
             IndexNames.HOLDER_COUNT,
@@ -500,12 +568,7 @@ export class HandlesRepository {
             { orderBy: pagination.sort, limit: { offset: startRecord, count: pagination.recordsPerPage } }
         ) ?? []).map((holderAddress) => `${holderAddress}`);
         const holders: Holder[] = [];
-
-        const holderHandleNames: HolderHandleNames[] = (this.store.pipeline(() => {
-            for (const h of holderAddresses) {
-                this.store.getValuesFromIndexedSet(IndexNames.HOLDER, h) as HolderHandleNames;
-            }
-        }) as HolderHandleNames[]);
+        if (!holderAddresses.length) return holders;
 
         const defaultHandles: (Set<string> | undefined)[] = (this.store.pipeline(() => {
             for (const h of holderAddresses) {
@@ -513,14 +576,82 @@ export class HandlesRepository {
             }
         }) as (Set<string> | undefined)[]);
 
+        const holderCountsFromScores = includeHandles
+            ? undefined
+            : (this.store as IApiStore & { getScoresFromOrderedSet?: (index: IndexNames, values: string[]) => number[] })
+                .getScoresFromOrderedSet?.(IndexNames.HOLDER_COUNT, holderAddresses);
+
+        const holderHandleNames: HolderHandleNames[] = (this.store.pipeline(() => {
+            for (const h of holderAddresses) {
+                this.store.getValuesFromIndexedSet(
+                    IndexNames.HOLDER,
+                    h,
+                    includeHandles ? undefined : { orderBy: 'asc', limit: { offset: 0, count: 1 } }
+                ) as HolderHandleNames;
+            }
+        }) as HolderHandleNames[]);
+
+        const holderCounts = holderAddresses.map((holderAddress, index) => {
+            if (includeHandles) return holderHandleNames[index]?.size ?? 0;
+            const score = Number(holderCountsFromScores?.[index]);
+            if (Number.isFinite(score)) return score;
+            return (this.store.getValuesFromIndexedSet(IndexNames.HOLDER, holderAddress) as HolderHandleNames)?.size ?? holderHandleNames[index]?.size ?? 0;
+        });
+
+        const holderAddressesMissingComputedDefault = includeHandles
+            ? []
+            : holderAddresses.filter((holderAddress, index) => {
+                if (defaultHandles[index]?.size) return false;
+                const holderCount = holderCounts[index] ?? 0;
+                return holderCount > 1 && holderCount <= 1000;
+            });
+
+        const fullHolderSetsForDefault = new Map<string, HolderHandleNames>();
+        if (holderAddressesMissingComputedDefault.length) {
+            const fullSets = (this.store.pipeline(() => {
+                for (const holderAddress of holderAddressesMissingComputedDefault) {
+                    this.store.getValuesFromIndexedSet(IndexNames.HOLDER, holderAddress) as HolderHandleNames;
+                }
+            }) as HolderHandleNames[]);
+
+            holderAddressesMissingComputedDefault.forEach((holderAddress, index) => {
+                fullHolderSetsForDefault.set(holderAddress, fullSets[index] ?? new Set<string>());
+            });
+        }
+
+        const firstHandleNames = holderHandleNames.map((names) => `${[...(names ?? new Set<string>())][0] ?? ''}`);
         const storedHandles = this.store.pipeline(() => {
-            for (const h of holderHandleNames) {
-                this.store.getHashFromIndex(IndexNames.HANDLE, [...h][0]) as StoredHandle;
+            for (const firstHandleName of firstHandleNames) {
+                if (firstHandleName) this.store.getHashFromIndex(IndexNames.HANDLE, firstHandleName) as StoredHandle;
             }
         }) as StoredHandle[]
-        
-        holderAddresses.forEach((holderAddresses, index) => {
-            const holder = this.buildHolder(holderHandleNames[index], storedHandles[index]?.resolved_addresses.ada, [...(defaultHandles[index] ?? [])]?.[0]);
+
+        let storedHandleIndex = 0;
+        holderAddresses.forEach((holderAddress, index) => {
+            const firstHandleName = firstHandleNames[index];
+            const holderHandleNamesSet = holderHandleNames[index] ?? new Set<string>();
+            const storedHandle = firstHandleName ? storedHandles[storedHandleIndex++] : undefined;
+            if (!storedHandle?.resolved_addresses?.ada) return;
+
+            const manuallySetDefault = [...(defaultHandles[index] ?? [])]?.[0];
+            const resolvedDefault = manuallySetDefault
+                || (() => {
+                    const holderCount = holderCounts[index] ?? holderHandleNamesSet.size;
+                    if (holderCount <= 1 || holderCount > 1000) return `${firstHandleName}`;
+                    const handlesForDefault = includeHandles
+                        ? holderHandleNamesSet
+                        : (fullHolderSetsForDefault.get(holderAddress) ?? holderHandleNamesSet);
+                    return `${this.getDefaultHandle(handlesForDefault)?.name ?? firstHandleName}`;
+                })();
+
+            const holder = this.buildHolder(
+                includeHandles ? holderHandleNamesSet : new Set(firstHandleName ? [firstHandleName] : []),
+                storedHandle.resolved_addresses.ada,
+                resolvedDefault,
+                holderCounts[index] ?? holderHandleNamesSet.size,
+                includeHandles,
+                Boolean(manuallySetDefault)
+            );
             if (holder) holders.push(holder);
         });
 
