@@ -195,9 +195,9 @@ jest.mock('../repositories/handlesRepository', () => ({
                 }
             ]
         },
-        search: (_pagination: any, _query: any, textResponse = false) => {
+        search: jest.fn((_pagination: any, _query: any, textResponse = false) => {
             if (textResponse) {
-                return { searchTotal: 1, handles: ['burritos'] };
+                return { searchTotal: 999, handles: ['burritos'] };
             }
             return { searchTotal: 1, handles: [
                 {
@@ -210,7 +210,7 @@ jest.mock('../repositories/handlesRepository', () => ({
                     datum: 'a247'
                 }
             ] }
-        },
+        }),
         getHolder: (key: string) => {
             if (key !== 'nope') {
                 return {
@@ -310,6 +310,7 @@ jest.mock('../repositories/handlesRepository', () => ({
         }
     }))
 }));
+const MockedHandlesRepository = jest.requireMock('../repositories/handlesRepository').HandlesRepository as jest.Mock;
 
 
 // ['apiKeysRepo']: jest.fn().mockReturnValue({
@@ -345,6 +346,23 @@ describe('Testing Handles Routes', () => {
             expect(response.body.message).toEqual("'records_per_page' must be 250 or less");
         });
 
+        it('should allow text/plain records_per_page above 250', async () => {
+            const response = await request(app?.getServer())
+                .get('/handles?records_per_page=5000&sort=asc')
+                .set('Accept', 'text/plain');
+
+            expect(response.status).toEqual(200);
+        });
+
+        it('should throw error if text/plain records_per_page exceeds 50000', async () => {
+            const response = await request(app?.getServer())
+                .get('/handles?records_per_page=50001&sort=asc')
+                .set('Accept', 'text/plain');
+
+            expect(response.status).toEqual(400);
+            expect(response.body.message).toEqual("'records_per_page' must be 50000 or less");
+        });
+
         it('should throw error if sort is invalid', async () => {
             const response = await request(app?.getServer()).get('/handles?records_per_page=1&sort=hmm');
 
@@ -364,7 +382,17 @@ describe('Testing Handles Routes', () => {
 
             expect(response.status).toEqual(200);
             expect(response.text).toEqual('burritos');
-            expect(response.headers['x-handles-search-total']).toEqual('1');
+            expect(response.headers['x-handles-search-total']).toEqual('999');
+        });
+
+        it('should default text/plain records_per_page to 50000', async () => {
+            const response = await request(app?.getServer()).get('/handles?sort=asc').set('Accept', 'text/plain');
+
+            expect(response.status).toEqual(200);
+            const repoInstance = MockedHandlesRepository.mock.results.at(-1)?.value;
+            const [pagination, , namesOnly] = repoInstance.search.mock.calls.at(-1);
+            expect(pagination).toEqual(expect.objectContaining({ handlesPerPage: 50000 }));
+            expect(namesOnly).toBe(true);
         });
 
         it('should throw error if characters is invalid', async () => {
@@ -430,6 +458,27 @@ describe('Testing Handles Routes', () => {
             expect(response.body.message).toEqual("'records_per_page' must be 250 or less");
         });
 
+        it('should allow text/plain records_per_page above 250', async () => {
+            const response = await request(app?.getServer())
+                .post('/handles/list?records_per_page=5000&sort=asc')
+                .set('Accept', 'text/plain')
+                .set('Content-Type', 'application/json')
+                .send(['burritos']);
+
+            expect(response.status).toEqual(200);
+        });
+
+        it('should throw error if text/plain records_per_page exceeds 50000', async () => {
+            const response = await request(app?.getServer())
+                .post('/handles/list?records_per_page=50001&sort=asc')
+                .set('Accept', 'text/plain')
+                .set('Content-Type', 'application/json')
+                .send(['burritos']);
+
+            expect(response.status).toEqual(400);
+            expect(response.body.message).toEqual("'records_per_page' must be 50000 or less");
+        });
+
         it('should throw error if sort is invalid', async () => {
             const response = await request(app?.getServer()).post('/handles/list?records_per_page=1&sort=hmm');
 
@@ -470,7 +519,21 @@ describe('Testing Handles Routes', () => {
 
             expect(response.status).toEqual(200);
             expect(response.text).toEqual('burritos');
-            expect(response.headers['x-handles-search-total']).toEqual('1');
+            expect(response.headers['x-handles-search-total']).toEqual('999');
+        });
+
+        it('should default text/plain list records_per_page to 50000', async () => {
+            const response = await request(app?.getServer())
+                .post('/handles/list?sort=asc')
+                .set('Accept', 'text/plain')
+                .set('Content-Type', 'application/json')
+                .send(['burritos']);
+
+            expect(response.status).toEqual(200);
+            const repoInstance = MockedHandlesRepository.mock.results.at(-1)?.value;
+            const [pagination, , namesOnly] = repoInstance.search.mock.calls.at(-1);
+            expect(pagination).toEqual(expect.objectContaining({ handlesPerPage: 50000 }));
+            expect(namesOnly).toBe(true);
         });
 
         it('should support all list type conversion branches', async () => {

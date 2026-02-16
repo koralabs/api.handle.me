@@ -1,5 +1,6 @@
 import { Logger } from '@koralabs/kora-labs-common';
 import fs from 'fs';
+import request from 'supertest';
 import App from './app';
 import { DynamicLoadType } from './interfaces/util.interface';
 import { HandlesRepository } from './repositories/handlesRepository';
@@ -103,6 +104,20 @@ describe('App lifecycle', () => {
         const result = await app.lambda();
 
         expect(result).toBe(app);
+    });
+
+    it.each(['gzip', 'br'])('compresses large responses when %s is requested', async (encoding) => {
+        const app = new App();
+        await app.initialize();
+        app.getServer().get('/compression-test', (_req, res) => {
+            res.type('text/plain').send('x'.repeat(4096));
+        });
+
+        const response = await request(app.getServer())
+            .get('/compression-test')
+            .set('Accept-Encoding', encoding);
+
+        expect(response.headers['content-encoding']).toBe(encoding);
     });
 
     it('initializeOgmios runs readonly path with optional local lambda scanner', async () => {

@@ -23,6 +23,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - `app.ts` bootstraps Express, dynamic middleware/routes/IoC loading, and Swagger UI.
 - Routes/controllers provide read APIs over `HandlesRepository`.
 - `HandlesRepository` reads/writes indexed state in `RedisHandlesStore`.
+- API responses are compressed with Express `compression` middleware when clients send supported `Accept-Encoding` headers (for example `br` or `gzip`).
 - Scanning mode:
   - Default: Ogmios WebSocket scanner (`services/ogmios/ogmios.service.ts`)
   - Optional local fallback in dev/test: scanner lambda loop (`USE_LAMBDA_SCANNER=true`)
@@ -98,9 +99,10 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - Handles endpoints support:
   - `search`, `characters`, `length`, `rarity`, `numeric_modifiers`, `og`, `personalized`, `handle_type`, `holder_address`
   - pagination via `records_per_page` + `page` OR `slot_number`
-  - `records_per_page` maximum is `250`
+  - `records_per_page` maximum is `250` for `application/json` and `50000` for `text/plain` on `/handles` and `/handles/list`
+  - default page size is `100` for `application/json` and `50000` for `text/plain`
 - Content negotiation:
-  - `Accept: text/plain` returns newline-delimited handle names
+  - `Accept: text/plain` returns newline-delimited handle names and supports pagination
   - `Accept: application/json` returns JSON objects
 
 ## Rate Limiting and API Keys

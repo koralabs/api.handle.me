@@ -39,7 +39,7 @@ paths:
       description: Get all minted handles.
         This endpoint will return a plain text list of all Handle names if the
         `Accepts` header is set to `text/plain`. If the `Accepts` header is set
-        tp `application/json` it will return a paginated list of JSON Handle objects instead.
+        to `application/json` it will return a paginated list of JSON Handle objects instead.
       parameters:
       - name: search
         in: query
@@ -101,8 +101,8 @@ paths:
             - handle
       - name: records_per_page
         in: query
-        description: Number of Handles to return per page in paginated results. Maximum of 250.
-          Only `application/json` returns paginated results. `text/plain` always returns the full search set.
+        description: Number of Handles to return per page in paginated results. Maximum of 250 for `application/json` and 50000 for `text/plain`.
+          Both `application/json` and `text/plain` support pagination. Defaults are 100 for `application/json` and 50000 for `text/plain`.
         required: false
         schema:
           type: integer
@@ -189,7 +189,7 @@ paths:
         POST an array to match or reverse-lookup minted Handles. 
         This may be combined with the all of the search and filtering
         parameters of the `/handles` endpoint 
-        (see [/handles](#/handles/get_handles) for more information).
+        (see [/handles](#/handles/get_handles) for more information), including paginated `text/plain` responses.
       parameters:
       - name: type
         in: query

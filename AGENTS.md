@@ -9,6 +9,7 @@
 - Keep implementations minimal and readable.
 - Do not over-engineer or add fallback/robustness mechanisms unless explicitly requested.
 - Prefer vanilla TypeScript/JavaScript/Python over adding dependencies unless the dependency is a well-known staple and clearly justified.
+- Put all `@types/*` packages in `devDependencies` only, never `dependencies`.
 
 ## 3) Completion Requirements
 - A task is complete only when:

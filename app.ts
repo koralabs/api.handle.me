@@ -1,4 +1,5 @@
 import { IS_LOCAL, LogCategory, Logger } from '@koralabs/kora-labs-common';
+import compression from 'compression';
 import cors from 'cors';
 import express from 'express';
 import fs from 'fs';
@@ -65,6 +66,7 @@ class App {
 
     private initializeMiddleware() {
         this.app.use(cors({ origin: ORIGIN, credentials: CREDENTIALS }));
+        this.app.use(compression());
         this.app.use(express.text());
         this.app.use(express.json());
         this.app.use(express.urlencoded({ extended: true }));

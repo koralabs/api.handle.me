@@ -17,16 +17,16 @@ import {
 import { decodeCborToJson, DefaultTextFormat } from '@koralabs/kora-labs-common/utils/cbor';
 import { NextFunction, Request, Response } from 'express';
 import { isDatumEndpointEnabled } from '../config';
-import { MAX_PAGINATED_RESULTS } from '../config/constants';
+import { MAX_PAGINATED_RESULTS, MAX_TEXT_PLAIN_PAGINATED_RESULTS } from '../config/constants';
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandleViewModel } from '../models/view/handle.view.model';
 import { HandlesRepository } from '../repositories/handlesRepository';
 
 class HandlesController {
-    private static validateRecordsPerPage(recordsPerPage?: string): void {
+    private static validateRecordsPerPage(recordsPerPage?: string, maxRecordsPerPage = MAX_PAGINATED_RESULTS): void {
         const count = Number(recordsPerPage);
-        if (recordsPerPage && Number.isFinite(count) && count > MAX_PAGINATED_RESULTS) {
-            throw new HttpException(400, `'records_per_page' must be ${MAX_PAGINATED_RESULTS} or less`);
+        if (recordsPerPage && Number.isFinite(count) && count > maxRecordsPerPage) {
+            throw new HttpException(400, `'records_per_page' must be ${maxRecordsPerPage} or less`);
         }
     }
 
@@ -61,7 +61,10 @@ class HandlesController {
 
     public static parseQueryAndSearchHandles(req: Request<Request, {}, {}, IGetAllQueryParams>, handleRepo: HandlesRepository, handles?: ISearchBody) {
         const { records_per_page, page, characters, length, rarity, numeric_modifiers, slot_number, search: searchQuery, holder_address, og, handle_type, sort, personalized } = req.query;
-        HandlesController.validateRecordsPerPage(records_per_page);
+        const namesOnly = req.headers?.accept?.startsWith('text/plain') ?? false;
+        const maxRecordsPerPage = namesOnly ? MAX_TEXT_PLAIN_PAGINATED_RESULTS : MAX_PAGINATED_RESULTS;
+        HandlesController.validateRecordsPerPage(records_per_page, maxRecordsPerPage);
+        const effectiveRecordsPerPage = records_per_page ?? (namesOnly ? `${MAX_TEXT_PLAIN_PAGINATED_RESULTS}` : undefined);
 
         const search = new HandleSearchModel({
             characters,
@@ -76,14 +79,19 @@ class HandlesController {
             handles
         });
 
+        const recordsPerPageAsNumber = Number(effectiveRecordsPerPage);
+        const bypassCommonLimitForTextResponses = namesOnly && Number.isFinite(recordsPerPageAsNumber) && recordsPerPageAsNumber > 1000;
         const pagination = new HandlePaginationModel({
             page,
             sort,
-            handlesPerPage: records_per_page,
+            handlesPerPage: bypassCommonLimitForTextResponses ? undefined : effectiveRecordsPerPage,
             slotNumber: slot_number
         });
+        if (bypassCommonLimitForTextResponses) {
+            pagination.handlesPerPage = recordsPerPageAsNumber;
+        }
 
-        return handleRepo.search(isEmptyObject(pagination) ? undefined : pagination, isEmptyObject(search) ? undefined : search, req.headers?.accept?.startsWith('text/plain'));
+        return handleRepo.search(isEmptyObject(pagination) ? undefined : pagination, isEmptyObject(search) ? undefined : search, namesOnly);
     }
 
     public async getAll (req: Request<Request, {}, {}, IGetAllQueryParams>, res: Response, next: NextFunction): Promise<void> {
@@ -95,7 +103,7 @@ class HandlesController {
             if (req.headers?.accept?.startsWith('text/plain')) {
                 const handleNames = handles.handles as string[];
                 res.set('Content-Type', 'text/plain; charset=utf-8');
-                res.set('x-handles-search-total', handleNames.length.toString());
+                res.set('x-handles-search-total', handles.searchTotal.toString());
                 res.status(handleRepo.currentHttpStatus()).send(handleNames.join('\n'));
                 return;
             }
@@ -116,7 +124,7 @@ class HandlesController {
         if (req.headers?.accept?.startsWith('text/plain')) {
             const handles = handleSearchResults.handles;
             res.set('Content-Type', 'text/plain; charset=utf-8');
-            res.set('x-handles-search-total', handles.length.toString());
+            res.set('x-handles-search-total', handleSearchResults.searchTotal.toString());
             res.status(handleRepo.currentHttpStatus()).send(handles.join('\n'));
             return;
         }

@@ -187,10 +187,6 @@ export class HandlesRepository {
         handleNames = handleNames.filter((name) => (!searchModel?.handles || searchModel?.handles.includes(name)) && checkSearch(name, searchModel?.search))
         const searchTotal = handleNames.length;
 
-        if (namesOnly) {
-            return { searchTotal, handles: handleNames ?? [] };
-        }
-
         const isUnfilteredPaginatedSearch = filtered.length === 0 && !searchModel?.search && !searchModel?.handles?.length && !pagination?.slotNumber && pagination?.sort !== 'random';
         if (isUnfilteredPaginatedSearch) {
             const { handleCount } = this.store.getMetrics();
@@ -202,6 +198,9 @@ export class HandlesRepository {
                     orderBy: sortOrder,
                     limit: { offset: startIndex, count: pagination?.handlesPerPage ?? 100 }
                 }) as string[];
+                if (namesOnly) {
+                    return { searchTotal: searchTotalFromMetrics, handles: pageHandleNames.map((name) => `${name}`) };
+                }
                 handles = (this.store.pipeline(() => {
                     for (const h of pageHandleNames) {
                         this.store.getHashFromIndex(IndexNames.HANDLE, h);
@@ -272,6 +271,9 @@ export class HandlesRepository {
     
         const startIndex = ((pagination?.page ?? 1) - 1) * (pagination?.handlesPerPage ?? 100);
         handleNames = handleNames.slice(startIndex, startIndex + (pagination?.handlesPerPage ?? 100));
+        if (namesOnly) {
+            return { searchTotal, handles: (handleNames ?? []).map((name) => `${name}`) };
+        }
 
         handles = (this.store.pipeline(() => {
             for (const h of handleNames) {

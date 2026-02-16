@@ -140,7 +140,8 @@ describe('HandlesRepository query e2e', () => {
 
     it('supports names-only output, random sort, and slot-range boundary short-circuits', () => {
         const namesOnly = repo.search(new HandlePaginationModel({ sort: 'random', handlesPerPage: '3' }), new HandleSearchModel(), true);
-        expect(namesOnly.searchTotal).toBeGreaterThan(0);
+        expect(namesOnly.searchTotal).toBe(4);
+        expect(namesOnly.handles).toHaveLength(3);
         expect(namesOnly.handles.every((name) => typeof name === 'string')).toBe(true);
 
         const noRangeMatches = repo.search(new HandlePaginationModel(), new HandleSearchModel({ length: '27-28' }), true);
