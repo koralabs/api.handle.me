@@ -1,4 +1,3 @@
-import { IApiMetricsViewModel } from '@koralabs/kora-labs-common';
 import request from 'supertest';
 import App from '../app';
 
@@ -24,7 +23,7 @@ jest.mock('../ioc/main.registry', () => ({
             return ['burritos', 'tacos', 'barbacoa'];
         },
         getHandleStats: () => {
-            const stats: IApiMetricsViewModel = {
+            const stats = {
                 percentage_complete: '',
                 current_memory_used: 0,
                 memory_size: 0,

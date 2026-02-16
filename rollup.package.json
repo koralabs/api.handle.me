@@ -8,14 +8,15 @@
     "license": "Mozilla Public License 2.0",
     "type": "module",
     "module": "esnext",
-    "scripts": {
+    "scripts": {      
+      "stop:forever": "forever stop express.js",
       "start:forever": "mkdir -p forever && forever -p ./forever --minUptime 1 start express.js",
-      "forever:list": "forever list",
-      "stop:forever": "forever stopall"
+      "forever:list": "forever list"
     },
     "dependencies": {
       "forever": "^4.0.3",
-      "swagger-ui-express": "^4.5.0"
+      "swagger-ui-express": "^4.5.0",
+      "@valkey/valkey-glide": "^2.0.1"
     }
 }
   

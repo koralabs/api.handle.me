@@ -5,20 +5,19 @@ import {
     HandlePaginationModel, HandleSearchModel,
     HandleType,
     IGetAllQueryParams, IGetHandleRequest,
-    IReferenceToken,
     ISearchBody,
     isEmpty,
+    isEmptyObject,
     parseAssetNameLabel,
     ProtectedWords,
-    StoredHandle
+    StoredHandle,
+    UTxO
 } from '@koralabs/kora-labs-common';
 import { decodeCborToJson, DefaultTextFormat } from '@koralabs/kora-labs-common/utils/cbor';
 import { NextFunction, Request, Response } from 'express';
 import { isDatumEndpointEnabled } from '../config';
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandleViewModel } from '../models/view/handle.view.model';
-import { HandleReferenceTokenViewModel } from '../models/view/handleReferenceToken.view.model';
-import { PersonalizedHandleViewModel } from '../models/view/personalizedHandle.view.model';
 import { HandlesRepository } from '../repositories/handlesRepository';
 
 class HandlesController {
@@ -49,7 +48,7 @@ class HandlesController {
             return { code: 404, message: 'Handle not found', handle };
         }
         return { code: handleRepo.currentHttpStatus(), message: null, handle };
-    };
+    }
 
     public static parseQueryAndSearchHandles(req: Request<Request, {}, {}, IGetAllQueryParams>, handleRepo: HandlesRepository, handles?: ISearchBody) {
         const { records_per_page, page, characters, length, rarity, numeric_modifiers, slot_number, search: searchQuery, holder_address, og, handle_type, sort, personalized } = req.query;
@@ -74,7 +73,7 @@ class HandlesController {
             slotNumber: slot_number
         });
 
-        return handleRepo.search(pagination, search, req.headers?.accept?.startsWith('text/plain'));
+        return handleRepo.search(isEmptyObject(pagination) ? undefined : pagination, isEmptyObject(search) ? undefined : search, req.headers?.accept?.startsWith('text/plain'));
     }
 
     public async getAll (req: Request<Request, {}, {}, IGetAllQueryParams>, res: Response, next: NextFunction): Promise<void> {
@@ -84,7 +83,7 @@ class HandlesController {
             const handles = HandlesController.parseQueryAndSearchHandles(req, handleRepo);
 
             if (req.headers?.accept?.startsWith('text/plain')) {
-                const handleNames = handles.handles.map(h => h.name);
+                const handleNames = handles.handles as string[];
                 res.set('Content-Type', 'text/plain; charset=utf-8');
                 res.set('x-handles-search-total', handleNames.length.toString());
                 res.status(handleRepo.currentHttpStatus()).send(handleNames.join('\n'));
@@ -93,11 +92,11 @@ class HandlesController {
 
             res.set('x-handles-search-total', handles.searchTotal.toString())
                 .status(handleRepo.currentHttpStatus())
-                .json(handles.handles.filter((handle: StoredHandle) => !!handle.utxo).map((handle: StoredHandle) => new HandleViewModel(handle)));
+                .json((handles.handles as StoredHandle[]).filter((handle: StoredHandle) => !!handle.utxo).map((handle: StoredHandle) => new HandleViewModel(handle)));
         } catch (error) {
             next(error);
         }
-    };
+    }
 
     private static async _searchFromList (req: Request<Request, {}, ISearchBody, IGetAllQueryParams>, res: Response, next: NextFunction, handles?: ISearchBody): Promise<void> {
         const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
@@ -105,14 +104,14 @@ class HandlesController {
 
         
         if (req.headers?.accept?.startsWith('text/plain')) {
-            const handles = handleSearchResults.handles.map(h => h.name);
+            const handles = handleSearchResults.handles;
             res.set('Content-Type', 'text/plain; charset=utf-8');
             res.set('x-handles-search-total', handles.length.toString());
             res.status(handleRepo.currentHttpStatus()).send(handles.join('\n'));
             return;
         }
 
-        const handlesViewModel = handleSearchResults.handles.filter((handle: StoredHandle) => !!handle.utxo).map((handle: StoredHandle) => new HandleViewModel(handle));
+        const handlesViewModel = (handleSearchResults.handles as StoredHandle[]).filter((handle: StoredHandle) => !!handle.utxo).map((handle: StoredHandle) => new HandleViewModel(handle));
 
         res.set('x-handles-search-total', `${handlesViewModel.length}`).status(handleRepo.currentHttpStatus()).json(handlesViewModel);
     }
@@ -151,7 +150,7 @@ class HandlesController {
         } catch (error) {
             next(error);
         }
-    };
+    }
 
     public async getHandle (req: Request<IGetHandleRequest, {}, {}>, res: Response, next: NextFunction): Promise<void> {
         try {
@@ -160,7 +159,7 @@ class HandlesController {
         } catch (error) {
             next(error);
         }
-    };
+    }
 
     public async getPersonalizedHandle(req: Request<IGetHandleRequest, {}, {}>, res: Response, next: NextFunction) {
         try {
@@ -168,10 +167,7 @@ class HandlesController {
             const handle = await HandlesController.getHandleFromRepo(req);
 
             if (handle.code == 200 || handle.code == 202 ) {
-                handle.handle!.personalization =  await handleRepo.getPersonalization(handle.handle)
-
-                const { personalization } = new PersonalizedHandleViewModel(handle.handle);
-            
+                const personalization =  await handleRepo.getPersonalization(handle.handle);  
                 if (!personalization) {
                     res.status(handle.code).json({});
                     return;
@@ -186,16 +182,19 @@ class HandlesController {
         }
     }
 
-    private static async buildHandleReferenceToken(req: Request<IGetHandleRequest, {}, {}>): Promise<{ reference_token?: IReferenceToken; code: number }> {
+    private static async buildHandleReferenceToken(req: Request<IGetHandleRequest, {}, {}>): Promise<{ reference_token?: UTxO; code: number }> {
         const handleData = await HandlesController.getHandleFromRepo(req);
 
-        const { reference_token } = new HandleReferenceTokenViewModel(handleData.handle);
-
-        if (!reference_token) {
-            return { code: handleData.code };
+        if (handleData.handle?.reference_utxo) {
+            const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
+            const refUtxo = handleRepo.getUTxO(handleData.handle?.reference_utxo)
+            if (refUtxo) {
+                const reference_token = new UTxO(refUtxo);
+                return { reference_token, code: handleData.code };
+            }
         }
 
-        return { reference_token, code: handleData.code };
+        return { code: handleData.code };
     }
 
     public async getPersonalizationUTxO(req: Request<IGetHandleRequest, {}, {}>, res: Response, next: NextFunction) {
@@ -233,6 +232,7 @@ class HandlesController {
                     datum = await decodeCborToJson({ cborString: datum, schema: {}, defaultKeyType: req.query.default_key_type as DefaultTextFormat });
                 } catch {
                     res.status(400).send({ message: 'Unable to decode datum to json' });
+                    return;
                 }
             }
 
@@ -311,6 +311,7 @@ class HandlesController {
 
     public async getSubHandleSettings(req: Request<IGetHandleRequest, {}, {}>, res: Response, next: NextFunction) {
         try {
+            const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
             const { handle, code } = await HandlesController.getHandleFromRepo(req);
 
             if (!handle) {
@@ -318,15 +319,21 @@ class HandlesController {
                 return;
             }
 
-            if (!handle.subhandle_settings) {
+            if (!handle.subhandle_settings || !handle.subhandle_settings.utxo_id) {
                 res.status(404).send({ message: 'SubHandle settings not found' });
                 return;
             }
 
-            if (req.headers?.accept?.startsWith('text/plain')) {
-                res.set('Content-Type', 'text/plain; charset=utf-8');
-                res.status(code).send(handle.subhandle_settings.utxo.datum);
-                return;
+            const utxo = handleRepo.getUTxO(handle.subhandle_settings.utxo_id); 
+            if (utxo) {
+                const subHandleSettingsUTxO = new UTxO(utxo);
+                handle.subhandle_settings.utxo = subHandleSettingsUTxO;
+
+                if (req.headers?.accept?.startsWith('text/plain')) {
+                    res.set('Content-Type', 'text/plain; charset=utf-8');
+                    res.status(code).send(handle.subhandle_settings.utxo.datum);
+                    return;
+                }
             }
 
             res.status(code).json(handle.subhandle_settings);
@@ -343,10 +350,19 @@ class HandlesController {
                 res.status(404).send({ message: 'Handle not found' });
                 return;
             }
-            if (!handle.handle.subhandle_settings?.utxo) {
+            if (!handle.handle.subhandle_settings?.utxo_id) {
                 res.status(404).send({ message: 'SubHandle settings not found' });
                 return;
             }
+
+            const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
+            const utxo = handleRepo.getUTxO(handle.handle.subhandle_settings.utxo_id); 
+            if (!utxo) {
+                res.status(404).send({ message: 'SubHandle settings UTxO not found' });
+                return;
+            }
+            
+            handle.handle.subhandle_settings.utxo = new UTxO(utxo);
 
             res.status(handle.code).json(handle.handle.subhandle_settings.utxo);
         } catch (error) {

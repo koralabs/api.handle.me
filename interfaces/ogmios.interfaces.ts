@@ -1,6 +1,4 @@
-import { NextBlockResponse } from '@cardano-ogmios/schema';
-import { IPersonalization, IPzDatum, IPzDatumConvertedUsingSchema } from '@koralabs/kora-labs-common';
-import { IRegistry } from './registry.interface';
+import { AssetNameLabel, IPersonalization, IPzDatum, IPzDatumConvertedUsingSchema } from '@koralabs/kora-labs-common';
 
 export enum MetadataLabel {
     'NFT' = 721,
@@ -129,8 +127,10 @@ export interface HealthResponseBody {
     startTime: string;
     lastKnownTip: {
         slot: number;
-        hash: string;
-        blockNo: number;
+        id?: string;
+        hash?: string;
+        height?: number;
+        blockNo?: number;
     };
     lastTipUpdate: string;
     networkSynchronization: number;
@@ -171,9 +171,4 @@ export interface ScannedHandleInfo {
     reference_token?: {datum: string}
 }
 
-export interface IBlockProcessor {
-    initialize: (dynamicRegistry: IRegistry) => Promise<IBlockProcessor>;
-    processBlock: (response: NextBlockResponse) => Promise<void>;
-    loadIndexes: () => Promise<void>;
-    resetIndexes: () => Promise<void>;
-}
+export interface AssetDetailsFromAssetName { name: string; ownerTokenHex: string; isCip67: boolean; assetLabel: AssetNameLabel }

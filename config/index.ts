@@ -9,7 +9,8 @@ export const {
     ORIGIN = process.env.CORS_ORIGIN || '',
     OGMIOS_HOST = 'http://localhost:1337',
     NETWORK = '',
-    DISABLE_HANDLES_SNAPSHOT = ''
+    DISABLE_HANDLES_SNAPSHOT = '',
+    WHITELISTED_API_KEYS = ''
 } = process.env;
 
 export const getIpfsGateway = (backup = false) => {

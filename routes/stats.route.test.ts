@@ -7,8 +7,8 @@ jest.mock('../repositories/handlesRepository', () => ({
     HandlesRepository: jest.fn().mockImplementation(() => ({
         getMetrics: () => {
             return {
-                total_handles: 10,
-                total_holders: 5
+                handleCount: 10,
+                holderCount: 5
             };
         },
         currentHttpStatus: () => {

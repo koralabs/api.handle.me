@@ -1,5 +1,4 @@
-import { NextBlockResponse } from '@cardano-ogmios/schema';
-import { Logger } from '@koralabs/kora-labs-common';
+import { IS_LOCAL, LogCategory, Logger } from '@koralabs/kora-labs-common';
 import cors from 'cors';
 import express from 'express';
 import fs from 'fs';
@@ -7,7 +6,6 @@ import path from 'path';
 import swaggerUi from 'swagger-ui-express';
 import { parse } from 'yaml';
 import { CREDENTIALS, NODE_ENV, ORIGIN, PORT } from './config';
-import { IBlockProcessor } from './interfaces/ogmios.interfaces';
 import { IRegistry } from './interfaces/registry.interface';
 import { DynamicLoadType } from './interfaces/util.interface';
 import errorMiddleware from './middlewares/error.middleware';
@@ -21,7 +19,7 @@ class App {
     public port: string | number;
     public startTimer: number;
     public registry: IRegistry;
-    public blockProcessors: IBlockProcessor[] = [];
+    public handlesRepo: HandlesRepository | undefined;
 
     constructor() {
         this.app = express();
@@ -40,11 +38,18 @@ class App {
 
     public async listen() {
         await this.initialize();
+        this.app.set('trust proxy', 1); 
         const server = this.app.listen(this.port, () => {
-            Logger.log(`🚀 ${this.env} app listening on port ${this.port}`);
+            Logger.log({ message: `🚀 ${this.env} app listening on port ${this.port} 🚀`, category: LogCategory.INFO, event: 'app.listen' });
         });
         server.keepAliveTimeout = 61 * 1000;
-        this.initializeOgmios();
+        await this.initializeOgmios();
+    }
+
+    public async lambda() {
+        const app = await this.initialize();
+        await this.initializeOgmios();
+        return app;
     }
 
     public async initialize() {
@@ -87,51 +92,32 @@ class App {
                     this.registry[key] = value;
                 }
             });
-
-            const processors = await dynamicallyLoad(path.resolve(`${dir}/block_processors`), DynamicLoadType.BLOCK_PROCESSOR);
-            for (let i = 0; i < processors.length; i++) {
-                const processor = processors[i] as IBlockProcessor;
-                this.blockProcessors.push(await processor.initialize(this.registry));
-            }
         }
         this.app.set('registry', this.registry);
     }
-    public async processBlock(response: NextBlockResponse) {
-        if (this.blockProcessors.length > 0) {
-            for (let i = 0; i < this.blockProcessors.length; i++) {
-                await this.blockProcessors[i].processBlock(response);
-            }
-        }
-    }
-
-    private async loadBlockProcessorIndexes() {
-        if (this.blockProcessors.length > 0) {
-            for (let i = 0; i < this.blockProcessors.length; i++) {
-                await this.blockProcessors[i].loadIndexes();
-            }
-        }
-    }
-
-    private async resetBlockProcessors() {
-        // loop through registries and clear out storage and file
-        const handlesRepo = new HandlesRepository(new this.registry.handlesStore());
-        handlesRepo.rollBackToGenesis();
-        
-        if (this.blockProcessors.length > 0) {
-            for (let i = 0; i < this.blockProcessors.length; i++) {
-                await this.blockProcessors[i].resetIndexes();
-            }
-        }
-    }
 
     private async initializeOgmios() {
-        if (this.env === 'test') {
+        const handlesRepo = new HandlesRepository(new this.registry.handlesStore());
+        if (process.env.READ_ONLY_STORE?.toLocaleLowerCase() == 'true'|| this.env === 'test') {
+            await handlesRepo.initialize();
+            
+            // If we're running local we want the scanner to replace ogmios scanning
+            if (['development', 'test'].includes(NODE_ENV) && process.env.USE_LAMBDA_SCANNER == 'true') {
+                await (async () => {
+                    const scanner = await import('./lambdas/scanner');
+                    scanner.lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
+                    setInterval(() => {
+                        Logger.local('Running scanner lambda...');
+                        scanner.lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
+                    }, 60000);
+                })();
+            }
+
             return;
         }
 
-        const handlesRepo = new HandlesRepository(new this.registry.handlesStore());
-        const ogmiosService = new OgmiosService(handlesRepo, this.processBlock.bind(this));
-        await ogmiosService.initialize(this.resetBlockProcessors.bind(this), this.loadBlockProcessorIndexes.bind(this));
+        const ogmiosService = new OgmiosService(handlesRepo);
+        await ogmiosService.initialize();
     }
 
     private initializeSwagger() {
@@ -142,10 +128,11 @@ class App {
         };
 
         try {
-            const swaggerDoc = parse(fs.readFileSync('./swagger.yml').toString());
+            const swaggerFile = IS_LOCAL ? './docs/swagger.yml' : './swagger.yml';
+            const swaggerDoc = parse(fs.readFileSync(swaggerFile).toString());
             this.app.use('/swagger', swaggerUi.serve, swaggerUi.setup(swaggerDoc, options));
         } catch (error: any) {
-            Logger.log(`Unable to load swagger with error: ${error}`);
+            Logger.log({ message: `Unable to load swagger with error: ${error?.message ?? error}`, category: LogCategory.ERROR, event: 'app.swagger.load' });
         }
     }
 }

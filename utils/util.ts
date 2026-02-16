@@ -1,4 +1,4 @@
-import { getElapsedTime, Logger, StoredHandle } from '@koralabs/kora-labs-common';
+import { getElapsedTime, isNumeric, Logger, StoredHandle } from '@koralabs/kora-labs-common';
 import fs from 'fs';
 import { DynamicLoadType } from '../interfaces/util.interface';
 
@@ -33,6 +33,10 @@ export const dynamicallyLoad = async (folderPath: string, type: DynamicLoadType)
     );
 };
 
+/**************************************
+ This debugLog doesn't need to conform to Logger.log/local requirements
+ Treat is as an exception
+***************************************/
 export const debugLog = (msg: string, blockSlot: number, handle?: StoredHandle | null) => {
     console.log('**************************************************************');
     console.log(msg);
@@ -46,3 +50,7 @@ export const debugLog = (msg: string, blockSlot: number, handle?: StoredHandle |
     });
     console.log('______________________________________________________________');
 }
+
+// JEST CUSTOM MATCHERS
+export const numericString = (v:any) => ({ asymmetricMatch: (x:any) => typeof x == 'string' && isNumeric(x) && parseFloat(x) == v || Object.is(x, v) });
+export const nullishOr = (v:any) => ({ asymmetricMatch: (x:any) => x == null || x == undefined || x === '' || Object.is(x, v) });

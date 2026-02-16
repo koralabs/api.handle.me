@@ -1,7 +1,7 @@
 import HoldersController from '../controllers/holders.controller';
 import BaseRoute from './base';
 
-class HandlesRoute extends BaseRoute {
+class HoldersRoute extends BaseRoute {
     public path = '/holders';
     public holdersController = new HoldersController();
 
@@ -16,4 +16,4 @@ class HandlesRoute extends BaseRoute {
     }
 }
 
-export default HandlesRoute;
+export default HoldersRoute;

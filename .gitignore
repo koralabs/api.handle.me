@@ -119,8 +119,12 @@ preview
 mainnet-node.ip
 preprod-node.ip
 preview-node.ip
-scripts/localHandles.json
+*localHandles.json
 .gitignore
-scripts/discrepancies.json
-scripts/liveHandles.json
+*discrepancies.json
+*liveHandles.json
 tmp
+handles_utxos.json
+handles_utxos.gz
+.tmp_*.ts
+build

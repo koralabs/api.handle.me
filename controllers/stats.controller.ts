@@ -6,7 +6,12 @@ class StatsController {
     public async index (req: Request<Request>, res: Response, next: NextFunction): Promise<void> {
         try {
             const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
-            res.status(handleRepo.currentHttpStatus()).json(handleRepo.getMetrics());
+            const metrics = handleRepo.getMetrics();
+            const stats = {
+                total_handles: metrics.handleCount ?? 0,
+                total_holders: metrics.holderCount ?? 0
+            }
+            res.status(handleRepo.currentHttpStatus()).json(stats);
         } catch (error) {
             next(error);
         }

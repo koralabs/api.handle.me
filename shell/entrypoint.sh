@@ -14,9 +14,19 @@ DISABLE_NODE_SNAPSHOT=${DISABLE_NODE_SNAPSHOT:-false}
 MODE=${MODE:-all}
 NODE_DB=${NODE_DB:-'/db'}
 SOCKET_PATH=${SOCKET_PATH:-'/ipc/node.socket'}
+CARDANO_NODE_PATH=${CARDANO_NODE_PATH:-'./cardano-node'}
+NODE_CONFIG_PATH=${NODE_CONFIG_PATH:-"./${NETWORK}"}
+CARDANO_NODE_PID=""
+mkdir -p "$(dirname "$SOCKET_PATH")"
 
 function cleanup {
-  kill -INT $(pidof cardano-node)
+  if [[ -n "${CARDANO_NODE_PID}" ]] && kill -0 "${CARDANO_NODE_PID}" 2>/dev/null; then
+    echo "Stopping cardano-node with SIGINT..."
+    kill -INT "${CARDANO_NODE_PID}" || true
+    wait "${CARDANO_NODE_PID}" || true
+    echo "  ...CARDANO-NODE STOPPED"
+  fi
+  exit 0
 }
 
 if [[ "$@" != *"--host"* ]]
@@ -25,7 +35,7 @@ then
 fi
 if [[ "$@" != *"--node-config"* ]]
 then
-    NODE_CONFIG="--node-config ./${NETWORK}/config.json"
+    NODE_CONFIG="--node-config ${NODE_CONFIG_PATH}/config.json"
 fi
 if [[ "$@" != *"--node-socket"* ]]
 then
@@ -34,23 +44,26 @@ fi
 
 if [[ "${MODE}" == "ogmios" || "${MODE}" == "both" || "${MODE}" == "all" ]]; then
     # --include-transaction-cbor
-    ogmios $HOST $NODE_CONFIG $NODE_SOCKET $@ &
+    echo "STARTING OGMIOS..."
+    ogmios --log-level Error $HOST $NODE_CONFIG $NODE_SOCKET $@ &
     ogmios_status=$?
 
     if [ $ogmios_status -ne 0 ]; then
         echo "Failed to start ogmios: $ogmios_status"
         exit $ogmios_status
     fi
+    echo "  ...OGMIOS RUNNING"
 fi
 
 if [[ "${MODE}" == "ogmios" || "${MODE}" == "all" || "${MODE}" == "api-only" ]]; then
-    source ~/.nvm/nvm.sh
+    echo "STARTING API..."
+    source ${HOME:-'~'}/.nvm/nvm.sh
     export TMPDIR=/tmp
     nvm use 21
-    sed -i 's https://api.handle.me http://localhost:3141 ' /app/swagger.yml
+    sed -i 's https://api.handle.me http://localhost:3141 ' swagger.yml
     sleep 5
     NODE_ENV=${NODE_ENV:-production} NETWORK=${NETWORK} OGMIOS_HOST=${OGMIOS_HOST} DISABLE_HANDLES_SNAPSHOT=${DISABLE_HANDLES_SNAPSHOT:-false} npm run start:forever
-    tail -f ./forever/**.log
+    echo "  ...API RUNNING"
 fi
 
 release_host() {
@@ -58,17 +71,23 @@ release_host() {
         preprod | mainnet)
             echo -n "release-${NETWORK}";;
         preview)
-            echo -n "testing-preview";;
+            echo -n "pre-release-preview";;
     esac
 }
 export RELEASE_HOST=$(release_host)
 
 if [[ "${MODE}" == "cardano-node" || "${MODE}" == "both" || "${MODE}" == "all" ]]; then
-    if [ ! "${DISABLE_NODE_SNAPSHOT}" == "true" ]; then
-        rm -rf ${NODE_DB}
-        mkdir -p ${NODE_DB}
+    echo "STARTING CARDANO-NODE..."
+    if [[ -d "${NODE_DB}/immutable" ]]; then
+        echo "Previous Cardano database found. Continuing scan."
+    elif [[ "${DISABLE_NODE_SNAPSHOT}" == "true" ]]; then
+        mkdir -p "${NODE_DB}"
+        echo "No previous Cardano database found. Starting from origin."
+    else
+        rm -rf "${NODE_DB}"
+        mkdir -p "${NODE_DB}"
         echo "Grabbing latest snapshot with Mithril."
-        MITHRIL_VERSION=2524.0
+        MITHRIL_VERSION=2603.1
         curl -fsSL https://github.com/input-output-hk/mithril/releases/download/${MITHRIL_VERSION}/mithril-${MITHRIL_VERSION}-linux-x64.tar.gz | tar -xz
         export AGGREGATOR_ENDPOINT=https://aggregator.${RELEASE_HOST}.api.mithril.network/aggregator
         export GENESIS_VERIFICATION_KEY=$(curl https://raw.githubusercontent.com/input-output-hk/mithril/main/mithril-infra/configuration/${RELEASE_HOST}/genesis.vkey)
@@ -76,23 +95,28 @@ if [[ "${MODE}" == "cardano-node" || "${MODE}" == "both" || "${MODE}" == "all" ]
         export DIGEST=latest
         chmod +x ./mithril-client
         #curl -o - $(./mithril-client cardano-db snapshot show --json $SNAPSHOT_DIGEST | jq -r '.locations[0]') | tar --use-compress-program=unzstd -x -C ${NODE_DB}
-        ./mithril-client cardano-db download --download-dir ${NODE_DB%db} --include-ancillary $DIGEST
+        if [[ "${NODE_DB%db}" == "" ]]; then
+            ./mithril-client cardano-db download --include-ancillary $DIGEST
+        else
+            ./mithril-client cardano-db download --download-dir "${NODE_DB%db}" --include-ancillary $DIGEST
+        fi
         echo "Mithril snapshot downloaded and validated."
     fi
     
-    trap cleanup INT TERM KILL QUIT ABRT
+    trap cleanup INT TERM QUIT ABRT
     echo "Starting cardano-node."
 
     # Workaround for Mithril not outputting the protocolMagicId
-    cat ./${NETWORK}/shelley-genesis.json | jq -r .networkMagic > ${NODE_DB}/protocolMagicId
+    cat ${NODE_CONFIG_PATH}/shelley-genesis.json | jq -r .networkMagic > ${NODE_DB}/protocolMagicId
 
-    exec ./cardano-node run \
-        --config ./${NETWORK}/config.json \
-        --topology ./${NETWORK}/topology.json \
+    ${CARDANO_NODE_PATH} run \
+        --config ${NODE_CONFIG_PATH}/config.json \
+        --topology ${NODE_CONFIG_PATH}/topology.json \
         --database-path ${NODE_DB} \
         --port 3000 \
         --host-addr 0.0.0.0 \
         --socket-path ${SOCKET_PATH} &
+    CARDANO_NODE_PID=$!
 
     if [[ "${ENABLE_SOCKET_REDIRECT}" == "true" ]]; then
         until [ -S ${SOCKET_PATH} ]
@@ -100,9 +124,11 @@ if [[ "${MODE}" == "cardano-node" || "${MODE}" == "both" || "${MODE}" == "all" ]
             sleep 1
         done
         echo "Found! ${SOCKET_PATH}"
-        # CHANGE THIS TO S3
-        curl ${ECS_CONTAINER_METADATA_URI_V4} | jq -r .Networks[0].IPv4Addresses[0] > /mnt/efs/cardano/${NETWORK}/cardano-node.ip
-        socat TCP-LISTEN:4001,reuseaddr,fork UNIX-CONNECT:${SOCKET_PATH}
+        socat TCP-LISTEN:4001,reuseaddr,fork UNIX-CONNECT:${SOCKET_PATH} &
     fi
+    echo "  ...CARDANO-NODE RUNNING"
+fi
+if [[ "${MODE}" == "ogmios" || "${MODE}" == "all" || "${MODE}" == "api-only" ]]; then
+    tail -f ./forever/**.log
 fi
 wait

@@ -1,8 +1,9 @@
+import { Metadatum, Transaction } from '@cardano-ogmios/schema';
 import { AssetNameLabel, checkNameLabel, LogCategory, Logger } from '@koralabs/kora-labs-common';
 import fetch from 'cross-fetch';
 import v8 from 'v8';
 import { NODE_ENV, OGMIOS_HOST } from '../../../config';
-import { HealthResponseBody } from '../../../interfaces/ogmios.interfaces';
+import { AssetDetailsFromAssetName, HealthResponseBody } from '../../../interfaces/ogmios.interfaces';
 
 const parseCborObject = (value: any) => {
     const lastKey = Object.keys(value).pop();
@@ -59,36 +60,46 @@ export const buildOnChainObject = <T>(cborData: any): T | null => {
         const stringifiedMetadata = parseCborObject(cborData);
         return JSON.parse(stringifiedMetadata) as T;
     } catch (error: any) {
-        Logger.log(`Error building metadata: ${error.message}`);
+        Logger.log({ message: `Error building metadata: ${error.message}`, category: LogCategory.ERROR, event: 'buildOnChainObject' });
         return null;
     }
 };
 
-export const getHandleNameFromAssetName = (asset: string): { name: string; handleHex: string, isCip67: boolean, assetLabel: AssetNameLabel } => {
-    let handleHex = `${asset}`;
-    
+export const getHandleNameFromAssetName = (asset: string): AssetDetailsFromAssetName => {
+    let ownerTokenHex = `${asset}`;
+
     // check if asset name has a period. If so, it includes the policyId
-    if (handleHex.includes('.')) {
-        handleHex = handleHex.split('.')[1];
+    if (ownerTokenHex.includes('.')) {
+        ownerTokenHex = ownerTokenHex.split('.')[1];
     }
-    const {isCip67, name, assetLabel} = checkNameLabel(handleHex)
+    const { isCip67, name, assetLabel } = checkNameLabel(ownerTokenHex);
     if (isCip67) {
         // We need to return the hex of the associated Handle (not the current asset being processed)
-        handleHex = `${assetLabel == AssetNameLabel.LBL_000 ? AssetNameLabel.LBL_000 : AssetNameLabel.LBL_222}${handleHex.replace(assetLabel ?? '', '')}`
+        ownerTokenHex = `${assetLabel == AssetNameLabel.LBL_000 ? AssetNameLabel.LBL_000 : AssetNameLabel.LBL_222}${ownerTokenHex.replace(assetLabel ?? '', '')}`;
     }
 
     return {
         name,
-        handleHex,
+        ownerTokenHex,
         isCip67,
         assetLabel
     };
 };
 
-export const fetchHealth = async (): Promise<HealthResponseBody | null> => {
+export const fetchHealth = async (host = OGMIOS_HOST): Promise<HealthResponseBody | null> => {
     let ogmiosResults = null;
     try {
-        const ogmiosResponse = await fetch(`${OGMIOS_HOST}/health`);
+        const healthUrl = new URL(host);
+        if (healthUrl.protocol === 'ws:') {
+            healthUrl.protocol = 'http:';
+        } else if (healthUrl.protocol === 'wss:') {
+            healthUrl.protocol = 'https:';
+        }
+        healthUrl.pathname = '/health';
+        healthUrl.search = '';
+        healthUrl.hash = '';
+
+        const ogmiosResponse = await fetch(healthUrl.toString());
         ogmiosResults = await ogmiosResponse.json();
     } catch (error: any) {
         Logger.log({ message: error.message, category: LogCategory.ERROR, event: 'fetchOgmiosHealth.error' });
@@ -121,4 +132,33 @@ export const memoryWatcher = () => {
 
         if (canExitProcess()) process.exit(1);
     }
+};
+
+export const buildOgmiosTransaction = (t: any) => {
+    const tx: Transaction = {
+        mint: t.assets_minted.reduce((acc: any, a: any) => {
+            (acc[a.policy_id] ??= {})[a.asset_name] = BigInt(a.quantity);
+            return acc;
+        }, {}),
+        id: t.tx_hash,
+        spends: 'inputs',
+        inputs: [],
+        outputs: t.outputs.map((o: any) => {
+            return {
+                address: o.payment_addr.bech32,
+                value: {
+                    ada: { lovelace: BigInt(o.value) },
+                    ...o.asset_list?.reduce((acc: any, a: any) => {
+                        (acc[a.policy_id] ??= {})[a.asset_name] = BigInt(a.quantity);
+                        return acc;
+                    }, {})
+                },
+                datum: o.inline_datum?.bytes,
+                script: o.reference_script ?? undefined
+            };
+        }),
+        signatories: [],
+        metadata: { hash: '', labels: Object.fromEntries(Object.entries(t.metadata ?? {}).map(([label, value]) => [label, { json: value as Metadatum }])) }
+    };
+    return tx;
 };

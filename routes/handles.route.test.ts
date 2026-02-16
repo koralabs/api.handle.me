@@ -11,7 +11,10 @@ jest.mock('../repositories/handlesRepository', () => ({
         buildPersonalization: () => {
             return {}
         },
-        getPersonalization:() => {
+        getPersonalization: (handle: { name?: string }) => {
+            if (handle?.name === 'no-personalization') {
+                return null;
+            }
             return {
                     p: 'z',
                     reference_token: {
@@ -42,6 +45,16 @@ jest.mock('../repositories/handlesRepository', () => ({
                     policy: 'f0ff'
                 };
             }
+            if (handleName === 'no-personalization') {
+                return {
+                    name: handleName,
+                    utxo: 'utxo#0',
+                    policy: 'f0ff',
+                    resolved_addresses: {
+                        ada: 'addr1'
+                    }
+                };
+            }
 
             if (handleName === 'nope@handle') {
                 return null;
@@ -50,7 +63,8 @@ jest.mock('../repositories/handlesRepository', () => ({
                 return {
                     name: handleName,
                     subhandle_settings:{
-                        utxo: {datum:'9f9f01019f9f011a0bebc200ff9f021a05f5e100ff9f031a02faf080ffffa14862675f696d61676540ff9f01019f9f011a01312d00ffffa14862675f696d61676540ff000000581a687474703a2f2f6c6f63616c686f73743a333030372f23746f75005839004988cad9aa1ebd733b165695cfef965fda2ee42dab2d8584c43b039c96f91da5bdb192de2415d3e6d064aec54acee648c2c6879fad1ffda1ff'}
+                        utxo: {datum:'9f9f01019f9f011a0bebc200ff9f021a05f5e100ff9f031a02faf080ffffa14862675f696d61676540ff9f01019f9f011a01312d00ffffa14862675f696d61676540ff000000581a687474703a2f2f6c6f63616c686f73743a333030372f23746f75005839004988cad9aa1ebd733b165695cfef965fda2ee42dab2d8584c43b039c96f91da5bdb192de2415d3e6d064aec54acee648c2c6879fad1ffda1ff'},
+                        utxo_id: 'tx_id_sub#0'
                     }
                 }
             }
@@ -81,8 +95,31 @@ jest.mock('../repositories/handlesRepository', () => ({
                             pz_enabled: true,
                             tier_pricing: [[1, 20000000]]
                         },
-                        utxo: { address: 'addr1_ref_token', datum: '', index: 0, lovelace: 0, script: { cbor: 'a247', type: 'plutus_v2' }, tx_id: 'tx_id' }
+                        utxo: { address: 'addr1_ref_token', datum: '', index: 0, lovelace: 0, script: { cbor: 'a247', type: 'plutus_v2' }, tx_id: 'tx_id' },
+                        utxo_id: 'tx_id_sub_2#0'
                     }                    
+                };
+            }
+
+            if (handleName === 'sub@missing-utxo') {
+                return {
+                    name: handleName,
+                    subhandle_settings: {
+                        utxo_id: 'missing_sub#0'
+                    }
+                };
+            }
+
+            if (handleName === 'cross-chain') {
+                return {
+                    name: handleName,
+                    utxo: 'utxo#0',
+                    policy: 'f0ff',
+                    resolved_addresses: {
+                        ada: 'addr1',
+                        btc: 'bc1qexample',
+                        eth: '0x1234'
+                    }
                 };
             }
 
@@ -99,6 +136,7 @@ jest.mock('../repositories/handlesRepository', () => ({
                         address: 'script_addr1'
                     }
                 },
+                reference_utxo: 'tx_id#0',
                 reference_token: {
                     tx_id: 'tx_id',
                     index: 0,
@@ -114,6 +152,36 @@ jest.mock('../repositories/handlesRepository', () => ({
                 }
             };
         },
+        getHandleByHex: (handleHex: string) => {
+            if (handleHex === Buffer.from('burritos').toString('hex')) {
+                return {
+                    name: 'burritos',
+                    utxo: 'utxo#0',
+                    policy: 'f0ff',
+                    resolved_addresses: {
+                        ada: 'addr1'
+                    }
+                };
+            }
+            return null;
+        },
+        getUTxO: (utxoId: string) => {
+            if (utxoId === 'tx_id#0' || utxoId === 'ref_token_utxo') {
+                return {
+                    tx_id: 'tx_id',
+                    index: 0,
+                    lovelace: 0,
+                    datum: '',
+                    address: 'addr1_ref_token',
+                    script: { type: 'plutus_v2', cbor: 'a247' }
+                }
+            } else if (utxoId === 'tx_id_sub#0') {
+                return {datum:'9f9f01019f9f011a0bebc200ff9f021a05f5e100ff9f031a02faf080ffffa14862675f696d61676540ff9f01019f9f011a01312d00ffffa14862675f696d61676540ff000000581a687474703a2f2f6c6f63616c686f73743a333030372f23746f75005839004988cad9aa1ebd733b165695cfef965fda2ee42dab2d8584c43b039c96f91da5bdb192de2415d3e6d064aec54acee648c2c6879fad1ffda1ff'}
+            } else if (utxoId === 'tx_id_sub_2#0') {
+                return { address: 'addr1_ref_token', datum: '', index: 0, lovelace: 0, script: { cbor: 'a247', type: 'plutus_v2' }, tx_id: 'tx_id' }
+            }
+            return null;
+        },
         getAllHandles: () => {
             return [
                 {
@@ -127,7 +195,10 @@ jest.mock('../repositories/handlesRepository', () => ({
                 }
             ]
         },
-        search: () => {
+        search: (_pagination: any, _query: any, textResponse = false) => {
+            if (textResponse) {
+                return { searchTotal: 1, handles: ['burritos'] };
+            }
             return { searchTotal: 1, handles: [
                 {
                     name: 'burritos',
@@ -165,6 +236,10 @@ jest.mock('../repositories/handlesRepository', () => ({
                 ]
             };
         },
+        getHandlesByHolderAddresses: jest.fn((handles: string[]) => handles),
+        getHandlesByStakeKeyHashes: jest.fn((handles: string[]) => handles),
+        getHandlesByPaymentKeyHashes: jest.fn((handles: string[]) => handles),
+        getHandlesByAddresses: jest.fn((handles: string[]) => handles),
         getHolderAddressDetails: (key: string) => {
             if (key === 'nope') {
                 throw new HttpException(404, 'Not found');
@@ -228,7 +303,8 @@ jest.mock('../repositories/handlesRepository', () => ({
                 tipBlockHash: '',
                 memorySize: 0,
                 networkSync: 0,
-                count: 0,
+                handleCount: 0,
+                holderCount: 0,
                 schemaVersion: 0
             }
         }
@@ -274,6 +350,14 @@ describe('Testing Handles Routes', () => {
 
             expect(response.status).toEqual(200);
             expect(response.body).toEqual([{ name: 'burritos', utxo: 'utxo#0', policy: 'f0ff' }]);
+        });
+
+        it('should return text/plain handle list when accept is text/plain', async () => {
+            const response = await request(app?.getServer()).get('/handles?records_per_page=1&sort=asc').set('Accept', 'text/plain');
+
+            expect(response.status).toEqual(200);
+            expect(response.text).toEqual('burritos');
+            expect(response.headers['x-handles-search-total']).toEqual('1');
         });
 
         it('should throw error if characters is invalid', async () => {
@@ -363,6 +447,30 @@ describe('Testing Handles Routes', () => {
             expect(response.body).toEqual([{ name: 'burritos', utxo: 'utxo#0', policy: 'f0ff' }]);
         });
 
+        it('should return text/plain handle list from list search', async () => {
+            const response = await request(app?.getServer())
+                .post('/handles/list?records_per_page=1&sort=asc')
+                .set('Accept', 'text/plain')
+                .set('Content-Type', 'application/json')
+                .send(['burritos']);
+
+            expect(response.status).toEqual(200);
+            expect(response.text).toEqual('burritos');
+            expect(response.headers['x-handles-search-total']).toEqual('1');
+        });
+
+        it('should support all list type conversion branches', async () => {
+            const queryTypes = ['bech32stake', 'holder', 'stakekeyhash', 'assetname', 'handlehex', 'paymentkeyhash', 'bech32address', 'hexaddress'];
+            for (const type of queryTypes) {
+                const response = await request(app?.getServer())
+                    .post(`/handles/list?type=${type}`)
+                    .set('Content-Type', 'application/json')
+                    .send(type === 'hexaddress' ? [] : ['6275727269746f73']);
+
+                expect(response.status).toEqual(200);
+            }
+        });
+
         it('should throw error if characters is invalid', async () => {
             const response = await request(app?.getServer()).post('/handles/list?characters=nope');
 
@@ -415,6 +523,28 @@ describe('Testing Handles Routes', () => {
             const response = await request(app?.getServer()).get('/handles/burritos');
             expect(response.status).toEqual(200);
             expect(response.body).toEqual({ name: 'burritos', resolved_addresses: { ada: 'addr1' }, utxo: 'utxo#0', policy: 'f0ff' });
+        });
+
+        it('should resolve handle by hex when hex query is true', async () => {
+            const hex = Buffer.from('burritos').toString('hex');
+            const response = await request(app?.getServer()).get(`/handles/${hex}?hex=true`);
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual({ name: 'burritos', resolved_addresses: { ada: 'addr1' }, utxo: 'utxo#0', policy: 'f0ff' });
+        });
+
+        it('should preserve cross-chain resolved addresses in handle response', async () => {
+            const response = await request(app?.getServer()).get('/handles/cross-chain');
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual({
+                name: 'cross-chain',
+                resolved_addresses: {
+                    ada: 'addr1',
+                    btc: 'bc1qexample',
+                    eth: '0x1234'
+                },
+                utxo: 'utxo#0',
+                policy: 'f0ff'
+            });
         });
 
         it('should return legendary handle if available', async () => {
@@ -476,6 +606,23 @@ describe('Testing Handles Routes', () => {
             const response = await request(app?.getServer()).get('/handles/japan');
             expect(response.status).toEqual(451);
             expect(response.body.message).toEqual("Protected word match on 'jap,an'");
+        });
+
+        it('should return personalization payload when available', async () => {
+            const response = await request(app?.getServer()).get('/handles/burritos/personalized');
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual({
+                p: 'z',
+                reference_token: {
+                    address: 'script_addr1'
+                }
+            });
+        });
+
+        it('should return empty object when personalization is not available', async () => {
+            const response = await request(app?.getServer()).get('/handles/no-personalization/personalized');
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual({});
         });
     });
 
@@ -541,6 +688,12 @@ describe('Testing Handles Routes', () => {
     });
 
     describe('[GET] /handles/:handle/script', () => {
+        it('should return handle not found when script request handle is missing', async () => {
+            const response = await request(app?.getServer()).get('/handles/nope/script');
+            expect(response.status).toEqual(404);
+            expect(response.body).toEqual({ message: 'Handle not found' });
+        });
+
         it('should return valid script for handle', async () => {
             const response = await request(app?.getServer()).get('/handles/skirt_steak_taco/script');
             expect(response.status).toEqual(200);
@@ -576,9 +729,59 @@ describe('Testing Handles Routes', () => {
             expect(response.status).toEqual(200);
             expect(response.body).toEqual({});
         });
+
+        it('should return empty object for missing reference token via personalized utxo route', async () => {
+            const response = await request(app?.getServer()).get('/handles/no_ref_token/personalized/utxo');
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual({});
+        });
     });
 
     describe('[GET] /handles/:handle/utxo', () => {
+        it('should return handle utxo details', async () => {
+            const response = await request(app?.getServer()).get('/handles/burritos/utxo');
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual(
+                expect.objectContaining({
+                    tx_id: 'utxo',
+                    index: 0,
+                    address: 'addr1',
+                    datum: 'burritos_datum',
+                    reference_script: 'a247'
+                })
+            );
+        });
+
+        it('should decode handle datum to json when requested', async () => {
+            jest.spyOn(cbor, 'decodeCborToJson').mockResolvedValue({ decoded: true } as any);
+            const response = await request(app?.getServer()).get('/handles/burritos/utxo').set('Accept', 'application/json');
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual(
+                expect.objectContaining({
+                    tx_id: 'utxo',
+                    index: 0,
+                    address: 'addr1',
+                    datum: { decoded: true },
+                    reference_script: 'a247'
+                })
+            );
+        });
+
+        it('should return 400 when handle utxo datum decode fails for json accept', async () => {
+            jest.spyOn(cbor, 'decodeCborToJson').mockImplementation(() => {
+                throw new Error('bad cbor');
+            });
+            const response = await request(app?.getServer()).get('/handles/burritos/utxo').set('Accept', 'application/json');
+            expect(response.status).toEqual(400);
+            expect(response.body.message).toEqual('Unable to decode datum to json');
+        });
+
+        it('should return not found when handle utxo does not exist', async () => {
+            const response = await request(app?.getServer()).get('/handles/nope/utxo');
+            expect(response.status).toEqual(404);
+            expect(response.body).toEqual({ message: 'Handle not found' });
+        });
+
         it('should get reference token datum for a handle', async () => {
             // const scriptDetails: ScriptDetails = {
             //     handle: 'pz_script_01',
@@ -650,8 +853,15 @@ describe('Testing Handles Routes', () => {
                     pz_enabled: true,
                     tier_pricing: [[1, 20000000]]
                 },
+                utxo_id: 'tx_id_sub_2#0',
                 utxo: { address: 'addr1_ref_token', datum: '', index: 0, lovelace: 0, script: { cbor: 'a247', type: 'plutus_v2' }, tx_id: 'tx_id' }
             });
+        });
+
+        it('should return settings without utxo when subhandle settings utxo cannot be loaded', async () => {
+            const response = await request(app?.getServer()).get('/handles/sub@missing-utxo/subhandle_settings');
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual({ utxo_id: 'missing_sub#0' });
         });
     });
 
@@ -678,6 +888,12 @@ describe('Testing Handles Routes', () => {
             const response = await request(app?.getServer()).get('/handles/sub@handle2/subhandle_settings/utxo');
             expect(response.status).toEqual(200);
             expect(response.body).toEqual({ address: 'addr1_ref_token', datum: '', index: 0, lovelace: 0, script: { cbor: 'a247', type: 'plutus_v2' }, tx_id: 'tx_id' });
+        });
+
+        it('should return 404 when subhandle settings utxo is missing in store', async () => {
+            const response = await request(app?.getServer()).get('/handles/sub@missing-utxo/subhandle_settings/utxo');
+            expect(response.status).toEqual(404);
+            expect(response.body.message).toEqual('SubHandle settings UTxO not found');
         });
     });
 
