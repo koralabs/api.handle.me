@@ -9,12 +9,11 @@
     "type": "module",
     "module": "esnext",
     "scripts": {      
-      "stop:forever": "forever stop express.js",
-      "start:forever": "mkdir -p forever && forever -p ./forever --minUptime 1 start express.js",
-      "forever:list": "forever list"
+      "stop:forever": "pkill -f \"node express.js\" || true",
+      "start:forever": "mkdir -p forever && nohup node express.js >> ./forever/api.log 2>&1 &",
+      "forever:list": "ps -ef | grep \"node express.js\" | grep -v grep || true"
     },
     "dependencies": {
-      "forever": "^4.0.3",
       "swagger-ui-express": "^4.5.0",
       "@valkey/valkey-glide": "^2.0.1"
     }

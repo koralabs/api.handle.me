@@ -9,8 +9,8 @@
   "type": "module",
   "module": "esnext",
   "scripts": {
-    "stop:forever": "forever stop express.js",
-    "start:forever": "mkdir -p forever && forever -p ./forever --minUptime 1 start express.js",
+    "stop:forever": "pkill -f \"tsx -r tsconfig-paths/register -r dotenv/config express.ts\" || true",
+    "start:forever": "mkdir -p forever && nohup npm run api >> ./forever/api.log 2>&1 &",
     "copy-dist-files": "mkdir -p dist && cp rollup.package.json dist/package.json && cp docs/swagger.yml dist/swagger.yml",
     "build:lambda": "npm run copy-dist-files && (cd dist && npm install) && npm exec -c 'rollup -c rollup.lambda.config.js'",
     "build:docker": "npm run build:production && docker build -t koralabs/handles-api .",
@@ -22,6 +22,11 @@
     "test:e2e": "chmod +x ./shell/local_valkey.sh && REDIS_HOST=127.0.0.1 REDIS_PORT=6380 ./shell/local_valkey.sh && (export NETWORK=preview REDIS_HOST=127.0.0.1 REDIS_PORT=6380; jest -c jest.e2e.config.ts --forceExit --runInBand)",
     "test:critical": "chmod +x ./shell/local_valkey.sh && REDIS_HOST=127.0.0.1 REDIS_PORT=6380 ./shell/local_valkey.sh && (export NETWORK=preview REDIS_HOST=127.0.0.1 REDIS_PORT=6380; jest -c jest.critical.config.ts --forceExit --runInBand)",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint --ext=.js,.ts --fix --max-warnings=0 ."
+  },
+  "overrides": {
+    "diff": "4.0.4",
+    "lodash": "4.17.23",
+    "qs": "6.15.0"
   },
   "dependencies": {
     "@cardano-ogmios/client": "^6.11.0",
@@ -41,7 +46,7 @@
     "yaml": "^2.5.0"
   },
   "devDependencies": {
-    "@aws-sdk/client-s3": "^3.964.0",
+    "@aws-sdk/client-s3": "^3.990.0",
     "@rollup/plugin-commonjs": "^26.0.1",
     "@rollup/plugin-json": "^6.1.0",
     "@rollup/plugin-node-resolve": "^15.2.3",
@@ -55,9 +60,7 @@
     "@types/ws": "^8.5.3",
     "@typescript-eslint/eslint-plugin": "^8.5.0",
     "@typescript-eslint/parser": "^8.5.0",
-    "aws-sdk": "^2.1224.0",
     "dotenv": "^16.0.2",
-    "forever": "^4.0.3",
     "jest": "^29.7.0",
     "prettier": "^2.7.1",
     "prettier-eslint": "^15.0.1",
