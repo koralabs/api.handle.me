@@ -45,7 +45,7 @@ export const ZSETS = [IndexNames.SLOT]
 // Used for storing the IDs of another index
 export const META_INDEXES = [IndexNames.HANDLE, IndexNames.SUBHANDLE, IndexNames.HOLDER]
 export const ORDERED_SLOTS: string[] = []
-export const MAX_SETS_PER_PIPE = 10_000;
+export const MAX_SETS_PER_PIPE = 5_000;
 export const MAX_ZSETS_PER_PIPE = 5_000;
 export const MAX_HASHES_PER_PIPE = 5_000;
 export const ACCEPTABLE_TIP_PROXIMITY = 1200; // ~20 mins (memory store writes a file every 10 mins + 10 mins to restart)
