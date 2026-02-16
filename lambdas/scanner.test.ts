@@ -781,6 +781,36 @@ describe('Scanner lambda unit tests', () => {
         expect(txInfoCalls).toHaveLength(2);
     });
 
+    it('retries tx_info on 429 response errors from Koios', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
+
+        let txInfoAttempts = 0;
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'tx_a' }] as never;
+            if (path === 'tx_info') {
+                txInfoAttempts++;
+                if (txInfoAttempts === 1) {
+                    const error: any = new Error('Koios tx_info request failed: 429 Too Many Requests');
+                    error.status = 429;
+                    error.statusText = 'Too Many Requests';
+                    error.responseText = '<html><body><h1>429 Too Many Requests</h1></body></html>';
+                    throw error;
+                }
+                const parsedBody = JSON.parse(body ?? '{}');
+                return (parsedBody._tx_hashes ?? []).map((txHash: string) => ({ tx_hash: txHash, block_hash: 'block_newer', inputs: [] })) as never;
+            }
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+        const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
+        expect(txInfoCalls).toHaveLength(2);
+    });
+
     it('paces tx_info requests to stay under 15 requests per second', async () => {
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });

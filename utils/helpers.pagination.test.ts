@@ -82,7 +82,8 @@ describe('helpers pagination tests', () => {
     it('fetchKoios should call koios endpoint and parse json', async () => {
         const koiosResponse = [{ tx_hash: 'abc' }];
         const fetchMock = jest.fn().mockResolvedValue({
-            json: async () => koiosResponse
+            ok: true,
+            text: async () => JSON.stringify(koiosResponse)
         });
         global.fetch = fetchMock as any;
         process.env.KOIOS_API_BEARER_TOKEN = 'koios-token';
@@ -102,6 +103,22 @@ describe('helpers pagination tests', () => {
         );
     });
 
+    it('fetchKoios should throw with status when Koios responds with non-JSON 429', async () => {
+        const fetchMock = jest.fn().mockResolvedValue({
+            ok: false,
+            status: 429,
+            statusText: 'Too Many Requests',
+            text: async () => '<html><body><h1>429 Too Many Requests</h1></body></html>'
+        });
+        global.fetch = fetchMock as any;
+        process.env.KOIOS_API_BEARER_TOKEN = 'koios-token';
+
+        await expect(fetchKoios('tx_info', 'POST', '{"_tx_hashes":["abc"]}')).rejects.toMatchObject({
+            status: 429,
+            statusText: 'Too Many Requests'
+        });
+    });
+
     it('fetchTxList should compose blockfrost pagination and koios request', async () => {
         const txHashes = ['tx-hash-1'];
         const txInfoResponse = [{ tx_hash: 'tx-hash-1', outputs: [], assets_minted: [] }];
@@ -114,7 +131,8 @@ describe('helpers pagination tests', () => {
             }
 
             return {
-                json: async () => txInfoResponse
+                ok: true,
+                text: async () => JSON.stringify(txInfoResponse)
             };
         });
         global.fetch = fetchMock as any;

@@ -59,16 +59,39 @@ export const fetchTxList = async (block: string) => {
 
 export const fetchKoios = async (path: string, method = 'GET', body?: string) => {
     const url = `https://${NETWORK.toLowerCase() === 'mainnet' ? 'api' : NETWORK.toLowerCase()}.koios.rest/api/v1/${path}`;
-    const res = await fetch(url, {
+    const response = await fetch(url, {
         method,
         headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${process.env.KOIOS_API_BEARER_TOKEN}`
         },
         body
-    }).then((res) => res.json());
+    });
 
-    return res;
+    const responseText = await response.text();
+    const parseResponseJson = () => {
+        if (!responseText) return null;
+        return JSON.parse(responseText);
+    };
+
+    if (!response.ok) {
+        let responseJson: any = null;
+        try {
+            responseJson = parseResponseJson();
+        } catch {
+            responseJson = null;
+        }
+        const error: any = new Error(`Koios ${path} request failed: ${response.status} ${response.statusText}`);
+        error.status = response.status;
+        error.statusText = response.statusText;
+        error.koiosResponse = responseJson;
+        if (!responseJson && responseText) {
+            error.responseText = responseText.slice(0, 512);
+        }
+        throw error;
+    }
+
+    return parseResponseJson();
 };
 
 export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[]): UTxOWithTxInfo[] => {
