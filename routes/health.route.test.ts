@@ -1,4 +1,4 @@
-import { IApiMetrics } from '@koralabs/kora-labs-common';
+import { IApiMetrics, LockedLambdaReason } from '@koralabs/kora-labs-common';
 import request from 'supertest';
 import App from '../app';
 import { HealthResponseBody } from '../interfaces/ogmios.interfaces';
@@ -6,6 +6,7 @@ import * as ogmiosUtils from '../services/ogmios/utils';
 
 jest.mock('../services/ogmios/ogmios.service');
 
+let lockLambdas: LockedLambdaReason | undefined;
 const getStats = (): IApiMetrics => ({
     firstSlot: 1, 
     lastSlot: 100, 
@@ -15,7 +16,8 @@ const getStats = (): IApiMetrics => ({
     memorySize: 0, 
     indexSchemaVersion: 0, 
     handleCount: 100, 
-    startTimestamp: Date.now()
+    startTimestamp: Date.now(),
+    lockLambdas
 });
 const caughtUp = jest.fn().mockReturnValue(true);
 jest.mock('../repositories/handlesRepository', () => ({
@@ -56,6 +58,7 @@ describe('Health Routes Test', () => {
     const originalEnableOgmiosScanning = process.env.ENABLE_OGMIOS_SCANNING;
     beforeEach(async () => {
         process.env.ENABLE_OGMIOS_SCANNING = '';
+        lockLambdas = undefined;
         app = await new App().initialize();
     });
 
@@ -197,6 +200,61 @@ describe('Health Routes Test', () => {
                     utxo_schema_version: expect.any(Number)
                 },
                 status: 'current'
+            });
+        });
+
+        it('Should return 202 updating while REINDEX is running', async () => {
+            lockLambdas = LockedLambdaReason.REINDEX;
+            const ogmiosResult = getMockResponse({ networkSynchronization: 1 });
+            jest.spyOn(ogmiosUtils, 'fetchHealth').mockResolvedValue(ogmiosResult);
+            caughtUp.mockReturnValue(true);
+
+            const response = await request(app?.getServer()).get('/health');
+
+            expect(response.status).toEqual(202);
+            expect(response.body).toEqual({
+                ogmios: ogmiosResult,
+                stats: {
+                    current_block_hash: expect.any(String),
+                    index_memory_size: expect.any(Number),
+                    current_slot: expect.any(Number),
+                    estimated_sync_time: expect.any(String),
+                    memory_size: expect.any(Number),
+                    handle_count: expect.any(Number),
+                    holder_count: expect.any(Number),
+                    percentage_complete: expect.any(Number),
+                    slot_date: expect.any(String),
+                    index_schema_version: expect.any(Number),
+                    utxo_schema_version: expect.any(Number)
+                },
+                status: 'updating'
+            });
+        });
+
+        it('Should return 202 updating while rollback_2160 is running even if ogmios is disconnected', async () => {
+            lockLambdas = LockedLambdaReason.ROLLBACK_2160;
+            jest.spyOn(ogmiosUtils, 'fetchHealth').mockResolvedValue(null);
+            caughtUp.mockReturnValue(true);
+
+            const response = await request(app?.getServer()).get('/health');
+
+            expect(response.status).toEqual(202);
+            expect(response.body).toEqual({
+                ogmios: null,
+                stats: {
+                    current_block_hash: expect.any(String),
+                    index_memory_size: expect.any(Number),
+                    current_slot: expect.any(Number),
+                    estimated_sync_time: expect.any(String),
+                    memory_size: expect.any(Number),
+                    handle_count: expect.any(Number),
+                    holder_count: expect.any(Number),
+                    percentage_complete: expect.any(Number),
+                    slot_date: expect.any(String),
+                    index_schema_version: expect.any(Number),
+                    utxo_schema_version: expect.any(Number)
+                },
+                status: 'updating'
             });
         });
     });

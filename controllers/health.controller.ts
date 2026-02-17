@@ -1,4 +1,4 @@
-import { getDateStringFromSlot, LogCategory, Logger } from '@koralabs/kora-labs-common';
+import { getDateStringFromSlot, LockedLambdaReason, LogCategory, Logger } from '@koralabs/kora-labs-common';
 import { NextFunction, Request, Response } from 'express';
 import { HealthResponseBody } from '../interfaces/ogmios.interfaces';
 import { IRegistry } from '../interfaces/registry.interface';
@@ -7,16 +7,19 @@ import { fetchHealth } from '../services/ogmios/utils';
 
 enum HealthStatus {
     CURRENT = 'current',
+    UPDATING = 'updating',
     OGMIOS_BEHIND = 'ogmios_behind',
     STORAGE_BEHIND = 'storage_behind',
     WAITING_ON_CARDANO_NODE = 'waiting_on_cardano_node'
 }
 
+const updatingLocks = new Set<LockedLambdaReason>([LockedLambdaReason.ROLLBACK_2160, LockedLambdaReason.REINDEX]);
+
 class HealthController {
     public async index (req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
             const handleRepo = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
-            const { firstSlot = 0, lastSlot = 0, currentSlot = 0, firstMemoryUsage = 0, currentBlockHash = '', memorySize = 0, utxoSchemaVersion = 0, indexSchemaVersion = 0, handleCount = 0, holderCount = 0, startTimestamp = 0 } = handleRepo.getMetrics();
+            const { firstSlot = 0, lastSlot = 0, currentSlot = 0, firstMemoryUsage = 0, currentBlockHash = '', memorySize = 0, utxoSchemaVersion = 0, indexSchemaVersion = 0, handleCount = 0, holderCount = 0, startTimestamp = 0, lockLambdas } = handleRepo.getMetrics();
             const handleSlotRange = lastSlot - firstSlot;
             const currentSlotInRange = currentSlot - firstSlot;
             const transpiredMs = Date.now() - startTimestamp;
@@ -55,6 +58,9 @@ class HealthController {
                     Logger.log({category:LogCategory.WARN, message: 'Ogmios can\'t connect to the node socket', event: 'healthcheck.failure'});
                     status = HealthStatus.WAITING_ON_CARDANO_NODE;
                 }
+            }
+            if (lockLambdas && updatingLocks.has(lockLambdas)) {
+                status = HealthStatus.UPDATING;
             }
 
             let statusCode = 200;
