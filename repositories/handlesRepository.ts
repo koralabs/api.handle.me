@@ -10,7 +10,7 @@ const blackListedIpfsCids: string[] = [];
 const isTestnet = NETWORK.toLowerCase() !== 'mainnet';
 const magicSlotsRange = 50_000; // This is arbitrary and should be adjusted if not enough or too many slots come back from queries.
 
-process.env.INDEX_SCHEMA_VERSION = '1'
+process.env.INDEX_SCHEMA_VERSION = '2'
 process.env.UTXO_SCHEMA_VERSION = '1'
 
 /********** RewoundHandle IS USED TO FLAG THE HANDLE TO AVOID SAVING SLOT HISTORY ********************/
@@ -767,6 +767,13 @@ export class HandlesRepository {
     }
 
     public updateHolder(handle: StoredHandle, holders?: Map<string, HolderHandleNames>) {
+        const resolvedAddress = handle.resolved_addresses?.ada;
+        if (resolvedAddress) {
+            const holderInfo = buildHolderInfo(resolvedAddress);
+            handle.holder = holderInfo.address;
+            handle.holder_type = holderInfo.type;
+        }
+
         let holderHandles: Set<string> = new Set<string>();
 
         if(holders) {

@@ -4,15 +4,16 @@ Last updated: 2026-02-11
 
 This document captures externally published context about ADA Handle ($handle) and the Handle Standard, with an emphasis on product/features that influence this repo (`handles-public-api`).
 
-Some first-party websites (notably `handle.me` and `docs.handle.me`) appear to block automated crawlers in this environment. Where those were inaccessible, this doc leans on:
+This doc leans on:
 - Project Catalyst proposal pages (`projectcatalyst.io`)
 - ADA Handle Medium posts (`medium.com/ada-handle`)
 - Public Kora Labs documents (`public.koralabs.io`)
 
-## Official Sites & Environments (Observed)
-- Handle minting/portal: `https://handle.me`
-- Public API (this service): `https://api.handle.me` (Swagger UI is also hosted there)
-- Marketplace environments referenced in Catalyst: `https://preview.marketplace.handle.me`, `https://preprod.marketplace.handle.me`
+## Kora Labs
+- Kora Labs, LLC is the creator and surrent stewards of the Ada Handles protocol - the most widely accepted address resolution project on Cardano
+
+## Official Sites, Socials, and Products
+- See ../AGENTS.md
 
 ## What ADA Handle Is
 - A naming system for Cardano addresses where a handle (like `$my.handle`) is minted as a native asset/NFT and owned/transferred like any other asset on Cardano. The “resolved address” is derived from on-chain ownership/UTxO state rather than an off-chain registry.

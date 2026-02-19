@@ -119,6 +119,25 @@ describe('HandlesRepository branch tests', () => {
         expect(store.removeValuesFromOrderedSet).toHaveBeenCalledWith(IndexNames.HOLDER_COUNT, holder);
     });
 
+    it('normalizes holder key from resolved ADA address during updateHolder', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        const holderMap = new Map<string, Set<string>>([[holder, new Set<string>()]]);
+        const staleHolder = 'legacy-holder-key';
+        const handle = {
+            name: 'alpha',
+            holder: staleHolder,
+            resolved_addresses: { ada: address }
+        } as any;
+
+        repo.updateHolder(handle, holderMap as any);
+
+        expect(handle.holder).toBe(holder);
+        expect(handle.holder_type).toBe('wallet');
+        expect(store.addValueToIndexedSet).toHaveBeenCalledWith(IndexNames.HOLDER, holder, 'alpha');
+        expect(store.addValueToIndexedSet).not.toHaveBeenCalledWith(IndexNames.HOLDER, staleHolder, 'alpha');
+    });
+
     it('logs unknown asset labels while still saving handle state', () => {
         const repo = new HandlesRepository(buildStoreMock());
         const saveSpy = jest.spyOn(repo, 'save').mockImplementation(jest.fn());
