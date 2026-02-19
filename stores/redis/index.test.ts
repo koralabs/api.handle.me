@@ -527,6 +527,7 @@ describe('RedisHandlesStore critical path tests', () => {
             [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: jest.fn()
         } as any);
 
+        expect(redisSpy).toHaveBeenCalledWith('del', [`{root}:${IndexNames.HOLDER_COUNT}`]);
         expect(redisSpy).toHaveBeenCalledWith('del', scannedKeys);
         expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Deleted: 100,000 keys'));
     });

@@ -87,13 +87,14 @@ export class RedisHandlesStore implements IApiStore {
     }
 
     repopulateIndexesFromUTxOs(utxoFunctions: UTxOFunctions): void {
-        let cursor = '0';
         let deleted = 0;
         let added = 0;
         const startTime = Date.now();
         for (const indexName of Object.values(IndexNames)) {
             // Skip UTXO and MINT indexes
             if ([IndexNames.UTXO_SLOT, IndexNames.UTXO, IndexNames.MINT].includes(indexName)) continue;
+            let cursor = '0';
+            deleted += Number(this.redisClientCall('del', [`{root}:${indexName}`]) ?? 0);
             do {
                 const [nextCursor, keys] = (this.redisClientCall('scan', cursor, { match: `{root}:${indexName}:*`, count: 1000 })) as [string, string[]];
                 cursor = nextCursor;
