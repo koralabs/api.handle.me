@@ -1269,6 +1269,21 @@ describe('HandlesRepository branch tests', () => {
         expect(repo.Internal.sortAlphabetically([{ name: 'z' }, { name: 'a' }] as any)?.name).toBe('a');
     });
 
+    it('ignores missing handle records when computing default handle', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+
+        store.pipeline.mockReturnValueOnce([
+            undefined,
+            { name: 'beta', og_number: 0, created_slot_number: 10 },
+            { name: 'alpha', og_number: 1, created_slot_number: 9 }
+        ]);
+        expect(repo.getDefaultHandle(new Set(['ghost', 'beta', 'alpha']) as any)?.name).toBe('alpha');
+
+        store.pipeline.mockReturnValueOnce([undefined]);
+        expect(repo.getDefaultHandle(new Set(['ghost']) as any)).toBeUndefined();
+    });
+
     it('buildPersonalizationData updates handle fields for valid datum payload', () => {
         const repo = new HandlesRepository(buildStoreMock());
         const handle = repo.Internal.buildHandle({

@@ -1037,15 +1037,16 @@ export class HandlesRepository {
             holderHandles.forEach((name) => {
                 this.store.getHashFromIndex(IndexNames.HANDLE, name)
             });
-        }) as StoredHandle[]);
-        
+        }) as (StoredHandle | undefined)[]);
+        const existingStoredHandles = storedHandles.filter((handle): handle is StoredHandle => !!handle);
+        if (!existingStoredHandles.length) return;
 
         // OG if no default set
-        const ogHandle = this._sortOGHandle(storedHandles);
+        const ogHandle = this._sortOGHandle(existingStoredHandles);
         if (ogHandle) return ogHandle;
     
         // filter shortest length from handles
-        const sortedHandlesByLength = this._sortedByLength(storedHandles);
+        const sortedHandlesByLength = this._sortedByLength(existingStoredHandles);
         if (sortedHandlesByLength.length == 1) return sortedHandlesByLength[0];
     
         // earliest created slot if same length
