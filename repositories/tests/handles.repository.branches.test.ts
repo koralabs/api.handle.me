@@ -138,6 +138,41 @@ describe('HandlesRepository branch tests', () => {
         expect(store.addValueToIndexedSet).not.toHaveBeenCalledWith(IndexNames.HOLDER, staleHolder, 'alpha');
     });
 
+    it('removes empty-string holder indexes when an existing handle holder is corrected', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        const name = 'alpha';
+        const hex = `${AssetNameLabel.LBL_222}${Buffer.from(name).toString('hex')}`;
+        const existing = repo.Internal.buildHandle({
+            name,
+            hex,
+            policy,
+            updated_slot_number: 10,
+            resolved_addresses: { ada: address },
+            holder: '',
+            holder_type: ''
+        });
+
+        jest.spyOn(ogmiosUtils, 'getHandleNameFromAssetName').mockReturnValue({
+            name,
+            ownerTokenHex: hex,
+            isCip67: true,
+            assetLabel: AssetNameLabel.LBL_222
+        });
+
+        const mintingData = new Map<string, any[]>([[name, [{ created_slot: 1, metadata: {}, txHash: 'tx' }]]]);
+        repo.updateHandleIndexes(
+            buildUtxo(hex, 20),
+            mintingData as any,
+            new Map([[name, existing]]),
+            new Map([[holder, new Set<string>()]])
+        );
+
+        expect(store.removeValueFromIndexedSet).toHaveBeenCalledWith(IndexNames.HOLDER, '', name);
+        expect(store.removeValuesFromOrderedSet).toHaveBeenCalledWith(IndexNames.HOLDER_COUNT, '');
+        expect(store.removeKeyFromIndex).toHaveBeenCalledWith(IndexNames.HOLDER, '');
+    });
+
     it('logs unknown asset labels while still saving handle state', () => {
         const repo = new HandlesRepository(buildStoreMock());
         const saveSpy = jest.spyOn(repo, 'save').mockImplementation(jest.fn());
