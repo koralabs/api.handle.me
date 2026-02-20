@@ -1,6 +1,6 @@
 import { AssetNameLabel, asyncForEach, buildHolderInfo, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, NETWORK, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
-import { BlockfrostBlock, KoiosAssetUTxO, KoiosTxInfo } from '../interfaces/provider.interface';
 import { WHITELISTED_API_KEYS } from '../config';
+import { BlockfrostBlock, KoiosAssetUTxO, KoiosTxInfo } from '../interfaces/provider.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { RedisHandlesStore } from '../stores/redis';
@@ -719,6 +719,14 @@ const scan = async () => {
             });
         }
     } catch (error: any) {
+        if (isRetriableKoiosError(error)) {
+            Logger.log({
+                message: `Retriable Koios scanner failure (will retry next invocation): ${error?.message ?? error}`,
+                category: LogCategory.INFO,
+                event: 'scannerLambda.retriable'
+            });
+            return false;
+        }
         Logger.log({ message: `Error in scanner lambda: ${error.message}`, category: LogCategory.ERROR, event: 'scannerLambda.error' });
         throw error;
     } finally {
