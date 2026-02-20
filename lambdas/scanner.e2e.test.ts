@@ -4,6 +4,7 @@ import { RedisHandlesStore } from '../stores/redis';
 import * as helpers from '../utils/helpers';
 
 jest.mock('../utils/helpers');
+process.env.WHITELISTED_API_KEYS = 'scanner-e2e-key';
 
 const scanner = require('./scanner');
 const { lambdaHandler } = scanner;
@@ -216,6 +217,20 @@ describe('Scanner lambda e2e', () => {
 
         expect(result).toBeUndefined();
         expect(store.redisClientCall('get', 'scanner:recovery')).toBeFalsy();
+    });
+
+    it('requires whitelisted api-key for function-url reindex shortcut', async () => {
+        const result = await lambdaHandler({
+            requestContext: { http: { method: 'POST', path: '/reindex' } },
+            headers: { 'api-key': 'wrong-key' }
+        } as any, {} as AWSLambda.Context);
+
+        expect(result).toEqual(
+            expect.objectContaining({
+                statusCode: 401,
+                body: JSON.stringify({ message: 'Unauthorized' })
+            })
+        );
     });
 
     it('unlocks lambdas when reindexing fails', async () => {

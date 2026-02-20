@@ -1,5 +1,6 @@
 import { AssetNameLabel, asyncForEach, buildHolderInfo, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, NETWORK, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { BlockfrostBlock, KoiosAssetUTxO, KoiosTxInfo } from '../interfaces/provider.interface';
+import { WHITELISTED_API_KEYS } from '../config';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { RedisHandlesStore } from '../stores/redis';
@@ -13,14 +14,18 @@ const SCANNER_LEASE_KEY = 'scanner:lease';
 const SCANNER_RECOVERY_KEY = 'scanner:recovery';
 const SCANNER_LEASE_TTL_MS = 60_000;
 const SCANNER_LEASE_HEARTBEAT_MS = 20_000;
-const KOIOS_TX_INFO_MAX_RPS = 12;
+const KOIOS_RETRY_DELAYS_MS = [500, 1_500, 4_000];
+const KOIOS_TX_INFO_SOFT_BODY_LIMIT = 3_000;
+const KOIOS_BLOCK_TXS_SOFT_BODY_LIMIT = 3_000;
+const KOIOS_TX_INFO_MAX_RPS = 6;
 const KOIOS_TX_INFO_MIN_INTERVAL_MS = Math.ceil(1000 / KOIOS_TX_INFO_MAX_RPS);
-const KOIOS_TX_INFO_MAX_RETRIES = 2;
-const KOIOS_TX_INFO_RETRY_BASE_DELAY_MS = 500;
-const KOIOS_BLOCK_TXS_MAX_RPS = 10;
+const KOIOS_TX_INFO_MAX_RETRIES = KOIOS_RETRY_DELAYS_MS.length;
+const KOIOS_BLOCK_TXS_MAX_RPS = 6;
 const KOIOS_BLOCK_TXS_MIN_INTERVAL_MS = Math.ceil(1000 / KOIOS_BLOCK_TXS_MAX_RPS);
-const KOIOS_BLOCK_TXS_MAX_RETRIES = 2;
-const KOIOS_BLOCK_TXS_RETRY_BASE_DELAY_MS = 1_000;
+const KOIOS_BLOCK_TXS_MAX_RETRIES = KOIOS_RETRY_DELAYS_MS.length;
+const KOIOS_ASSET_UTXOS_MAX_RPS = 6;
+const KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS = Math.ceil(1000 / KOIOS_ASSET_UTXOS_MAX_RPS);
+const KOIOS_ASSET_UTXOS_MAX_RETRIES = KOIOS_RETRY_DELAYS_MS.length;
 const ROLLBACK_20_SLOT_WINDOW = 400; // 20 blocks * ~20 seconds per block
 const RECOVERY_REASON_ROLLBACK = 'rollback';
 const RECOVERY_REASON_REINDEX = 'reindex';
@@ -71,6 +76,9 @@ const getRecoveryFlag = (): string | undefined => {
     return store.redisClientCall('get', SCANNER_RECOVERY_KEY);
 };
 
+const getWhitelistedApiKeys = (): string[] => WHITELISTED_API_KEYS.split(',').map((key) => key.trim()).filter(Boolean);
+const getKoiosRetryDelay = (attempt: number): number => KOIOS_RETRY_DELAYS_MS[attempt];
+
 const clearRecoveryFlag = (): void => {
     store.redisClientCall('del', [SCANNER_RECOVERY_KEY]);
 };
@@ -82,13 +90,17 @@ const isLockStale = (reason: LockedLambdaReason, lockTimestamp?: number): boolea
     return Date.now() - lockTimestamp > timeout;
 };
 
-const getKoiosBatches = (list: string[], keyName: string) => {
+const getKoiosBatches = (
+    list: string[],
+    keyName: string,
+    { maxBodyLength, payload = {} as Record<string, unknown> }: { maxBodyLength: number; payload?: Record<string, unknown> }
+) => {
     const batchedList: string[][] = [];
     let batchesIndex = 0;
     let listArray: string[] = [];
     while (batchesIndex < list.length) {
         listArray.push(list[batchesIndex]);
-        if (JSON.stringify({ [keyName]: listArray, ...defaultKoiosSettings }).length >= 4900) {
+        if (JSON.stringify({ [keyName]: listArray, ...payload }).length >= maxBodyLength) {
             // Max possible ",[policy,handle]" length is 96
             batchedList.push(listArray);
             listArray = [];
@@ -111,6 +123,63 @@ const getBlockTxsBody = (hashBatch: string[]) => JSON.stringify({ _block_hashes:
 const getKoiosDebugCurl = (path: string, body: string) => {
     const host = NETWORK.toLowerCase() === 'mainnet' ? 'api' : NETWORK.toLowerCase();
     return `curl -v --http1.1 'https://${host}.koios.rest/api/v1/${path}' -H 'Content-Type: application/json' -H 'Authorization: Bearer <YOUR_KOIOS_BEARER_TOKEN>' --data-binary '${body}'`;
+};
+
+const getEventHeader = (event: any, headerName: string): string | undefined => {
+    const headers = event?.headers as Record<string, string | undefined> | undefined;
+    if (!headers) return undefined;
+    const searchHeader = headerName.toLowerCase();
+    for (const [header, value] of Object.entries(headers)) {
+        if (header.toLowerCase() === searchHeader) return value;
+    }
+    return undefined;
+};
+
+const isFunctionUrlEvent = (event: any): boolean => Boolean(event?.requestContext?.http);
+
+const parseBooleanValue = (value: unknown): boolean => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value !== 'string') return false;
+    return ['1', 'true', 'yes'].includes(value.trim().toLowerCase());
+};
+
+const shouldTriggerReindexShortcut = (event: any): boolean => {
+    if (!isFunctionUrlEvent(event)) return false;
+
+    const path = `${event?.rawPath ?? event?.requestContext?.http?.path ?? ''}`.trim();
+    if (path === '/reindex' || path === '/scanner/reindex') return true;
+
+    if (parseBooleanValue(event?.queryStringParameters?.reindex)) return true;
+
+    if (!event?.body) return false;
+
+    let rawBody = `${event.body}`;
+    if (event?.isBase64Encoded) {
+        rawBody = Buffer.from(rawBody, 'base64').toString('utf8');
+    }
+
+    try {
+        const parsedBody = JSON.parse(rawBody);
+        return parseBooleanValue(parsedBody?.reindex);
+    } catch {
+        return false;
+    }
+};
+
+const isWhitelistedScannerShortcutRequest = (event: any): boolean => {
+    const apiKey = getEventHeader(event, 'api-key');
+    return !!apiKey && getWhitelistedApiKeys().includes(apiKey);
+};
+
+const buildFunctionUrlResponse = (statusCode: number, body: { message: string }) => {
+    return {
+        isBase64Encoded: false,
+        statusCode,
+        headers: {
+            'content-type': 'application/json'
+        },
+        body: JSON.stringify(body)
+    };
 };
 
 const isRetriableKoiosError = (error: any): boolean => {
@@ -162,7 +231,7 @@ const fetchTxInfoBatchWithRetryAndSplit = async (hashBatch: string[], attempt = 
         if (!retriable) throw error;
 
         if (attempt < KOIOS_TX_INFO_MAX_RETRIES) {
-            const backoff = KOIOS_TX_INFO_RETRY_BASE_DELAY_MS * (attempt + 1);
+            const backoff = getKoiosRetryDelay(attempt);
             await delayMs(backoff);
             return fetchTxInfoBatchWithRetryAndSplit(hashBatch, attempt + 1);
         }
@@ -184,7 +253,10 @@ const fetchTxInfoBatchWithRetryAndSplit = async (hashBatch: string[], attempt = 
 };
 
 const getBatchedTxInfo = async (txHashes: string[]) => {
-    const batchedTxHashes = getKoiosBatches(txHashes, '_tx_hashes');
+    const batchedTxHashes = getKoiosBatches(txHashes, '_tx_hashes', {
+        maxBodyLength: KOIOS_TX_INFO_SOFT_BODY_LIMIT,
+        payload: defaultKoiosSettings
+    });
     const txs: KoiosTxInfo[] = [];
     await asyncForEach(batchedTxHashes, async (hashBatch) => {
         const txInfo = await fetchTxInfoBatchWithRetryAndSplit(hashBatch);
@@ -215,14 +287,36 @@ const fetchBlockTxHashBatchWithRetry = async (hashBatch: string[], attempt = 0):
 
         if (!retriable || attempt >= KOIOS_BLOCK_TXS_MAX_RETRIES) throw error;
 
-        const backoff = KOIOS_BLOCK_TXS_RETRY_BASE_DELAY_MS * (attempt + 1);
+        const backoff = getKoiosRetryDelay(attempt);
         await delayMs(backoff);
         return fetchBlockTxHashBatchWithRetry(hashBatch, attempt + 1);
     }
 };
 
+const fetchAssetUtxoBatchWithRetry = async (assetList: [string, string][], attempt = 0): Promise<KoiosAssetUTxO[] | null> => {
+    const body = JSON.stringify({ _asset_list: assetList, _extended: true });
+    try {
+        return (await fetchKoios(`asset_utxos`, 'POST', body)) as KoiosAssetUTxO[] | null;
+    } catch (error: any) {
+        const retriable = isRetriableKoiosError(error);
+        Logger.local({
+            message: `asset_utxos request failed. retriable=${retriable} attempt=${attempt + 1}/${KOIOS_ASSET_UTXOS_MAX_RETRIES + 1} assetCount=${assetList.length} bodyLength=${body.length} code=${error?.code ?? ''} causeCode=${error?.cause?.code ?? ''} error=${error?.message ?? error} cause=${error?.cause?.message ?? ''} curl="${getKoiosDebugCurl('asset_utxos', body)}"`,
+            category: LogCategory.INFO,
+            event: 'scannerLambda.koiosAssetUtxos.requestFailed'
+        });
+
+        if (!retriable || attempt >= KOIOS_ASSET_UTXOS_MAX_RETRIES) throw error;
+
+        const backoff = getKoiosRetryDelay(attempt);
+        await delayMs(backoff);
+        return fetchAssetUtxoBatchWithRetry(assetList, attempt + 1);
+    }
+};
+
 const getBatchedTxHashes = async (blockHashes: string[]) => {
-    const batchedBlockHashes = getKoiosBatches(blockHashes, '_block_hashes');
+    const batchedBlockHashes = getKoiosBatches(blockHashes, '_block_hashes', {
+        maxBodyLength: KOIOS_BLOCK_TXS_SOFT_BODY_LIMIT
+    });
     const txHashes: string[] = [];
     await asyncForEach(batchedBlockHashes, async (hashBatch) => {
         txHashes.push(...await fetchBlockTxHashBatchWithRetry(hashBatch));
@@ -328,8 +422,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
     const handleTxHashes: string[] = [];
     // This is a separate set of UTxOs representing the current Handle values (potentially different from above UTxOs)
     await asyncForEach(batchedHandles, async (handleNames) => {
-        const body = JSON.stringify({ _asset_list: handleNames, _extended: true });
-        const koiosUtxos = (await fetchKoios(`asset_utxos`, 'POST', body)) as KoiosAssetUTxO[] | null;
+        const koiosUtxos = await fetchAssetUtxoBatchWithRetry(handleNames);
         if (koiosUtxos !== null) {
             // go through each asset and grab the data we need to test, tx_hash, tx_index, address
             for (const utxo of koiosUtxos) {
@@ -340,7 +433,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
             // this can happen if a mint was rolled back and didn't return
             // Mostly possible with DEMI and Manually added Handles because handle.me uses Blockfrost
         }
-    });
+    }, KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS);
 
     const latestUTxOsForAffectedHandles = await getBatchedUTxOs(handleTxHashes);
 
@@ -633,7 +726,7 @@ const scan = async () => {
     }
 };
 
-export const lambdaHandler = async (event: AWSLambda.ALBEvent, context: AWSLambda.Context) => {
+export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGatewayProxyEventV2, context: AWSLambda.Context) => {
     store.initialize();
     const leaseOwner = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     if (!acquireScannerLease(leaseOwner)) {
@@ -659,6 +752,25 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent, context: AWSLambd
         if (metrics.lockLambdas) {
             Logger.local(`Lambda is locked with: ${metrics.lockLambdas}, skipping`);
             if (!clearStaleLockIfNeeded(metrics)) return;
+        }
+
+        if (shouldTriggerReindexShortcut(event)) {
+            if (!isWhitelistedScannerShortcutRequest(event)) {
+                Logger.local({
+                    message: 'Rejected scanner reindex shortcut request due to missing/invalid api-key header',
+                    category: LogCategory.INFO,
+                    event: 'scannerLambda.reindexShortcut.unauthorized'
+                });
+                return buildFunctionUrlResponse(401, { message: 'Unauthorized' });
+            }
+
+            Logger.log({
+                message: 'Running scanner reindex shortcut from function URL request',
+                category: LogCategory.NOTIFY,
+                event: 'scannerLambda.reindexShortcut'
+            });
+            await processReindex();
+            return buildFunctionUrlResponse(200, { message: 'Reindex complete' });
         }
 
         const recoveryFlag = getRecoveryFlag();

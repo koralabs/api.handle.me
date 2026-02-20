@@ -128,11 +128,14 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - Snapshot lambda rechecks active lambda locks up to 4 times with a 15-second delay before skipping a run.
 - Reindex lock behavior is fail-safe: reindex attempts must always clear `lockLambdas` in both success and error paths to avoid deadlocking scanner flows.
 - Scanner block processing batches `tx_info` across the full discovered block window (subject to request-size batching), then groups transactions back by `block_hash` to preserve per-block synchronous application order.
+- Scanner starts `tx_info` and `block_txs` requests with a 3000-byte soft body target per batch to reduce provider-side timeout and 5xx rates.
 - Even with batched `tx_info`, scanner metrics (`currentBlockHash`, `currentSlot`) are advanced block-by-block in processing order so restart/resume points stay deterministic.
 - Scanner `tx_info` requests use adaptive resiliency: retriable transport/provider failures are retried with short backoff, then failing batches are split recursively to smaller `_tx_hashes` groups before failing hard.
 - Koios `tx_info` transient provider pool saturation responses (for example `PGRST003` connection-pool timeouts) are treated as retriable in the same retry/split flow.
-- Scanner paces `tx_info` calls to stay under 15 requests/second while still using request-size batching.
-- On `tx_info` failures, scanner emits a `WARN` log with batch sizing/hash context and a token-redacted curl template to reproduce the exact request body for provider debugging.
+- Scanner paces Koios batch calls (`tx_info`, `block_txs`, `asset_utxos`) to stay under 6 requests/second while still using request-size batching.
+- `block_txs` and `asset_utxos` calls use retry+backoff on transient provider failures (including HTTP 429) before failing hard.
+- On handled Koios retry/split failures, scanner emits local `INFO` logs with batch sizing/hash context and a token-redacted curl template to reproduce request bodies for provider debugging.
+- Scanner lambda supports a function-url reindex shortcut (`/reindex` path, `reindex=true` query, or JSON body `{"reindex": true}`) and requires a whitelisted `api-key` from `WHITELISTED_API_KEYS`.
 - Burn processing in scanner is idempotent: missing/previously-removed burn handles are ignored so replaying the same block does not fail.
 - Valkey pipeline execution must always clear pipeline state on errors; queue state is reset even when pipeline callbacks throw.
 

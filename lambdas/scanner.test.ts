@@ -67,7 +67,8 @@ const loadScannerModule = () => {
     return scannerModule;
 };
 
-const setup = () => {
+const setup = ({ whitelistedApiKeys = 'allowed-key' }: { whitelistedApiKeys?: string } = {}) => {
+    process.env.WHITELISTED_API_KEYS = whitelistedApiKeys;
     const pipelineResponses: any[] = [];
     const kvStore = new Map<string, string>();
     const store = {
@@ -942,7 +943,7 @@ describe('Scanner lambda unit tests', () => {
         let hasBlockTxBackoffDelay = false;
         try {
             await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
-            hasBlockTxBackoffDelay = setTimeoutSpy.mock.calls.some((call) => Number(call[1]) >= 1_000);
+            hasBlockTxBackoffDelay = setTimeoutSpy.mock.calls.some((call) => Number(call[1]) >= 500);
         } finally {
             setTimeoutSpy.mockRestore();
         }
@@ -952,7 +953,7 @@ describe('Scanner lambda unit tests', () => {
         expect(hasBlockTxBackoffDelay).toBe(true);
     });
 
-    it('paces tx_info requests to stay under 12 requests per second', async () => {
+    it('paces tx_info requests to stay under 6 requests per second and uses smaller soft body batching', async () => {
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
         mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
@@ -977,7 +978,86 @@ describe('Scanner lambda unit tests', () => {
             .map((call) => Number(call[1]))
             .filter((delay) => Number.isFinite(delay) && delay > 0 && delay < 1_000);
         setTimeoutSpy.mockRestore();
-        expect(pacingCalls.some((delay) => delay >= 80)).toBe(true);
+        expect(pacingCalls.some((delay) => delay >= 160)).toBe(true);
+        const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
+        expect(txInfoCalls.length).toBeGreaterThanOrEqual(4);
+    });
+
+    it('batches block_txs with the smaller soft body limit', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        const blocks = Array.from({ length: 55 }, (_, index) => ({
+            hash: `${'b'.repeat(56)}${index.toString().padStart(8, '0')}`,
+            slot: 101 + index,
+            confirmations: 5
+        }));
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue(blocks as never);
+
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') {
+                const parsedBody = JSON.parse(body ?? '{}');
+                return (parsedBody._block_hashes ?? []).map((blockHash: string) => ({ tx_hash: `tx_${blockHash.slice(-8)}` })) as never;
+            }
+            if (path === 'tx_info') {
+                const parsedBody = JSON.parse(body ?? '{}');
+                return (parsedBody._tx_hashes ?? []).map((txHash: string) => ({ tx_hash: txHash, block_hash: 'none', inputs: [] })) as never;
+            }
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        await scannerModule.Internal.scan();
+
+        const blockTxCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'block_txs');
+        expect(blockTxCalls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('retries asset_utxos on 429 response errors from Koios during rollback reconciliation', async () => {
+        const { handlesRepo, pipelineResponses, scannerModule, store } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentSlot: 300, lockLambdas: LockedLambdaReason.UNLOCKED });
+        store.getValuesFromOrderedSet.mockReturnValue(['u1']);
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'provider_a', slot: 200 }] as never);
+
+        const providerUtxo = buildUtxo({ id: 'u1', slot: 200, blockHash: 'provider_a', assetName: 'asset-a' });
+        pipelineResponses.push(
+            [buildUtxo({ id: 'u1', slot: 200, blockHash: 'provider_a', assetName: 'asset-a' })],
+            [{ name: 'asset-a', policy: 'policy-a', hex: 'asset-a', resolved_addresses: { ada: knownAddress } }]
+        );
+
+        let assetUtxoAttempts = 0;
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'provider_tx_1' }] as never;
+            if (path === 'asset_utxos') {
+                assetUtxoAttempts++;
+                if (assetUtxoAttempts === 1) {
+                    const error: any = new Error('Koios asset_utxos request failed: 429 Too Many Requests');
+                    error.status = 429;
+                    error.statusText = 'Too Many Requests';
+                    throw error;
+                }
+                return [{ tx_hash: 'latest_tx_1' }] as never;
+            }
+            if (path === 'tx_info' && body?.includes('provider_tx_1')) return [{ source: 'provider' }] as never;
+            if (path === 'tx_info' && body?.includes('latest_tx_1')) return [{ source: 'latest' }] as never;
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockImplementation((txs: any[]) => {
+            if (txs?.[0]?.source === 'provider') return [providerUtxo] as never;
+            if (txs?.[0]?.source === 'latest') return [providerUtxo] as never;
+            return [] as never;
+        });
+
+        const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+        let hasAssetUtxoBackoffDelay = false;
+        try {
+            await scannerModule.Internal.checkRollback();
+            hasAssetUtxoBackoffDelay = setTimeoutSpy.mock.calls.some((call) => Number(call[1]) >= 500);
+        } finally {
+            setTimeoutSpy.mockRestore();
+        }
+
+        expect(assetUtxoAttempts).toBe(2);
+        expect(hasAssetUtxoBackoffDelay).toBe(true);
     });
 
     it('splits tx_info batches after retries are exhausted and continues scanning', async () => {
@@ -1012,7 +1092,7 @@ describe('Scanner lambda unit tests', () => {
             logSpy.mockRestore();
             warnSpy.mockRestore();
         }
-    });
+    }, 30_000);
 
     it('scan ignores missing burn handles (idempotent burn replay)', async () => {
         const { handlesRepo, pipelineResponses, scannerModule } = setup();
@@ -1152,6 +1232,51 @@ describe('Scanner lambda unit tests', () => {
         expect(result).toEqual({ isBase64Encoded: false, statusCode: 200, body: '' });
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/start_hash/next');
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(2, 'blocks/4980/next');
+    });
+
+    it('lambdaHandler rejects function-url reindex shortcut requests without whitelisted api-key', async () => {
+        const { scannerModule, store } = setup({ whitelistedApiKeys: 'allowed-a,allowed-b' });
+        const functionUrlEvent = {
+            requestContext: { http: { method: 'POST', path: '/' } },
+            queryStringParameters: { reindex: 'true' },
+            headers: { 'api-key': 'not-allowed' }
+        } as any;
+
+        const result = await scannerModule.lambdaHandler(functionUrlEvent, {} as any);
+
+        expect(result).toEqual(
+            expect.objectContaining({
+                statusCode: 401,
+                body: JSON.stringify({ message: 'Unauthorized' })
+            })
+        );
+        expect(store.repopulateIndexesFromUTxOs).not.toHaveBeenCalled();
+        expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
+    });
+
+    it('lambdaHandler runs reindex from function-url shortcut with whitelisted api-key', async () => {
+        const { handlesRepo, scannerModule, store } = setup({ whitelistedApiKeys: 'allowed-a,allowed-b' });
+        handlesRepo.getMetrics.mockReturnValue({
+            lockLambdas: LockedLambdaReason.UNLOCKED,
+            indexSchemaVersion: 1,
+            currentBlockHash: 'start_hash',
+            currentSlot: 100
+        });
+        const functionUrlEvent = {
+            requestContext: { http: { method: 'POST', path: '/reindex' } },
+            headers: { 'api-key': 'allowed-b' }
+        } as any;
+
+        const result = await scannerModule.lambdaHandler(functionUrlEvent, {} as any);
+
+        expect(result).toEqual(
+            expect.objectContaining({
+                statusCode: 200,
+                body: JSON.stringify({ message: 'Reindex complete' })
+            })
+        );
+        expect(store.repopulateIndexesFromUTxOs).toHaveBeenCalledTimes(1);
+        expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
     });
 
     it('reuses scanner initialization across warm invocations', async () => {
