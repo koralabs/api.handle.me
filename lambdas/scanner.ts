@@ -13,10 +13,14 @@ const SCANNER_LEASE_KEY = 'scanner:lease';
 const SCANNER_RECOVERY_KEY = 'scanner:recovery';
 const SCANNER_LEASE_TTL_MS = 60_000;
 const SCANNER_LEASE_HEARTBEAT_MS = 20_000;
-const KOIOS_TX_INFO_MAX_RPS = 15;
+const KOIOS_TX_INFO_MAX_RPS = 12;
 const KOIOS_TX_INFO_MIN_INTERVAL_MS = Math.ceil(1000 / KOIOS_TX_INFO_MAX_RPS);
 const KOIOS_TX_INFO_MAX_RETRIES = 2;
 const KOIOS_TX_INFO_RETRY_BASE_DELAY_MS = 500;
+const KOIOS_BLOCK_TXS_MAX_RPS = 10;
+const KOIOS_BLOCK_TXS_MIN_INTERVAL_MS = Math.ceil(1000 / KOIOS_BLOCK_TXS_MAX_RPS);
+const KOIOS_BLOCK_TXS_MAX_RETRIES = 2;
+const KOIOS_BLOCK_TXS_RETRY_BASE_DELAY_MS = 1_000;
 const ROLLBACK_20_SLOT_WINDOW = 400; // 20 blocks * ~20 seconds per block
 const RECOVERY_REASON_ROLLBACK = 'rollback';
 const RECOVERY_REASON_REINDEX = 'reindex';
@@ -102,12 +106,14 @@ const delayMs = (milliseconds: number) => new Promise((resolve) => setTimeout(re
 
 const getTxInfoBody = (hashBatch: string[]) => JSON.stringify({ _tx_hashes: hashBatch, ...defaultKoiosSettings });
 
-const getKoiosTxInfoDebugCurl = (body: string) => {
+const getBlockTxsBody = (hashBatch: string[]) => JSON.stringify({ _block_hashes: hashBatch });
+
+const getKoiosDebugCurl = (path: string, body: string) => {
     const host = NETWORK.toLowerCase() === 'mainnet' ? 'api' : NETWORK.toLowerCase();
-    return `curl -v --http1.1 'https://${host}.koios.rest/api/v1/tx_info' -H 'Content-Type: application/json' -H 'Authorization: Bearer <YOUR_KOIOS_BEARER_TOKEN>' --data-binary '${body}'`;
+    return `curl -v --http1.1 'https://${host}.koios.rest/api/v1/${path}' -H 'Content-Type: application/json' -H 'Authorization: Bearer <YOUR_KOIOS_BEARER_TOKEN>' --data-binary '${body}'`;
 };
 
-const isRetriableKoiosTxInfoError = (error: any): boolean => {
+const isRetriableKoiosError = (error: any): boolean => {
     const message = `${error?.message ?? ''} ${error?.cause?.message ?? ''}`.toLowerCase();
     const koiosResponseMessage = `${error?.koiosResponse?.message ?? error?.koiosResponse?.error ?? ''}`.toLowerCase();
     const code = `${error?.code ?? ''}`.toLowerCase();
@@ -146,10 +152,10 @@ const fetchTxInfoBatchWithRetryAndSplit = async (hashBatch: string[], attempt = 
         }
         return txInfo;
     } catch (error: any) {
-        const retriable = isRetriableKoiosTxInfoError(error);
+        const retriable = isRetriableKoiosError(error);
         Logger.local({
-            message: `tx_info request failed. retriable=${retriable} attempt=${attempt + 1}/${KOIOS_TX_INFO_MAX_RETRIES + 1} hashCount=${hashBatch.length} bodyLength=${body.length} firstHash=${hashBatch[0] ?? ''} lastHash=${hashBatch[hashBatch.length - 1] ?? ''} code=${error?.code ?? ''} causeCode=${error?.cause?.code ?? ''} error=${error?.message ?? error} cause=${error?.cause?.message ?? ''} curl="${getKoiosTxInfoDebugCurl(body)}"`,
-            category: LogCategory.WARN,
+            message: `tx_info request failed. retriable=${retriable} attempt=${attempt + 1}/${KOIOS_TX_INFO_MAX_RETRIES + 1} hashCount=${hashBatch.length} bodyLength=${body.length} firstHash=${hashBatch[0] ?? ''} lastHash=${hashBatch[hashBatch.length - 1] ?? ''} code=${error?.code ?? ''} causeCode=${error?.cause?.code ?? ''} error=${error?.message ?? error} cause=${error?.cause?.message ?? ''} curl="${getKoiosDebugCurl('tx_info', body)}"`,
+            category: LogCategory.INFO,
             event: 'scannerLambda.koiosTxInfo.requestFailed'
         });
 
@@ -168,7 +174,7 @@ const fetchTxInfoBatchWithRetryAndSplit = async (hashBatch: string[], attempt = 
         const rightBatch = hashBatch.slice(midpoint);
         Logger.local({
             message: `Splitting tx_info batch after retries. originalCount=${hashBatch.length} leftCount=${leftBatch.length} rightCount=${rightBatch.length}`,
-            category: LogCategory.WARN,
+            category: LogCategory.INFO,
             event: 'scannerLambda.koiosTxInfo.splitBatch'
         });
 
@@ -194,13 +200,33 @@ const getBatchedUTxOs = async (txHashes: string[], txs?: KoiosTxInfo[]) => {
     return utxos;
 };
 
+const fetchBlockTxHashBatchWithRetry = async (hashBatch: string[], attempt = 0): Promise<string[]> => {
+    const body = getBlockTxsBody(hashBatch);
+    try {
+        const txs = (await fetchKoios(`block_txs`, 'POST', body)) as { tx_hash: string }[] | null;
+        return txs?.map((tx) => tx.tx_hash) ?? [];
+    } catch (error: any) {
+        const retriable = isRetriableKoiosError(error);
+        Logger.local({
+            message: `block_txs request failed. retriable=${retriable} attempt=${attempt + 1}/${KOIOS_BLOCK_TXS_MAX_RETRIES + 1} hashCount=${hashBatch.length} bodyLength=${body.length} firstHash=${hashBatch[0] ?? ''} lastHash=${hashBatch[hashBatch.length - 1] ?? ''} code=${error?.code ?? ''} causeCode=${error?.cause?.code ?? ''} error=${error?.message ?? error} cause=${error?.cause?.message ?? ''} curl="${getKoiosDebugCurl('block_txs', body)}"`,
+            category: LogCategory.INFO,
+            event: 'scannerLambda.koiosBlockTxs.requestFailed'
+        });
+
+        if (!retriable || attempt >= KOIOS_BLOCK_TXS_MAX_RETRIES) throw error;
+
+        const backoff = KOIOS_BLOCK_TXS_RETRY_BASE_DELAY_MS * (attempt + 1);
+        await delayMs(backoff);
+        return fetchBlockTxHashBatchWithRetry(hashBatch, attempt + 1);
+    }
+};
+
 const getBatchedTxHashes = async (blockHashes: string[]) => {
     const batchedBlockHashes = getKoiosBatches(blockHashes, '_block_hashes');
     const txHashes: string[] = [];
-    await asyncForEach(batchedBlockHashes, async (blockHashes) => {
-        const txs = (await fetchKoios(`block_txs`, 'POST', JSON.stringify({ _block_hashes: blockHashes }))) as { tx_hash: string }[] | null;
-        txHashes.push(...(txs?.map((tx) => tx.tx_hash) ?? []));
-    });
+    await asyncForEach(batchedBlockHashes, async (hashBatch) => {
+        txHashes.push(...await fetchBlockTxHashBatchWithRetry(hashBatch));
+    }, KOIOS_BLOCK_TXS_MIN_INTERVAL_MS);
     return txHashes;
 };
 

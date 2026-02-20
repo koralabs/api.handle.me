@@ -831,19 +831,21 @@ describe('Scanner lambda unit tests', () => {
         });
         mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
 
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
         const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
         const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
         try {
             await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
             const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
             expect(txInfoCalls).toHaveLength(2);
-            const logEntries = [...warnSpy.mock.calls, ...errorSpy.mock.calls].map(([entry]) => `${entry}`);
+            const logEntries = [...logSpy.mock.calls, ...warnSpy.mock.calls, ...errorSpy.mock.calls].map(([entry]) => `${entry}`);
             expect(
                 logEntries.some((entry) => entry.includes('scannerLambda.koiosTxInfo.requestFailed'))
             ).toBe(true);
             expect(logEntries.some((entry) => entry.includes('UND_ERR_SOCKET'))).toBe(true);
             expect(logEntries.some((entry) => entry.includes('curl -v --http1.1'))).toBe(true);
         } finally {
+            logSpy.mockRestore();
             warnSpy.mockRestore();
             errorSpy.mockRestore();
         }
@@ -910,7 +912,47 @@ describe('Scanner lambda unit tests', () => {
         expect(txInfoCalls).toHaveLength(2);
     });
 
-    it('paces tx_info requests to stay under 15 requests per second', async () => {
+    it('retries block_txs on 429 response errors from Koios with backoff delay', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
+
+        let blockTxAttempts = 0;
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') {
+                blockTxAttempts++;
+                if (blockTxAttempts === 1) {
+                    const error: any = new Error('Koios block_txs request failed: 429 Too Many Requests');
+                    error.status = 429;
+                    error.statusText = 'Too Many Requests';
+                    error.responseText = '<html><body><h1>429 Too Many Requests</h1></body></html>';
+                    throw error;
+                }
+                return [{ tx_hash: 'tx_a' }] as never;
+            }
+            if (path === 'tx_info') {
+                const parsedBody = JSON.parse(body ?? '{}');
+                return (parsedBody._tx_hashes ?? []).map((txHash: string) => ({ tx_hash: txHash, block_hash: 'block_newer', inputs: [] })) as never;
+            }
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+        let hasBlockTxBackoffDelay = false;
+        try {
+            await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+            hasBlockTxBackoffDelay = setTimeoutSpy.mock.calls.some((call) => Number(call[1]) >= 1_000);
+        } finally {
+            setTimeoutSpy.mockRestore();
+        }
+
+        const blockTxCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'block_txs');
+        expect(blockTxCalls).toHaveLength(2);
+        expect(hasBlockTxBackoffDelay).toBe(true);
+    });
+
+    it('paces tx_info requests to stay under 12 requests per second', async () => {
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
         mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
@@ -935,7 +977,7 @@ describe('Scanner lambda unit tests', () => {
             .map((call) => Number(call[1]))
             .filter((delay) => Number.isFinite(delay) && delay > 0 && delay < 1_000);
         setTimeoutSpy.mockRestore();
-        expect(pacingCalls.some((delay) => delay >= 60)).toBe(true);
+        expect(pacingCalls.some((delay) => delay >= 80)).toBe(true);
     });
 
     it('splits tx_info batches after retries are exhausted and continues scanning', async () => {
@@ -957,15 +999,17 @@ describe('Scanner lambda unit tests', () => {
         });
         mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
 
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
         const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
         try {
             await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
             const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
             expect(txInfoCalls.length).toBeGreaterThanOrEqual(5);
             expect(
-                warnSpy.mock.calls.some(([entry]) => `${entry}`.includes('"event": "scannerLambda.koiosTxInfo.splitBatch"'))
+                [...logSpy.mock.calls, ...warnSpy.mock.calls].some(([entry]) => `${entry}`.includes('"event": "scannerLambda.koiosTxInfo.splitBatch"'))
             ).toBe(true);
         } finally {
+            logSpy.mockRestore();
             warnSpy.mockRestore();
         }
     });
