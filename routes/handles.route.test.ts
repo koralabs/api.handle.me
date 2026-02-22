@@ -3,6 +3,7 @@ import * as cbor from '@koralabs/kora-labs-common/utils/cbor';
 import request from 'supertest';
 import App from '../app';
 import * as config from '../config';
+import * as scriptsConfig from '../config/scripts';
 
 jest.mock('../services/ogmios/ogmios.service');
 
@@ -43,6 +44,17 @@ jest.mock('../repositories/handlesRepository', () => ({
                     },
                     utxo: 'utxo#0',
                     policy: 'f0ff'
+                };
+            }
+            if (handleName === 'missing_ref_script') {
+                return {
+                    name: handleName,
+                    resolved_addresses: {
+                        ada: 'addr1'
+                    },
+                    utxo: 'utxo#0',
+                    policy: 'f0ff',
+                    reference_utxo: 'tx_id_missing_script#0'
                 };
             }
             if (handleName === 'no-personalization') {
@@ -174,6 +186,14 @@ jest.mock('../repositories/handlesRepository', () => ({
                     datum: '',
                     address: 'addr1_ref_token',
                     script: { type: 'plutus_v2', cbor: 'a247' }
+                }
+            } else if (utxoId === 'tx_id_missing_script#0') {
+                return {
+                    tx_id: 'tx_id_missing_script',
+                    index: 0,
+                    lovelace: 0,
+                    datum: '',
+                    address: 'addr1_script_lookup'
                 }
             } else if (utxoId === 'tx_id_sub#0') {
                 return {datum:'9f9f01019f9f011a0bebc200ff9f021a05f5e100ff9f031a02faf080ffffa14862675f696d61676540ff9f01019f9f011a01312d00ffffa14862675f696d61676540ff000000581a687474703a2f2f6c6f63616c686f73743a333030372f23746f75005839004988cad9aa1ebd733b165695cfef965fda2ee42dab2d8584c43b039c96f91da5bdb192de2415d3e6d064aec54acee648c2c6879fad1ffda1ff'}
@@ -799,6 +819,33 @@ describe('Testing Handles Routes', () => {
             const response = await request(app?.getServer()).get('/handles/burritos/reference_token');
             expect(response.status).toEqual(200);
             expect(response.body).toEqual({ address: 'addr1_ref_token', datum: '', index: 0, lovelace: 0, tx_id: 'tx_id', script:{ 'cbor': 'a247', type: 'plutus_v2' }});
+        });
+
+        it('should attach configured script when reference token utxo has no script', async () => {
+            jest.spyOn(scriptsConfig, 'getScript').mockReturnValue({
+                handle: 'pz_script_01',
+                handleHex: 'hex',
+                validatorHash: 'abc',
+                type: 'pz_contract',
+                cbor: 'deadbeef'
+            } as any);
+
+            const response = await request(app?.getServer()).get('/handles/missing_ref_script/reference_token');
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual({
+                address: 'addr1_script_lookup',
+                datum: '',
+                index: 0,
+                lovelace: 0,
+                tx_id: 'tx_id_missing_script',
+                script: {
+                    handle: 'pz_script_01',
+                    handleHex: 'hex',
+                    validatorHash: 'abc',
+                    type: 'pz_contract',
+                    cbor: 'deadbeef'
+                }
+            });
         });
 
         it('should return empty object when reference token cannot be found', async () => {

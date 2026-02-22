@@ -18,11 +18,25 @@ import { decodeCborToJson, DefaultTextFormat } from '@koralabs/kora-labs-common/
 import { NextFunction, Request, Response } from 'express';
 import { isDatumEndpointEnabled } from '../config';
 import { MAX_PAGINATED_RESULTS, MAX_TEXT_PLAIN_PAGINATED_RESULTS } from '../config/constants';
+import { getScript } from '../config/scripts';
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandleViewModel } from '../models/view/handle.view.model';
 import { HandlesRepository } from '../repositories/handlesRepository';
 
 class HandlesController {
+    private static attachReferenceTokenScript(utxo: UTxO): UTxO {
+        if (utxo.script) {
+            return utxo;
+        }
+
+        const script = getScript(utxo.address);
+        if (script?.cbor && script?.type) {
+            utxo.script = script as unknown as UTxO['script'];
+        }
+
+        return utxo;
+    }
+
     private static validateRecordsPerPage(recordsPerPage?: string, maxRecordsPerPage = MAX_PAGINATED_RESULTS): void {
         const count = Number(recordsPerPage);
         if (recordsPerPage && Number.isFinite(count) && count > maxRecordsPerPage) {
@@ -207,7 +221,7 @@ class HandlesController {
             const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
             const refUtxo = handleRepo.getUTxO(handleData.handle?.reference_utxo)
             if (refUtxo) {
-                const reference_token = new UTxO(refUtxo);
+                const reference_token = HandlesController.attachReferenceTokenScript(new UTxO(refUtxo));
                 return { reference_token, code: handleData.code };
             }
         }
