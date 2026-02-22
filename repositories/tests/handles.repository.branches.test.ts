@@ -1399,4 +1399,230 @@ describe('HandlesRepository branch tests', () => {
             payment_address: 'addr_test1'
         });
     });
+
+    it('uses unfiltered metrics pagination fast path for names-only and hydrated searches', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        store.getMetrics.mockReturnValue({ handleCount: 2 });
+        store.getKeysFromIndex.mockImplementation((index: IndexNames, options?: any) => {
+            if (index !== IndexNames.HANDLE) return [];
+            if (!options) return ['alpha', 'beta'];
+            return options.orderBy === 'desc' ? ['beta', 'alpha'] : ['alpha', 'beta'];
+        });
+        store.getValuesFromIndexedSet.mockImplementation((index: IndexNames, key: string | number) => {
+            if (index === IndexNames.DEFAULT_HANDLE && key === holder) return new Set(['alpha']);
+            if (index === IndexNames.HOLDER && key === holder) return new Set(['alpha', 'beta']);
+            return undefined;
+        });
+
+        let pipelineCalls = 0;
+        store.pipeline.mockImplementation((commands: () => void) => {
+            pipelineCalls += 1;
+            commands();
+            if (pipelineCalls === 1) {
+                return [
+                    { name: 'beta', hex: Buffer.from('beta').toString('hex'), holder, resolved_addresses: { ada: address } },
+                    { name: 'alpha', hex: Buffer.from('alpha').toString('hex'), holder, resolved_addresses: { ada: address } }
+                ];
+            }
+            if (pipelineCalls === 2) return [new Set(['alpha'])];
+            return [];
+        });
+
+        const hydrated = repo.search({ page: 1, handlesPerPage: 2, sort: 'desc' } as any, undefined, false);
+        expect(hydrated.searchTotal).toBe(2);
+        expect((hydrated.handles[0] as any).default_in_wallet).toBe('alpha');
+
+        const namesOnly = repo.search({ page: 1, handlesPerPage: 2, sort: 'asc' } as any, undefined, true);
+        expect(namesOnly).toEqual({ searchTotal: 2, handles: ['alpha', 'beta'] });
+    });
+
+    it('covers resolveDefaultHandlesByHolder explicit, single, and large holder-set branches', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        const largeSet = new Set(Array.from({ length: 1001 }, (_, i) => `h${i}`));
+
+        let pipelineCalls = 0;
+        store.pipeline.mockImplementation((commands: () => void) => {
+            pipelineCalls += 1;
+            commands();
+            if (pipelineCalls === 1) return [new Set(['explicit']), undefined, undefined];
+            if (pipelineCalls === 2) return [new Set(['solo']), largeSet];
+            return [];
+        });
+
+        const defaults = (repo as any).resolveDefaultHandlesByHolder([
+            { holder: 'h-explicit' },
+            { holder: 'h-single' },
+            { holder: 'h-large' }
+        ]);
+
+        expect(defaults.get('h-explicit')).toBe('explicit');
+        expect(defaults.get('h-single')).toBe('solo');
+        expect(defaults.get('h-large')).toBe('h0');
+    });
+
+    it('covers descending slot-window pagination branch in search', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        store.getKeysFromIndex.mockReturnValue(['alpha']);
+        store.getMetrics.mockReturnValue({
+            firstSlot: 1,
+            lastSlot: 999999,
+            handleCount: 2
+        });
+        store.getValuesFromOrderedSet.mockImplementation((index: IndexNames) => {
+            if (index === IndexNames.SLOT) return ['alpha'];
+            return [];
+        });
+
+        const result = repo.search({ page: 1, handlesPerPage: 2, sort: 'desc', slotNumber: 100 } as any, undefined, true);
+        expect(result).toEqual({ searchTotal: 1, handles: ['alpha'] });
+        expect(store.getValuesFromOrderedSet).toHaveBeenCalledWith(
+            IndexNames.SLOT,
+            0,
+            expect.objectContaining({
+                start: 100,
+                end: -49900,
+                orderBy: 'DESC'
+            })
+        );
+    });
+
+    it('aggregates duplicate handle entries when minting data is built from one UTxO', () => {
+        const repo = new HandlesRepository(buildStoreMock());
+        const alphaHex = `${AssetNameLabel.LBL_222}${Buffer.from('alpha').toString('hex')}`;
+
+        const mintingData = repo.buildMintingDataFromUTxO({
+            ...buildUtxo(alphaHex, 55),
+            handles: [[policy, [alphaHex, alphaHex]]],
+            mint: [[policy, [alphaHex]]]
+        } as any);
+
+        expect(mintingData.get('alpha')?.length).toBe(2);
+    });
+
+    it('falls back to holder set size and computed defaults when score lookups are non-finite', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        store.getValuesFromOrderedSet.mockReturnValueOnce([holder]);
+        (store as any).getScoresFromOrderedSet = jest.fn().mockReturnValue([NaN]);
+        store.getValuesFromIndexedSet.mockImplementation((index: IndexNames, key: string | number, options?: any) => {
+            if (index === IndexNames.HOLDER && key === holder && !options) return new Set(['alpha', 'beta']);
+            return undefined;
+        });
+        jest.spyOn(repo, 'getDefaultHandle').mockReturnValue({ name: 'beta' } as any);
+
+        let pipelineCalls = 0;
+        store.pipeline.mockImplementation((commands: () => void) => {
+            pipelineCalls += 1;
+            commands();
+            if (pipelineCalls === 1) return [undefined];
+            if (pipelineCalls === 2) return [new Set(['alpha'])];
+            if (pipelineCalls === 3) return [new Set(['alpha', 'beta'])];
+            if (pipelineCalls === 4) return [{ resolved_addresses: { ada: address } }];
+            return [];
+        });
+
+        const holders = repo.getAllHolders({
+            pagination: { page: 1, recordsPerPage: 1, sort: 'desc' } as any,
+            includeHandles: false
+        });
+
+        expect(holders).toEqual([
+            expect.objectContaining({
+                address: holder,
+                total_handles: 2,
+                default_handle: 'beta',
+                handles: []
+            })
+        ]);
+    });
+
+    it('backfills empty resolved addresses for subhandle-settings updates', () => {
+        const repo = new HandlesRepository(buildStoreMock());
+        const saveSpy = jest.spyOn(repo, 'save').mockImplementation(jest.fn());
+        jest.spyOn(repo, 'updateHolder').mockImplementation(jest.fn());
+        const name = 'tiny@root';
+        const ownerTokenHex = `${AssetNameLabel.LBL_001}${Buffer.from(name).toString('hex')}`;
+        const existingHandle = {
+            name,
+            hex: ownerTokenHex,
+            policy,
+            holder: '',
+            holder_type: '',
+            updated_slot_number: 1,
+            created_slot_number: 1
+        } as any;
+
+        jest.spyOn(ogmiosUtils, 'getHandleNameFromAssetName').mockReturnValue({
+            name,
+            ownerTokenHex,
+            isCip67: true,
+            assetLabel: AssetNameLabel.LBL_001
+        });
+
+        repo.updateHandleIndexes(
+            {
+                ...buildUtxo(ownerTokenHex, 200, 'd87980'),
+                mint: [[policy, [ownerTokenHex]]]
+            } as any,
+            new Map([[name, [{ created_slot: 1, metadata: {}, txHash: 'tx' } as any]]]),
+            new Map([[name, existingHandle]]),
+            new Map()
+        );
+
+        expect(saveSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                name,
+                resolved_addresses: { ada: '' },
+                subhandle_settings: expect.objectContaining({ utxo_id: 'tx_200#0' })
+            }),
+            existingHandle
+        );
+    });
+
+    it('parses CIP67 222 subhandle personalization payloads', () => {
+        const repo = new HandlesRepository(buildStoreMock());
+        const name = 'tiny@root';
+        const handle = repo.Internal.buildHandle({
+            name,
+            hex: `${AssetNameLabel.LBL_222}${Buffer.from(name).toString('hex')}`,
+            policy,
+            resolved_addresses: { ada: address }
+        } as any);
+        jest.spyOn(common, 'decodeCborToJson').mockReturnValue({
+            constructor_0: [
+                {
+                    name,
+                    image: 'ipfs://img',
+                    mediaType: 'image/svg+xml',
+                    og: 0,
+                    og_number: 1,
+                    rarity: 'basic',
+                    length: 9,
+                    characters: 'letters',
+                    numeric_modifiers: '',
+                    version: 1
+                },
+                {},
+                {
+                    standard_image: '',
+                    default: 0,
+                    last_update_address: '',
+                    validated_by: '',
+                    image_hash: '',
+                    standard_image_hash: '',
+                    svg_version: '',
+                    agreed_terms: '',
+                    migrate_sig_required: 0,
+                    trial: 0,
+                    nsfw: 0
+                }
+            ]
+        } as any);
+
+        const result = repo.buildPersonalizationData(handle, 'd87980');
+        expect(result.nftAttributes).toEqual(expect.objectContaining({ name }));
+    });
 });
