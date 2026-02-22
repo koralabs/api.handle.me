@@ -1,76 +1,212 @@
 FORMAT_VERSION=1
 REPO=api.handle.me
-TIMESTAMP_UTC=2026-02-22T16:24:15Z
+TIMESTAMP_UTC=2026-02-22T17:22:36Z
 THRESHOLD_LINES=90
 THRESHOLD_BRANCHES=90
-TOTAL_LINES_PCT=99.81
-TOTAL_BRANCHES_PCT=90.71
+TOTAL_LINES_PCT=98.54
+TOTAL_BRANCHES_PCT=90.08
 STATUS=pass
-SOURCE_PATHS=repositories/handlesRepository.ts,services/ogmios/ogmios.service.ts,stores/redis/index.ts
-EXCLUDED_PATHS=NON_CRITICAL_RUNTIME_PATHS:covered_by_separate_suites
-LANGUAGE_SUMMARY=nodejs:lines=99.81,branches=90.71,tool=jest,status=pass
+SOURCE_PATHS=app.ts;config/**/*.ts;controllers/**/*.ts;ioc/**/*.ts;lambdas/**/*.ts;middlewares/**/*.ts;models/**/*.ts;repositories/**/*.ts;routes/**/*.ts;services/**/*.ts;stores/**/*.ts;utils/**/*.ts
+EXCLUDED_PATHS=scripts/**:manual_ops_utilities;interfaces/**:type_only_contracts;**/*.test.ts:test_code;**/*.e2e.test.ts:test_code;repositories/tests/**:test_fixtures;services/ogmios/tests/**:test_fixtures;**/*.d.ts:type_declarations;express.ts:top_level_await_not_instrumented_in_current_jest_path
+LANGUAGE_SUMMARY=nodejs:lines=98.54,branches=90.08,tool=jest,status=pass
 
-=== RAW_OUTPUT_JEST ===
-PASS repositories/tests/holders.e2e.test.ts (22.129 s)
-{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T16:23:21.487Z" }
-PASS lambdas/scanner.test.ts (20.133 s)
+=== RAW_OUTPUT_STANDARD_TEST ===
+
+> handles-public-api@1.13.0 test
+> npm run test:unit && npm run test:e2e
+
+
+> handles-public-api@1.13.0 test:unit
+> jest -c jest.config.ts --runInBand
+
+PASS lambdas/scanner.test.ts (21.655 s)
 PASS routes/handles.route.test.ts
-{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T16:24:05.848Z" }
+PASS utils/helpers.pagination.test.ts
+PASS middlewares/response.middleware.test.ts
+PASS utils/helpers.additional.test.ts
+PASS routes/holders.route.test.ts
+PASS routes/health.route.test.ts
+PASS routes/datum.route.test.ts
+PASS routes/stats.route.test.ts
+PASS routes/home.route.test.ts
+PASS controllers/scripts.controller.test.ts
+PASS controllers/mint.controller.test.ts
+PASS ./app.test.ts
+PASS repositories/tests/handles.repository.branches.test.ts
+PASS stores/redis/index.test.ts
+PASS lambdas/snapshot.unit.test.ts
+PASS controllers/health.controller.test.ts
+PASS services/ogmios/tests/index.test.ts
+PASS utils/helpers.test.ts
+PASS models/view/personalizedHandle.view.model.test.ts
+PASS utils/util.test.ts
+PASS middlewares/rateLimiter.middleware.test.ts
+PASS controllers/datum.controller.test.ts
+PASS services/ogmios/tests/service.lifecycle.test.ts
+PASS services/ogmios/tests/processBlock.unit.test.ts
+PASS lambdas/valkeyutility.test.ts
+PASS middlewares/error.middleware.test.ts
+PASS utils/ipfs/index.test.ts
+PASS routes/rootHandles.route.test.ts
+PASS config/index.test.ts
+PASS services/ogmios/tests/websocket.client.test.ts
+PASS controllers/rootHandles.controller.test.ts
+PASS lambdas/api.test.ts
+PASS utils/ipfs/requestIpfs.test.ts
+PASS routes/deployment.route.test.ts
+PASS services/minting.service.test.ts
+PASS controllers/home.controller.test.ts
+PASS controllers/deployment.controller.test.ts
+PASS controllers/stats.controller.test.ts
+PASS models/view/handle.view.model.test.ts
+PASS config/constants.test.ts
+
+Test Suites: 41 passed, 41 total
+Tests:       412 passed, 412 total
+Snapshots:   0 total
+Time:        30.714 s, estimated 41 s
+
+> handles-public-api@1.13.0 test:e2e
+> chmod +x ./shell/local_valkey.sh && REDIS_HOST=127.0.0.1 REDIS_PORT=6380 ./shell/local_valkey.sh && (export NETWORK=preview REDIS_HOST=127.0.0.1 REDIS_PORT=6380; jest -c jest.e2e.config.ts --forceExit --runInBand)
+
+Valkey ready on 127.0.0.1:6380
+PASS services/ogmios/tests/processBlock.e2e.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T17:21:13.099Z" }
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T17:21:13.587Z" }
 PASS lambdas/scanner.e2e.test.ts
+PASS repositories/tests/repository.lifecycle.e2e.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T17:21:16.175Z" }
+PASS repositories/tests/handles.repository.e2e.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T17:21:16.583Z" }
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T17:21:17.056Z" }
+PASS lambdas/snapshot.e2e.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T17:21:17.181Z" }
+PASS repositories/tests/holders.e2e.test.ts (21.897 s)
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T17:21:17.350Z" }
+PASS repositories/tests/og.e2e.test.ts
+
+Test Suites: 7 passed, 7 total
+Tests:       61 passed, 61 total
+Snapshots:   0 total
+Time:        28.545 s
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+
+=== RAW_OUTPUT_COVERAGE_JEST ===
+PASS repositories/tests/holders.e2e.test.ts (22.681 s)
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T17:21:41.403Z" }
+PASS lambdas/scanner.test.ts (20.271 s)
+PASS routes/handles.route.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T17:22:26.591Z" }
+PASS lambdas/scanner.e2e.test.ts
+PASS middlewares/response.middleware.test.ts
 PASS routes/health.route.test.ts
 PASS routes/holders.route.test.ts
 PASS routes/datum.route.test.ts
 PASS routes/home.route.test.ts
-PASS routes/stats.route.test.ts
 PASS controllers/scripts.controller.test.ts
+PASS routes/stats.route.test.ts
 PASS controllers/mint.controller.test.ts
+PASS services/ogmios/tests/processBlock.e2e.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T17:22:33.604Z" }
 PASS repositories/tests/handles.repository.e2e.test.ts
-{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T16:24:12.710Z" }
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T17:22:33.912Z" }
 PASS utils/helpers.pagination.test.ts
 PASS repositories/tests/repository.lifecycle.e2e.test.ts
-{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T16:24:13.416Z" }
-PASS services/ogmios/tests/processBlock.e2e.test.ts
-{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T16:24:13.756Z" }
-{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T16:24:14.045Z" }
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T17:22:34.588Z" }
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T17:22:34.919Z" }
 PASS lambdas/snapshot.e2e.test.ts
-{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T16:24:14.170Z" }
+PASS models/view/personalizedHandle.view.model.test.ts
+PASS lambdas/snapshot.unit.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T17:22:35.042Z" }
 PASS repositories/tests/og.e2e.test.ts
 PASS stores/redis/index.test.ts
-{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T16:24:14.296Z" }
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T17:22:35.237Z" }
 PASS ./app.test.ts
+PASS utils/util.test.ts
+PASS controllers/datum.controller.test.ts
+PASS middlewares/error.middleware.test.ts
 PASS repositories/tests/handles.repository.branches.test.ts
+PASS lambdas/valkeyutility.test.ts
+PASS config/index.test.ts
 PASS services/ogmios/tests/index.test.ts
 PASS routes/rootHandles.route.test.ts
+PASS controllers/health.controller.test.ts
 PASS services/ogmios/tests/service.lifecycle.test.ts
 PASS services/ogmios/tests/processBlock.unit.test.ts
 PASS services/ogmios/tests/websocket.client.test.ts
+PASS routes/deployment.route.test.ts
+PASS controllers/stats.controller.test.ts
+PASS models/view/handle.view.model.test.ts
 PASS utils/ipfs/index.test.ts
-PASS utils/util.test.ts
+PASS utils/helpers.additional.test.ts
+PASS controllers/rootHandles.controller.test.ts
 PASS utils/helpers.test.ts
 PASS services/minting.service.test.ts
-PASS routes/deployment.route.test.ts
-PASS controllers/rootHandles.controller.test.ts
 PASS utils/ipfs/requestIpfs.test.ts
 PASS lambdas/api.test.ts
-PASS controllers/home.controller.test.ts
+PASS middlewares/rateLimiter.middleware.test.ts
 PASS controllers/deployment.controller.test.ts
+PASS controllers/home.controller.test.ts
+PASS config/constants.test.ts
 
 =============================== Coverage summary ===============================
-Statements   : 99.26% ( 1208/1217 )
-Branches     : 90.71% ( 596/657 )
-Functions    : 99.56% ( 228/229 )
-Lines        : 99.81% ( 1089/1091 )
+Statements   : 97.57% ( 2821/2891 )
+Branches     : 90.08% ( 1108/1230 )
+Functions    : 98.21% ( 496/505 )
+Lines        : 98.54% ( 2566/2604 )
 ================================================================================
 
-Test Suites: 35 passed, 35 total
-Tests:       425 passed, 425 total
+Test Suites: 48 passed, 48 total
+Tests:       473 passed, 473 total
 Snapshots:   0 total
-Time:        54.473 s
+Time:        55.89 s, estimated 57 s
 Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
 
 === RAW_OUTPUT_COVERAGE_SUMMARY_JSON ===
-{"total": {"lines":{"total":1091,"covered":1089,"skipped":0,"pct":99.81},"statements":{"total":1217,"covered":1208,"skipped":0,"pct":99.26},"functions":{"total":229,"covered":228,"skipped":0,"pct":99.56},"branches":{"total":657,"covered":596,"skipped":0,"pct":90.71},"branchesTrue":{"total":0,"covered":0,"skipped":0,"pct":100}}
+{"total": {"lines":{"total":2604,"covered":2566,"skipped":0,"pct":98.54},"statements":{"total":2891,"covered":2821,"skipped":0,"pct":97.57},"functions":{"total":505,"covered":496,"skipped":0,"pct":98.21},"branches":{"total":1230,"covered":1108,"skipped":0,"pct":90.08},"branchesTrue":{"total":0,"covered":0,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/app.ts": {"lines":{"total":76,"covered":76,"skipped":0,"pct":100},"functions":{"total":17,"covered":17,"skipped":0,"pct":100},"statements":{"total":77,"covered":77,"skipped":0,"pct":100},"branches":{"total":18,"covered":15,"skipped":0,"pct":83.33}}
+,"/home/jesse/src/koralabs/api.handle.me/config/constants.ts": {"lines":{"total":17,"covered":17,"skipped":0,"pct":100},"functions":{"total":0,"covered":0,"skipped":0,"pct":100},"statements":{"total":17,"covered":17,"skipped":0,"pct":100},"branches":{"total":2,"covered":2,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/config/index.ts": {"lines":{"total":5,"covered":5,"skipped":0,"pct":100},"functions":{"total":2,"covered":2,"skipped":0,"pct":100},"statements":{"total":8,"covered":8,"skipped":0,"pct":100},"branches":{"total":29,"covered":29,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/config/scripts.ts": {"lines":{"total":5,"covered":5,"skipped":0,"pct":100},"functions":{"total":1,"covered":1,"skipped":0,"pct":100},"statements":{"total":6,"covered":6,"skipped":0,"pct":100},"branches":{"total":2,"covered":1,"skipped":0,"pct":50}}
+,"/home/jesse/src/koralabs/api.handle.me/controllers/datum.controller.ts": {"lines":{"total":21,"covered":21,"skipped":0,"pct":100},"functions":{"total":1,"covered":1,"skipped":0,"pct":100},"statements":{"total":21,"covered":21,"skipped":0,"pct":100},"branches":{"total":15,"covered":15,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/controllers/deployment.controller.ts": {"lines":{"total":7,"covered":7,"skipped":0,"pct":100},"functions":{"total":1,"covered":1,"skipped":0,"pct":100},"statements":{"total":7,"covered":7,"skipped":0,"pct":100},"branches":{"total":0,"covered":0,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/controllers/handles.controller.ts": {"lines":{"total":204,"covered":194,"skipped":0,"pct":95.09},"functions":{"total":24,"covered":23,"skipped":0,"pct":95.83},"statements":{"total":211,"covered":200,"skipped":0,"pct":94.78},"branches":{"total":81,"covered":75,"skipped":0,"pct":92.59}}
+,"/home/jesse/src/koralabs/api.handle.me/controllers/health.controller.ts": {"lines":{"total":43,"covered":43,"skipped":0,"pct":100},"functions":{"total":2,"covered":2,"skipped":0,"pct":100},"statements":{"total":43,"covered":43,"skipped":0,"pct":100},"branches":{"total":31,"covered":30,"skipped":0,"pct":96.77}}
+,"/home/jesse/src/koralabs/api.handle.me/controllers/holders.controller.ts": {"lines":{"total":22,"covered":22,"skipped":0,"pct":100},"functions":{"total":3,"covered":3,"skipped":0,"pct":100},"statements":{"total":23,"covered":23,"skipped":0,"pct":100},"branches":{"total":6,"covered":6,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/controllers/home.controller.ts": {"lines":{"total":4,"covered":4,"skipped":0,"pct":100},"functions":{"total":1,"covered":1,"skipped":0,"pct":100},"statements":{"total":4,"covered":4,"skipped":0,"pct":100},"branches":{"total":0,"covered":0,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/controllers/mint.controller.ts": {"lines":{"total":14,"covered":14,"skipped":0,"pct":100},"functions":{"total":1,"covered":1,"skipped":0,"pct":100},"statements":{"total":14,"covered":14,"skipped":0,"pct":100},"branches":{"total":1,"covered":1,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/controllers/rootHandles.controller.ts": {"lines":{"total":21,"covered":21,"skipped":0,"pct":100},"functions":{"total":5,"covered":5,"skipped":0,"pct":100},"statements":{"total":23,"covered":23,"skipped":0,"pct":100},"branches":{"total":4,"covered":4,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/controllers/scripts.controller.ts": {"lines":{"total":23,"covered":22,"skipped":0,"pct":95.65},"functions":{"total":4,"covered":4,"skipped":0,"pct":100},"statements":{"total":23,"covered":22,"skipped":0,"pct":95.65},"branches":{"total":12,"covered":12,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/controllers/stats.controller.ts": {"lines":{"total":8,"covered":8,"skipped":0,"pct":100},"functions":{"total":1,"covered":1,"skipped":0,"pct":100},"statements":{"total":8,"covered":8,"skipped":0,"pct":100},"branches":{"total":4,"covered":4,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/ioc/main.registry.ts": {"lines":{"total":3,"covered":3,"skipped":0,"pct":100},"functions":{"total":0,"covered":0,"skipped":0,"pct":100},"statements":{"total":3,"covered":3,"skipped":0,"pct":100},"branches":{"total":0,"covered":0,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/lambdas/api.ts": {"lines":{"total":8,"covered":8,"skipped":0,"pct":100},"functions":{"total":1,"covered":1,"skipped":0,"pct":100},"statements":{"total":9,"covered":9,"skipped":0,"pct":100},"branches":{"total":1,"covered":1,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/lambdas/scanner.ts": {"lines":{"total":452,"covered":440,"skipped":0,"pct":97.34},"functions":{"total":100,"covered":100,"skipped":0,"pct":100},"statements":{"total":538,"covered":507,"skipped":0,"pct":94.23},"branches":{"total":211,"covered":174,"skipped":0,"pct":82.46}}
+,"/home/jesse/src/koralabs/api.handle.me/lambdas/snapshot.ts": {"lines":{"total":112,"covered":106,"skipped":0,"pct":94.64},"functions":{"total":16,"covered":15,"skipped":0,"pct":93.75},"statements":{"total":121,"covered":115,"skipped":0,"pct":95.04},"branches":{"total":26,"covered":22,"skipped":0,"pct":84.61}}
+,"/home/jesse/src/koralabs/api.handle.me/lambdas/valkeyutility.ts": {"lines":{"total":29,"covered":29,"skipped":0,"pct":100},"functions":{"total":6,"covered":6,"skipped":0,"pct":100},"statements":{"total":33,"covered":33,"skipped":0,"pct":100},"branches":{"total":15,"covered":15,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/middlewares/error.middleware.ts": {"lines":{"total":14,"covered":14,"skipped":0,"pct":100},"functions":{"total":1,"covered":1,"skipped":0,"pct":100},"statements":{"total":14,"covered":14,"skipped":0,"pct":100},"branches":{"total":6,"covered":6,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/middlewares/rateLimiter.middleware.ts": {"lines":{"total":8,"covered":8,"skipped":0,"pct":100},"functions":{"total":1,"covered":1,"skipped":0,"pct":100},"statements":{"total":9,"covered":9,"skipped":0,"pct":100},"branches":{"total":3,"covered":3,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/middlewares/response.middleware.ts": {"lines":{"total":11,"covered":11,"skipped":0,"pct":100},"functions":{"total":2,"covered":2,"skipped":0,"pct":100},"statements":{"total":11,"covered":11,"skipped":0,"pct":100},"branches":{"total":5,"covered":5,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/models/view/handle.view.model.ts": {"lines":{"total":45,"covered":45,"skipped":0,"pct":100},"functions":{"total":2,"covered":2,"skipped":0,"pct":100},"statements":{"total":45,"covered":45,"skipped":0,"pct":100},"branches":{"total":6,"covered":6,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/models/view/personalizedHandle.view.model.ts": {"lines":{"total":5,"covered":5,"skipped":0,"pct":100},"functions":{"total":1,"covered":1,"skipped":0,"pct":100},"statements":{"total":5,"covered":5,"skipped":0,"pct":100},"branches":{"total":1,"covered":1,"skipped":0,"pct":100}}
 ,"/home/jesse/src/koralabs/api.handle.me/repositories/handlesRepository.ts": {"lines":{"total":691,"covered":690,"skipped":0,"pct":99.85},"functions":{"total":139,"covered":139,"skipped":0,"pct":100},"statements":{"total":764,"covered":758,"skipped":0,"pct":99.21},"branches":{"total":453,"covered":396,"skipped":0,"pct":87.41}}
+,"/home/jesse/src/koralabs/api.handle.me/routes/base.ts": {"lines":{"total":4,"covered":4,"skipped":0,"pct":100},"functions":{"total":0,"covered":0,"skipped":0,"pct":100},"statements":{"total":4,"covered":4,"skipped":0,"pct":100},"branches":{"total":0,"covered":0,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/routes/datum.route.ts": {"lines":{"total":10,"covered":10,"skipped":0,"pct":100},"functions":{"total":2,"covered":2,"skipped":0,"pct":100},"statements":{"total":10,"covered":10,"skipped":0,"pct":100},"branches":{"total":0,"covered":0,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/routes/deployment.route.ts": {"lines":{"total":10,"covered":10,"skipped":0,"pct":100},"functions":{"total":2,"covered":2,"skipped":0,"pct":100},"statements":{"total":10,"covered":10,"skipped":0,"pct":100},"branches":{"total":0,"covered":0,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/routes/handles.route.ts": {"lines":{"total":21,"covered":21,"skipped":0,"pct":100},"functions":{"total":2,"covered":2,"skipped":0,"pct":100},"statements":{"total":21,"covered":21,"skipped":0,"pct":100},"branches":{"total":0,"covered":0,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/routes/health.route.ts": {"lines":{"total":10,"covered":10,"skipped":0,"pct":100},"functions":{"total":2,"covered":2,"skipped":0,"pct":100},"statements":{"total":10,"covered":10,"skipped":0,"pct":100},"branches":{"total":0,"covered":0,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/routes/holders.route.ts": {"lines":{"total":9,"covered":9,"skipped":0,"pct":100},"functions":{"total":2,"covered":2,"skipped":0,"pct":100},"statements":{"total":9,"covered":9,"skipped":0,"pct":100},"branches":{"total":0,"covered":0,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/routes/home.route.ts": {"lines":{"total":10,"covered":10,"skipped":0,"pct":100},"functions":{"total":2,"covered":2,"skipped":0,"pct":100},"statements":{"total":10,"covered":10,"skipped":0,"pct":100},"branches":{"total":0,"covered":0,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/routes/mint.route.ts": {"lines":{"total":8,"covered":8,"skipped":0,"pct":100},"functions":{"total":2,"covered":2,"skipped":0,"pct":100},"statements":{"total":8,"covered":8,"skipped":0,"pct":100},"branches":{"total":0,"covered":0,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/routes/rootHandles.route.ts": {"lines":{"total":10,"covered":10,"skipped":0,"pct":100},"functions":{"total":2,"covered":2,"skipped":0,"pct":100},"statements":{"total":10,"covered":10,"skipped":0,"pct":100},"branches":{"total":0,"covered":0,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/routes/scripts.route.ts": {"lines":{"total":10,"covered":10,"skipped":0,"pct":100},"functions":{"total":2,"covered":2,"skipped":0,"pct":100},"statements":{"total":10,"covered":10,"skipped":0,"pct":100},"branches":{"total":0,"covered":0,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/routes/stats.route.ts": {"lines":{"total":10,"covered":10,"skipped":0,"pct":100},"functions":{"total":2,"covered":2,"skipped":0,"pct":100},"statements":{"total":10,"covered":10,"skipped":0,"pct":100},"branches":{"total":0,"covered":0,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/services/minting.service.ts": {"lines":{"total":4,"covered":4,"skipped":0,"pct":100},"functions":{"total":1,"covered":1,"skipped":0,"pct":100},"statements":{"total":5,"covered":5,"skipped":0,"pct":100},"branches":{"total":0,"covered":0,"skipped":0,"pct":100}}
 ,"/home/jesse/src/koralabs/api.handle.me/services/ogmios/ogmios.service.ts": {"lines":{"total":135,"covered":134,"skipped":0,"pct":99.25},"functions":{"total":28,"covered":28,"skipped":0,"pct":100},"statements":{"total":156,"covered":155,"skipped":0,"pct":99.35},"branches":{"total":76,"covered":73,"skipped":0,"pct":96.05}}
+,"/home/jesse/src/koralabs/api.handle.me/services/ogmios/utils/index.ts": {"lines":{"total":76,"covered":74,"skipped":0,"pct":97.36},"functions":{"total":11,"covered":11,"skipped":0,"pct":100},"statements":{"total":83,"covered":81,"skipped":0,"pct":97.59},"branches":{"total":37,"covered":34,"skipped":0,"pct":91.89}}
+,"/home/jesse/src/koralabs/api.handle.me/services/ogmios/utils/manualRollback.ts": {"lines":{"total":5,"covered":0,"skipped":0,"pct":0},"functions":{"total":2,"covered":0,"skipped":0,"pct":0},"statements":{"total":6,"covered":0,"skipped":0,"pct":0},"branches":{"total":3,"covered":0,"skipped":0,"pct":0}}
 ,"/home/jesse/src/koralabs/api.handle.me/stores/redis/index.ts": {"lines":{"total":265,"covered":265,"skipped":0,"pct":100},"functions":{"total":62,"covered":61,"skipped":0,"pct":98.38},"statements":{"total":297,"covered":295,"skipped":0,"pct":99.32},"branches":{"total":128,"covered":127,"skipped":0,"pct":99.21}}
+,"/home/jesse/src/koralabs/api.handle.me/utils/helpers.ts": {"lines":{"total":91,"covered":91,"skipped":0,"pct":100},"functions":{"total":29,"covered":27,"skipped":0,"pct":93.1},"statements":{"total":112,"covered":110,"skipped":0,"pct":98.21},"branches":{"total":35,"covered":32,"skipped":0,"pct":91.42}}
+,"/home/jesse/src/koralabs/api.handle.me/utils/util.ts": {"lines":{"total":26,"covered":26,"skipped":0,"pct":100},"functions":{"total":10,"covered":10,"skipped":0,"pct":100},"statements":{"total":37,"covered":37,"skipped":0,"pct":100},"branches":{"total":13,"covered":13,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/utils/ipfs/index.ts": {"lines":{"total":26,"covered":26,"skipped":0,"pct":100},"functions":{"total":3,"covered":1,"skipped":0,"pct":33.33},"statements":{"total":29,"covered":27,"skipped":0,"pct":93.1},"branches":{"total":6,"covered":6,"skipped":0,"pct":100}}
+,"/home/jesse/src/koralabs/api.handle.me/utils/ipfs/requestIpfs.ts": {"lines":{"total":16,"covered":16,"skipped":0,"pct":100},"functions":{"total":7,"covered":7,"skipped":0,"pct":100},"statements":{"total":17,"covered":17,"skipped":0,"pct":100},"branches":{"total":0,"covered":0,"skipped":0,"pct":100}}
 }

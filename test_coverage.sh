@@ -8,14 +8,42 @@ REDIS_HOST="${REDIS_HOST:-127.0.0.1}"
 REDIS_PORT="${REDIS_PORT:-6380}"
 NETWORK="${NETWORK:-preview}"
 REPORT_FILE="$ROOT_DIR/test_coverage.report"
-TMP_OUTPUT="$(mktemp)"
-trap 'rm -f "$TMP_OUTPUT"' EXIT
+STANDARD_TEST_OUTPUT="$(mktemp)"
+COVERAGE_OUTPUT="$(mktemp)"
+trap 'rm -f "$STANDARD_TEST_OUTPUT" "$COVERAGE_OUTPUT"' EXIT
 
 chmod +x ./shell/local_valkey.sh
 REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" ./shell/local_valkey.sh
 
-NETWORK="$NETWORK" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
-  npx jest -c jest.critical.config.ts --forceExit --runInBand --coverage --coverageReporters=json-summary --coverageReporters=text-summary > "$TMP_OUTPUT" 2>&1
+npm test > "$STANDARD_TEST_OUTPUT" 2>&1
+
+NETWORK="$NETWORK" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" npx jest \
+  -c jest.critical.config.ts \
+  --forceExit \
+  --runInBand \
+  --coverage \
+  --coverageReporters=json-summary \
+  --coverageReporters=text-summary \
+  --collectCoverageFrom='app.ts' \
+  --collectCoverageFrom='config/**/*.ts' \
+  --collectCoverageFrom='controllers/**/*.ts' \
+  --collectCoverageFrom='ioc/**/*.ts' \
+  --collectCoverageFrom='lambdas/**/*.ts' \
+  --collectCoverageFrom='middlewares/**/*.ts' \
+  --collectCoverageFrom='models/**/*.ts' \
+  --collectCoverageFrom='repositories/**/*.ts' \
+  --collectCoverageFrom='routes/**/*.ts' \
+  --collectCoverageFrom='services/**/*.ts' \
+  --collectCoverageFrom='stores/**/*.ts' \
+  --collectCoverageFrom='utils/**/*.ts' \
+  --collectCoverageFrom='!**/*.test.ts' \
+  --collectCoverageFrom='!**/*.e2e.test.ts' \
+  --collectCoverageFrom='!repositories/tests/**' \
+  --collectCoverageFrom='!services/ogmios/tests/**' \
+  --collectCoverageFrom='!scripts/**' \
+  --collectCoverageFrom='!interfaces/**' \
+  --collectCoverageFrom='!**/*.d.ts' \
+  > "$COVERAGE_OUTPUT" 2>&1
 
 read -r LINE_COVERAGE BRANCH_COVERAGE < <(
   node -e "
@@ -43,12 +71,15 @@ fi
   echo "TOTAL_LINES_PCT=$LINE_COVERAGE"
   echo "TOTAL_BRANCHES_PCT=$BRANCH_COVERAGE"
   echo "STATUS=$STATUS"
-  echo "SOURCE_PATHS=repositories/handlesRepository.ts,services/ogmios/ogmios.service.ts,stores/redis/index.ts"
-  echo "EXCLUDED_PATHS=NON_CRITICAL_RUNTIME_PATHS:covered_by_separate_suites"
+  echo "SOURCE_PATHS=app.ts;config/**/*.ts;controllers/**/*.ts;ioc/**/*.ts;lambdas/**/*.ts;middlewares/**/*.ts;models/**/*.ts;repositories/**/*.ts;routes/**/*.ts;services/**/*.ts;stores/**/*.ts;utils/**/*.ts"
+  echo "EXCLUDED_PATHS=scripts/**:manual_ops_utilities;interfaces/**:type_only_contracts;**/*.test.ts:test_code;**/*.e2e.test.ts:test_code;repositories/tests/**:test_fixtures;services/ogmios/tests/**:test_fixtures;**/*.d.ts:type_declarations;express.ts:top_level_await_not_instrumented_in_current_jest_path"
   echo "LANGUAGE_SUMMARY=nodejs:lines=$LINE_COVERAGE,branches=$BRANCH_COVERAGE,tool=jest,status=$LANGUAGE_STATUS"
   echo
-  echo "=== RAW_OUTPUT_JEST ==="
-  cat "$TMP_OUTPUT"
+  echo "=== RAW_OUTPUT_STANDARD_TEST ==="
+  cat "$STANDARD_TEST_OUTPUT"
+  echo
+  echo "=== RAW_OUTPUT_COVERAGE_JEST ==="
+  cat "$COVERAGE_OUTPUT"
   echo
   echo "=== RAW_OUTPUT_COVERAGE_SUMMARY_JSON ==="
   cat coverage/coverage-summary.json

@@ -15,6 +15,12 @@ afterAll(async () => {
 });
 
 describe('Scripts Routes Test', () => {
+    const originalNetwork = process.env.NETWORK;
+
+    afterAll(() => {
+        process.env.NETWORK = originalNetwork;
+    });
+
     afterEach(() => {
         jest.clearAllMocks();
     });
@@ -103,6 +109,21 @@ describe('Scripts Routes Test', () => {
 
             expect(response.status).toHaveBeenCalledWith(404);
             expect(response.send).toHaveBeenCalledWith({ message: 'Latest script not found' });
+        });
+
+        it('Should fall back to preview network when NETWORK env is missing', async () => {
+            delete process.env.NETWORK;
+            const scriptsController = new ScriptsController();
+            const response = mockResponse();
+
+            await scriptsController.index(
+                // @ts-expect-error
+                {query: {}},
+                response,
+                () => {}
+            );
+
+            expect(response.json).toHaveBeenCalledWith(scripts.preview);
         });
     });
 });
