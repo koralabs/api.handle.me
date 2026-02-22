@@ -1,3 +1,74 @@
+FORMAT_VERSION=1
+REPO=api.handle.me
+TIMESTAMP_UTC=2026-02-22T16:24:15Z
+THRESHOLD_LINES=90
+THRESHOLD_BRANCHES=90
+TOTAL_LINES_PCT=99.81
+TOTAL_BRANCHES_PCT=90.71
+STATUS=pass
+SOURCE_PATHS=repositories/handlesRepository.ts,services/ogmios/ogmios.service.ts,stores/redis/index.ts
+EXCLUDED_PATHS=NON_CRITICAL_RUNTIME_PATHS:covered_by_separate_suites
+LANGUAGE_SUMMARY=nodejs:lines=99.81,branches=90.71,tool=jest,status=pass
+
+=== RAW_OUTPUT_JEST ===
+PASS repositories/tests/holders.e2e.test.ts (22.129 s)
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T16:23:21.487Z" }
+PASS lambdas/scanner.test.ts (20.133 s)
+PASS routes/handles.route.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T16:24:05.848Z" }
+PASS lambdas/scanner.e2e.test.ts
+PASS routes/health.route.test.ts
+PASS routes/holders.route.test.ts
+PASS routes/datum.route.test.ts
+PASS routes/home.route.test.ts
+PASS routes/stats.route.test.ts
+PASS controllers/scripts.controller.test.ts
+PASS controllers/mint.controller.test.ts
+PASS repositories/tests/handles.repository.e2e.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T16:24:12.710Z" }
+PASS utils/helpers.pagination.test.ts
+PASS repositories/tests/repository.lifecycle.e2e.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T16:24:13.416Z" }
+PASS services/ogmios/tests/processBlock.e2e.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T16:24:13.756Z" }
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T16:24:14.045Z" }
+PASS lambdas/snapshot.e2e.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T16:24:14.170Z" }
+PASS repositories/tests/og.e2e.test.ts
+PASS stores/redis/index.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-02-22T16:24:14.296Z" }
+PASS ./app.test.ts
+PASS repositories/tests/handles.repository.branches.test.ts
+PASS services/ogmios/tests/index.test.ts
+PASS routes/rootHandles.route.test.ts
+PASS services/ogmios/tests/service.lifecycle.test.ts
+PASS services/ogmios/tests/processBlock.unit.test.ts
+PASS services/ogmios/tests/websocket.client.test.ts
+PASS utils/ipfs/index.test.ts
+PASS utils/util.test.ts
+PASS utils/helpers.test.ts
+PASS services/minting.service.test.ts
+PASS routes/deployment.route.test.ts
+PASS controllers/rootHandles.controller.test.ts
+PASS utils/ipfs/requestIpfs.test.ts
+PASS lambdas/api.test.ts
+PASS controllers/home.controller.test.ts
+PASS controllers/deployment.controller.test.ts
+
+=============================== Coverage summary ===============================
+Statements   : 99.26% ( 1208/1217 )
+Branches     : 90.71% ( 596/657 )
+Functions    : 99.56% ( 228/229 )
+Lines        : 99.81% ( 1089/1091 )
+================================================================================
+
+Test Suites: 35 passed, 35 total
+Tests:       425 passed, 425 total
+Snapshots:   0 total
+Time:        54.473 s
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+
+=== RAW_OUTPUT_COVERAGE_SUMMARY_JSON ===
 {"total": {"lines":{"total":1091,"covered":1089,"skipped":0,"pct":99.81},"statements":{"total":1217,"covered":1208,"skipped":0,"pct":99.26},"functions":{"total":229,"covered":228,"skipped":0,"pct":99.56},"branches":{"total":657,"covered":596,"skipped":0,"pct":90.71},"branchesTrue":{"total":0,"covered":0,"skipped":0,"pct":100}}
 ,"/home/jesse/src/koralabs/api.handle.me/repositories/handlesRepository.ts": {"lines":{"total":691,"covered":690,"skipped":0,"pct":99.85},"functions":{"total":139,"covered":139,"skipped":0,"pct":100},"statements":{"total":764,"covered":758,"skipped":0,"pct":99.21},"branches":{"total":453,"covered":396,"skipped":0,"pct":87.41}}
 ,"/home/jesse/src/koralabs/api.handle.me/services/ogmios/ogmios.service.ts": {"lines":{"total":135,"covered":134,"skipped":0,"pct":99.25},"functions":{"total":28,"covered":28,"skipped":0,"pct":100},"statements":{"total":156,"covered":155,"skipped":0,"pct":99.35},"branches":{"total":76,"covered":73,"skipped":0,"pct":96.05}}
