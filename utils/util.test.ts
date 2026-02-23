@@ -35,6 +35,17 @@ describe('Utils tests', () => {
             expect(message).toEqual('0:00 elapsed. fallback');
             expect(loggerSpy).toHaveBeenCalledWith('0:00 elapsed. fallback');
         });
+
+        it('should use default empty message suffix when msg arg is omitted', () => {
+            process.stdout.clearLine = jest.fn() as any;
+            process.stdout.cursorTo = jest.fn() as any;
+            const writeSpy = jest.spyOn(process.stdout, 'write').mockImplementation(jest.fn(() => true));
+
+            const message = writeConsoleLine(Date.now());
+
+            expect(message).toEqual('0:00 elapsed. ');
+            expect(writeSpy).toHaveBeenCalledWith('0:00 elapsed. ');
+        });
     });
 
     describe('custom matcher helpers', () => {

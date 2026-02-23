@@ -23,6 +23,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - `app.ts` bootstraps Express, dynamic middleware/routes/IoC loading, and Swagger UI.
 - Routes/controllers provide read APIs over `HandlesRepository`.
 - `HandlesRepository` reads/writes indexed state in `RedisHandlesStore`.
+- Detailed index model and invariants are captured in `docs/spec/index-model.md`.
 - API responses are compressed with Express `compression` middleware when clients send supported `Accept-Encoding` headers (for example `br` or `gzip`).
 - Scanning mode:
   - Default: Ogmios WebSocket scanner (`services/ogmios/ogmios.service.ts`)

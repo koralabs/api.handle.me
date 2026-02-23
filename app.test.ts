@@ -125,7 +125,12 @@ describe('App lifecycle', () => {
         mockedRepoClass.mockImplementation(() => ({ initialize: repoInitialize }));
         const ogmiosInitialize = jest.fn().mockResolvedValue(undefined);
         mockedOgmiosClass.mockImplementation(() => ({ initialize: ogmiosInitialize }));
-        const intervalSpy = jest.spyOn(global, 'setInterval').mockReturnValue(1 as any);
+        const intervalSpy = jest.spyOn(global, 'setInterval').mockImplementation((((callback: CallableFunction) => {
+            callback();
+            return 1 as any;
+        }) as unknown) as typeof setInterval);
+        const scannerModule = require('./lambdas/scanner');
+        const localSpy = jest.spyOn(Logger, 'local').mockImplementation(jest.fn());
 
         process.env.ENABLE_OGMIOS_SCANNING = 'false';
         process.env.USE_LAMBDA_SCANNER = 'true';
@@ -136,6 +141,8 @@ describe('App lifecycle', () => {
 
         expect(repoInitialize).toHaveBeenCalled();
         expect(intervalSpy).toHaveBeenCalledTimes(1);
+        expect(localSpy).toHaveBeenCalledWith('Running scanner lambda...');
+        expect(scannerModule.lambdaHandler).toHaveBeenCalledTimes(2);
         expect(ogmiosInitialize).not.toHaveBeenCalled();
     });
 

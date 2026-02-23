@@ -40,6 +40,7 @@ Reading Handle state directly from chain providers for every request is expensiv
 ## Product Requirements
 - Complete API documentation in `docs/swagger.yml`.
 - Operator env glossary is maintained in `site.env` (no real secrets).
+- Runtime feature inventory and endpoint ownership are maintained in `docs/product/feature-matrix.md`.
 - Core read API:
   - `/handles` catalog search + pagination and `/handles/list` batch reverse-lookup
   - `/handles/:handle` details and associated views (`/utxo`, `/personalized`, `/subhandle-settings`, `/subhandles`)

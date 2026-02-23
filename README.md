@@ -8,6 +8,14 @@ Our Decentralized API uses Ogmios to scan a cardano-node for Handles related tra
 
 &nbsp;
 
+# Documentation
+- Index: `docs/index.md`
+- Product docs: `docs/product/index.md`
+- Technical spec: `docs/spec/index.md`
+- OpenAPI contract: `docs/swagger.yml`
+
+&nbsp;
+
 # Getting Started
 
 ### Prerequisites
