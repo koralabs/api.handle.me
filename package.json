@@ -25,7 +25,8 @@
   "overrides": {
     "diff": "4.0.4",
     "lodash": "4.17.23",
-    "qs": "6.15.0"
+    "qs": "6.15.0",
+    "minimatch": "10.2.2"
   },
   "dependencies": {
     "@cardano-ogmios/client": "^6.11.0",
