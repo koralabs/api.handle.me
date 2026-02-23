@@ -36,6 +36,17 @@ jest.mock('../repositories/handlesRepository', () => ({
                 };
             }
 
+            if (handleName === 'missing_handle_script') {
+                return {
+                    name: handleName,
+                    utxo: 'utxo#0',
+                    policy: 'f0ff',
+                    resolved_addresses: {
+                        ada: 'addr1_script_lookup'
+                    }
+                };
+            }
+
             if (handleName === 'no_ref_token') {
                 return {
                     name: handleName,
@@ -797,6 +808,26 @@ describe('Testing Handles Routes', () => {
             expect(response.body).toEqual({
                 type: 'plutus_v2',
                 cbor: 'a247'
+            });
+        });
+
+        it('should attach configured script when handle has no inline script', async () => {
+            jest.spyOn(scriptsConfig, 'getScript').mockReturnValue({
+                handle: 'pz_script_01',
+                handleHex: 'hex',
+                validatorHash: 'abc',
+                type: 'pz_contract',
+                cbor: 'deadbeef'
+            } as any);
+
+            const response = await request(app?.getServer()).get('/handles/missing_handle_script/script');
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual({
+                handle: 'pz_script_01',
+                handleHex: 'hex',
+                validatorHash: 'abc',
+                type: 'pz_contract',
+                cbor: 'deadbeef'
             });
         });
 

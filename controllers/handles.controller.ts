@@ -24,15 +24,23 @@ import { HandleViewModel } from '../models/view/handle.view.model';
 import { HandlesRepository } from '../repositories/handlesRepository';
 
 class HandlesController {
+    private static getScriptByAddress(address?: string): UTxO['script'] | undefined {
+        if (!address) {
+            return;
+        }
+
+        const script = getScript(address);
+        if (script?.cbor && script?.type) {
+            return script as unknown as UTxO['script'];
+        }
+    }
+
     private static attachReferenceTokenScript(utxo: UTxO): UTxO {
         if (utxo.script) {
             return utxo;
         }
 
-        const script = getScript(utxo.address);
-        if (script?.cbor && script?.type) {
-            utxo.script = script as unknown as UTxO['script'];
-        }
+        utxo.script = HandlesController.getScriptByAddress(utxo.address);
 
         return utxo;
     }
@@ -330,12 +338,13 @@ class HandlesController {
                 return;
             }
 
-            if (!handleData.handle.script) {
+            const script = handleData.handle.script ?? HandlesController.getScriptByAddress(handleData.handle.resolved_addresses?.ada);
+            if (!script) {
                 res.status(404).send({ message: 'Script not found' });
                 return;
             }
 
-            res.status(handleData.code).json(handleData.handle.script);
+            res.status(handleData.code).json(script);
         } catch (error) {
             next(error);
         }
