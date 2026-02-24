@@ -34,6 +34,7 @@ describe('config/constants', () => {
             expect(constants.RATE_LIMITER_ENABLED).toBe(true);
             expect(constants.NETWORK_HOST).toBe('');
             expect(constants.MINTING_SERVICE_URL).toBe('https://minting.handle.me');
+            expect(constants.MAX_SETS_PER_PIPE).toBe(1_000);
         });
     });
 
@@ -51,6 +52,7 @@ describe('config/constants', () => {
             expect(constants.RATE_LIMITER_ENABLED).toBe(false);
             expect(constants.NETWORK_HOST).toBe('preview.');
             expect(constants.MINTING_SERVICE_URL).toBe('https://preview.minting.handle.me');
+            expect(constants.MAX_SETS_PER_PIPE).toBe(1_000);
         });
     });
 });
