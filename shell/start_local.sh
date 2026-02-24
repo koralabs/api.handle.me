@@ -1,17 +1,37 @@
 #!/bin/bash
 set -eu
+
+NETWORK_OVERRIDE="${NETWORK-}"
+SOCKET_PATH_OVERRIDE="${SOCKET_PATH-}"
+OGMIOS_PORT_OVERRIDE="${OGMIOS_PORT-}"
+CARDANO_NODE_PORT_OVERRIDE="${CARDANO_NODE_PORT-}"
+BASE_URL_OVERRIDE="${CONFIG_FILES_BASE_URL-}"
+CARDANO_DB_PATH_OVERRIDE="${CARDANO_DB_PATH-}"
+
 set -a && source .env && set +a
+if [[ -n "${NETWORK_OVERRIDE}" ]]; then export NETWORK="${NETWORK_OVERRIDE}"; fi
+if [[ -n "${SOCKET_PATH_OVERRIDE}" ]]; then export SOCKET_PATH="${SOCKET_PATH_OVERRIDE}"; fi
+if [[ -n "${OGMIOS_PORT_OVERRIDE}" ]]; then export OGMIOS_PORT="${OGMIOS_PORT_OVERRIDE}"; fi
+if [[ -n "${CARDANO_NODE_PORT_OVERRIDE}" ]]; then export CARDANO_NODE_PORT="${CARDANO_NODE_PORT_OVERRIDE}"; fi
+if [[ -n "${BASE_URL_OVERRIDE}" ]]; then export CONFIG_FILES_BASE_URL="${BASE_URL_OVERRIDE}"; fi
+if [[ -n "${CARDANO_DB_PATH_OVERRIDE}" ]]; then export CARDANO_DB_PATH="${CARDANO_DB_PATH_OVERRIDE}"; fi
 mkdir -p tmp
 export OGMIOS_VER=${OGMIOS_VER:-6.11.2}
-export CARDANO_NODE_VER=${CARDANO_NODE_VER:-10.5.3}
+export CARDANO_NODE_VER=${CARDANO_NODE_VER:-10.6.2}
 export SOCKET_PATH=${SOCKET_PATH:-"${PWD}/tmp/node.socket"}
-export BASE_URL=${CONFIG_FILES_BASE_URL:-'https://book.play.dev.cardano.org/environments'}
+export OGMIOS_PORT=${OGMIOS_PORT:-1337}
+export CARDANO_NODE_PORT=${CARDANO_NODE_PORT:-3000}
+export BASE_URL=${CONFIG_FILES_BASE_URL:-'https://book.world.dev.cardano.org/environments'}
 export CARDANO_DB_PATH=${CARDANO_DB_PATH:-"./tmp"}
 export NODE_CONFIG_PATH="./tmp/${NETWORK}"
 CARDANO_NODE_PID=""
 OGMIOS_PID=""
 MANAGED_CARDANO_NODE=false
 MANAGED_OGMIOS=false
+HOST=""
+NODE_CONFIG=""
+NODE_SOCKET=""
+OGMIOS_PORT_ARG=""
 
 cleanup() {
     if [[ "${MANAGED_CARDANO_NODE}" == "true" ]] && [[ -n "${CARDANO_NODE_PID}" ]] && kill -0 "${CARDANO_NODE_PID}" 2>/dev/null; then
@@ -45,10 +65,28 @@ if [[ "$@" != *"--node-socket"* ]]
 then
     NODE_SOCKET="--node-socket ${SOCKET_PATH}"
 fi
+if [[ "$@" != *"--port"* ]]
+then
+    OGMIOS_PORT_ARG="--port ${OGMIOS_PORT}"
+fi
+
+find_pid_by_arg() {
+    local process_name="$1"
+    local required_arg="$2"
+    local match=""
+    while IFS= read -r proc
+    do
+        if [[ "${proc}" == *"${required_arg}"* ]]; then
+            match="${proc%% *}"
+            break
+        fi
+    done < <(pgrep -a -x "${process_name}" || true)
+    echo -n "${match}"
+}
 
 mkdir -p  $HOME/.local/bin
 
-if [ -d "../api.handle.me/workers" ]; then
+if [ -d "../api.handle.me/workers" ] && [ "$(realpath ../api.handle.me/workers)" != "$(realpath ./workers)" ]; then
     cp ../api.handle.me/workers/* ./workers/ 
 fi
 
@@ -85,6 +123,8 @@ do \
     do \
         curl -sL ${BASE_URL}/${net}/${era}-genesis.json -o tmp/${net}/${era}-genesis.json; \
     done; \
+    jq '.EnableP2P = true | .PeerSharing = true' tmp/${net}/config.json > tmp/${net}/config.p2p.json
+    mv tmp/${net}/config.p2p.json tmp/${net}/config.json
 done
 
 release_host() {
@@ -122,19 +162,27 @@ else
     echo "Mithril snapshot downloaded and validated."
 fi
 
-if [ ! -x "$(command -v ./tmp/cardano-node/bin/cardano-node)" ]; then
+INSTALLED_CARDANO_NODE_VER=""
+if [ -x ./tmp/cardano-node/bin/cardano-node ]; then
+    INSTALLED_CARDANO_NODE_VER="$(./tmp/cardano-node/bin/cardano-node --version | awk 'NR==1 {print $2}')"
+fi
+
+if [ ! -x ./tmp/cardano-node/bin/cardano-node ] || [ "${INSTALLED_CARDANO_NODE_VER}" != "${CARDANO_NODE_VER}" ]; then
+    echo "Installing cardano-node ${CARDANO_NODE_VER}..."
+    rm -rf ./tmp/cardano-node
     mkdir -p ./tmp/cardano-node
-    (cd ./tmp/cardano-node && curl -fsSL https://github.com/IntersectMBO/cardano-node/releases/download/${CARDANO_NODE_VER}/cardano-node-${CARDANO_NODE_VER}-linux.tar.gz | tar -xz)
+    (cd ./tmp/cardano-node && curl -fsSL https://github.com/IntersectMBO/cardano-node/releases/download/${CARDANO_NODE_VER}/cardano-node-${CARDANO_NODE_VER}-linux-amd64.tar.gz | tar -xz)
     chmod +x ./tmp/cardano-node/bin/cardano-node
 fi
 
 # Workaround for Mithril not outputting the protocolMagicId
 cat ${NODE_CONFIG_PATH}/shelley-genesis.json | jq -r .networkMagic > ${NODE_DB}/protocolMagicId
 
-if pgrep -x "cardano-node" > /dev/null
+CARDANO_NODE_PID="$(find_pid_by_arg "cardano-node" "--socket-path ${SOCKET_PATH}")"
+if [[ -n "${CARDANO_NODE_PID}" ]] && kill -0 "${CARDANO_NODE_PID}" 2>/dev/null
 then
-    CARDANO_NODE_PID="$(pgrep -x cardano-node | head -n1)"
-    if [[ ! -S "${SOCKET_PATH}" ]]; then
+    if [[ ! -S "${SOCKET_PATH}" ]]
+    then
         echo "cardano-node is already running but ${SOCKET_PATH} is missing."
         echo "This usually means cardano-node was started multiple times and the socket path was unlinked."
         echo "Stop existing cardano-node/ogmios processes and restart with npm run ogmios."
@@ -146,7 +194,7 @@ else
         --config ${NODE_CONFIG_PATH}/config.json \
         --topology ${NODE_CONFIG_PATH}/topology.json \
         --database-path ${NODE_DB} \
-        --port 3000 \
+        --port ${CARDANO_NODE_PORT} \
         --host-addr 0.0.0.0 \
         --socket-path ${SOCKET_PATH} > >(stdbuf -oL -eL egrep --line-buffered '\b(startup:Info:|local socket:|ChainDB:Notice:|:Critical:|Validating chunk)\b') 2>&1 &
     CARDANO_NODE_PID=$!
@@ -167,10 +215,11 @@ if [ ! -x "$(command -v ./tmp/ogmios/bin/ogmios)" ]; then
     unzip ogmios.zip -d ./tmp/ogmios && rm ogmios.zip && chmod +x ./tmp/ogmios/bin/ogmios
 fi
 
-if ! pgrep -x "ogmios" > /dev/null
+OGMIOS_PID="$(find_pid_by_arg "ogmios" "--node-socket ${SOCKET_PATH}")"
+if [[ -z "${OGMIOS_PID}" ]] || ! kill -0 "${OGMIOS_PID}" 2>/dev/null
 then
     echo "Starting Ogmios - connecting to ${SOCKET_PATH}"
-    ./tmp/ogmios/bin/ogmios $HOST $NODE_CONFIG $NODE_SOCKET $@ --include-transaction-cbor --log-level Error &
+    ./tmp/ogmios/bin/ogmios $HOST $NODE_CONFIG $NODE_SOCKET $OGMIOS_PORT_ARG $@ --include-transaction-cbor --log-level Error &
     OGMIOS_PID=$!
     MANAGED_OGMIOS=true
 else
