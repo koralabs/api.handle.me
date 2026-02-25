@@ -181,6 +181,7 @@ export class HandlesRepository {
             if (name.includes(search)) return true;
 
             const hex = Buffer.from(name, 'utf8').toString('hex');
+            if (hex.includes(search)) return true;
             if (`${AssetNameLabel.LBL_222}${hex}`.includes(search)) return true;
             if (`${AssetNameLabel.LBL_000}${hex}`.includes(search)) return true;
             
