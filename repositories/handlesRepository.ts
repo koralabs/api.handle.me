@@ -176,23 +176,30 @@ export class HandlesRepository {
                 // if there is an EMPTY here, there are no results
                 .filter((name) => name !== EMPTY);
         }
-        const checkSearch = (name: string, search?: string) => {
+        const checkSearch = (name: string, search?: string, handleHex?: string) => {
             if (!search) return true;
             if (name.includes(search)) return true;
-
-            const hex = Buffer.from(name, 'utf8').toString('hex');
-            if (hex.includes(search)) return true;
-            const labelPrefix = [AssetNameLabel.LBL_222, AssetNameLabel.LBL_000].find((prefix) => search.startsWith(prefix));
-            if (labelPrefix) {
-                const normalizedSearch = search.slice(labelPrefix.length);
-                return normalizedSearch.length > 0 && hex.includes(normalizedSearch);
-            }
-            
-            return false;
+            return (handleHex ?? '').includes(search);
         }
 
         // Check for the searched term or handle list
-        handleNames = handleNames.filter((name) => (!searchModel?.handles || searchModel?.handles.includes(name)) && checkSearch(name, searchModel?.search))
+        handleNames = handleNames.filter((name) => !searchModel?.handles || searchModel?.handles.includes(name));
+        if (searchModel?.search) {
+            const handlesNeedingHexMatch = handleNames.filter((name) => !name.includes(searchModel.search!));
+            const searchedHandles = (this.store.pipeline(() => {
+                for (const handleName of handlesNeedingHexMatch) {
+                    this.store.getHashFromIndex(IndexNames.HANDLE, handleName);
+                }
+            }) as (StoredHandle | undefined)[]);
+            const matchesByHex = new Set<string>();
+            handlesNeedingHexMatch.forEach((handleName, index) => {
+                const handleHex = `${searchedHandles[index]?.hex ?? Buffer.from(handleName, 'utf8').toString('hex')}`;
+                if (checkSearch(handleName, searchModel.search, handleHex)) {
+                    matchesByHex.add(handleName);
+                }
+            });
+            handleNames = handleNames.filter((name) => name.includes(searchModel.search!) || matchesByHex.has(name));
+        }
         const searchTotal = handleNames.length;
 
         const isUnfilteredPaginatedSearch = filtered.length === 0 && !searchModel?.search && !searchModel?.handles?.length && !pagination?.slotNumber && pagination?.sort !== 'random';
