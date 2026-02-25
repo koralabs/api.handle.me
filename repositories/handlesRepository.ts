@@ -3,6 +3,7 @@ import { AssetNameLabel, bech32FromHex, buildCharacters, buildDrep, buildHolderI
 import { designerSchema, handleDatumSchema, portalSchema, socialsSchema, subHandleSettingsDatumSchema } from '@koralabs/kora-labs-common/utils/cbor';
 import * as crypto from 'crypto';
 import { isDatumEndpointEnabled } from '../config';
+import { MAX_SETS_PER_PIPE } from '../config/constants';
 import { BuildPersonalizationInput, HandleOnChainMetadata, MetadataLabel } from '../interfaces/ogmios.interfaces';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { decodeCborFromIPFSFile } from '../utils/ipfs';
@@ -186,18 +187,21 @@ export class HandlesRepository {
         handleNames = handleNames.filter((name) => !searchModel?.handles || searchModel?.handles.includes(name));
         if (searchModel?.search) {
             const handlesNeedingHexMatch = handleNames.filter((name) => !name.includes(searchModel.search!));
-            const searchedHandles = (this.store.pipeline(() => {
-                for (const handleName of handlesNeedingHexMatch) {
-                    this.store.getHashFromIndex(IndexNames.HANDLE, handleName);
-                }
-            }) as (StoredHandle | undefined)[]);
             const matchesByHex = new Set<string>();
-            handlesNeedingHexMatch.forEach((handleName, index) => {
-                const handleHex = `${searchedHandles[index]?.hex ?? Buffer.from(handleName, 'utf8').toString('hex')}`;
-                if (checkSearch(handleName, searchModel.search, handleHex)) {
-                    matchesByHex.add(handleName);
-                }
-            });
+            for (let i = 0; i < handlesNeedingHexMatch.length; i += MAX_SETS_PER_PIPE) {
+                const handleChunk = handlesNeedingHexMatch.slice(i, i + MAX_SETS_PER_PIPE);
+                const searchedHandles = (this.store.pipeline(() => {
+                    for (const handleName of handleChunk) {
+                        this.store.getHashFromIndex(IndexNames.HANDLE, handleName);
+                    }
+                }) as (StoredHandle | undefined)[]);
+                handleChunk.forEach((handleName, index) => {
+                    const handleHex = `${searchedHandles[index]?.hex ?? Buffer.from(handleName, 'utf8').toString('hex')}`;
+                    if (checkSearch(handleName, searchModel.search, handleHex)) {
+                        matchesByHex.add(handleName);
+                    }
+                });
+            }
             handleNames = handleNames.filter((name) => name.includes(searchModel.search!) || matchesByHex.has(name));
         }
         const searchTotal = handleNames.length;
