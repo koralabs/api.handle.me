@@ -182,8 +182,11 @@ export class HandlesRepository {
 
             const hex = Buffer.from(name, 'utf8').toString('hex');
             if (hex.includes(search)) return true;
-            if (`${AssetNameLabel.LBL_222}${hex}`.includes(search)) return true;
-            if (`${AssetNameLabel.LBL_000}${hex}`.includes(search)) return true;
+            const labelPrefix = [AssetNameLabel.LBL_222, AssetNameLabel.LBL_000].find((prefix) => search.startsWith(prefix));
+            if (labelPrefix) {
+                const normalizedSearch = search.slice(labelPrefix.length);
+                return normalizedSearch.length > 0 && hex.includes(normalizedSearch);
+            }
             
             return false;
         }

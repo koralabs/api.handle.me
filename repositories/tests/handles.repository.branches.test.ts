@@ -694,14 +694,14 @@ describe('HandlesRepository branch tests', () => {
                 { search: AssetNameLabel.LBL_222 } as any,
                 true
             )
-        ).toEqual({ searchTotal: 1, handles: ['alpha'] });
+        ).toEqual({ searchTotal: 0, handles: [] });
         expect(
             repo.search(
                 { page: 1, handlesPerPage: 10, sort: 'asc' } as any,
                 { search: AssetNameLabel.LBL_000 } as any,
                 true
             )
-        ).toEqual({ searchTotal: 1, handles: ['alpha'] });
+        ).toEqual({ searchTotal: 0, handles: [] });
         expect(
             repo.search(
                 { page: 1, handlesPerPage: 10, sort: 'asc' } as any,
