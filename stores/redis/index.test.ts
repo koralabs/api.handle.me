@@ -440,6 +440,22 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(value).toEqual({ name: 'alpha', enabled: true, raw: 'plain-value' });
     });
 
+    it('reads a single hash field from an index record', () => {
+        const store = new RedisHandlesStore();
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'hget') {
+                return { toString: () => '000de140616c706861' };
+            }
+            return undefined;
+        });
+
+        const value = (store as any).getHashFieldFromIndex(IndexNames.HANDLE, 'alpha', 'hex');
+
+        expect(value).toBe('000de140616c706861');
+        expect(redisSpy).toHaveBeenCalledWith('hget', '{root}:handle:alpha', 'hex');
+    });
+
     it('formats metrics and primitive hash fields before saving', () => {
         const store = new RedisHandlesStore();
         const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {

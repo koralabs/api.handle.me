@@ -188,15 +188,28 @@ export class HandlesRepository {
         if (searchModel?.search) {
             const handlesNeedingHexMatch = handleNames.filter((name) => !name.includes(searchModel.search!));
             const matchesByHex = new Set<string>();
+            const fieldLookupStore = this.store as IApiStore & {
+                getHashFieldFromIndex?: (index: IndexNames, key: string | number, field: string) => string | undefined;
+            };
             for (let i = 0; i < handlesNeedingHexMatch.length; i += MAX_SETS_PER_PIPE) {
                 const handleChunk = handlesNeedingHexMatch.slice(i, i + MAX_SETS_PER_PIPE);
-                const searchedHandles = (this.store.pipeline(() => {
-                    for (const handleName of handleChunk) {
-                        this.store.getHashFromIndex(IndexNames.HANDLE, handleName);
+                const handleHexes = (() => {
+                    if (fieldLookupStore.getHashFieldFromIndex) {
+                        return (this.store.pipeline(() => {
+                            for (const handleName of handleChunk) {
+                                fieldLookupStore.getHashFieldFromIndex!(IndexNames.HANDLE, handleName, 'hex');
+                            }
+                        }) as (string | undefined)[]).map((hex, index) => hex ?? Buffer.from(handleChunk[index], 'utf8').toString('hex'));
                     }
-                }) as (StoredHandle | undefined)[]);
+                    const searchedHandles = (this.store.pipeline(() => {
+                        for (const handleName of handleChunk) {
+                            this.store.getHashFromIndex(IndexNames.HANDLE, handleName);
+                        }
+                    }) as (StoredHandle | undefined)[]);
+                    return handleChunk.map((handleName, index) => `${searchedHandles[index]?.hex ?? Buffer.from(handleName, 'utf8').toString('hex')}`);
+                })();
                 handleChunk.forEach((handleName, index) => {
-                    const handleHex = `${searchedHandles[index]?.hex ?? Buffer.from(handleName, 'utf8').toString('hex')}`;
+                    const handleHex = handleHexes[index];
                     if (checkSearch(handleName, searchModel.search, handleHex)) {
                         matchesByHex.add(handleName);
                     }

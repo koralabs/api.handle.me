@@ -317,6 +317,12 @@ export class RedisHandlesStore implements IApiStore {
         return this.rehydrateObjectFromCache(`{root}:${index}:${key}`);
     }
 
+    public getHashFieldFromIndex(index: IndexNames, key: string | number, field: string): string | undefined {
+        const value = this.redisClientCall('hget', `{root}:${index}:${key}`, field);
+        if (value == null) return undefined;
+        return value.toString();
+    }
+
     public setHashOnIndex(index: IndexNames, key: string | number, value: ApiIndexType): void {
         this.saveObjectToCache(`{root}:${index}:${key}`, value);
         if (META_INDEXES.includes(index)) this.redisClientCall('sadd', `{root}:${index}`, [key]);
