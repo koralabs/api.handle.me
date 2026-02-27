@@ -57,12 +57,12 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
   - `GET /scripts`
   - `POST /datum` (feature-flagged via `ENABLE_DATUM_ENDPOINT`)
 - Operations:
-  - `GET /health`, `GET /stats`, `GET /deployment`, `GET /`
+  - `GET /health`, `GET /stats`, `GET /deployment`, `GET /` (redirects to `/swagger`)
 
 ## Route Inventory
 
 ### Core
-- `GET /` health ping style empty body response
+- `GET /` redirect to Swagger UI (`/swagger`)
 - `GET /health` sync status + stats (+ `ogmios` when Ogmios scanning is enabled)
 - `GET /stats` total handles/holders
 - `GET /deployment` `deployment_info.json`

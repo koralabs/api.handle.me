@@ -1,26 +1,26 @@
 import HomeController from './home.controller';
 
 describe('HomeController tests', () => {
-    it('should call sendStatus(200)', async () => {
+    it('should redirect to /swagger', async () => {
         const controller = new HomeController();
-        const sendStatus = jest.fn();
+        const redirect = jest.fn();
         const next = jest.fn();
 
-        await controller.index({} as any, { sendStatus } as any, next);
+        await controller.index({} as any, { redirect } as any, next);
 
-        expect(sendStatus).toHaveBeenCalledWith(200);
+        expect(redirect).toHaveBeenCalledWith('/swagger');
         expect(next).not.toHaveBeenCalled();
     });
 
-    it('should call next when sendStatus throws', async () => {
+    it('should call next when redirect throws', async () => {
         const controller = new HomeController();
         const next = jest.fn();
-        const error = new Error('send failed');
-        const sendStatus = jest.fn().mockImplementation(() => {
+        const error = new Error('redirect failed');
+        const redirect = jest.fn().mockImplementation(() => {
             throw error;
         });
 
-        await controller.index({} as any, { sendStatus } as any, next);
+        await controller.index({} as any, { redirect } as any, next);
 
         expect(next).toHaveBeenCalledWith(error);
     });

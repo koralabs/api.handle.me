@@ -27,10 +27,10 @@ paths:
     get:
       tags:
       - utils
-      summary: API liveness endpoint
+      summary: Redirect to Swagger UI
       responses:
-        '200':
-          description: API is reachable
+        '302':
+          description: Redirects to `/swagger`
   "/handles":
     get:
       tags:
