@@ -123,15 +123,42 @@ class App {
     }
 
     private initializeSwagger() {
+        const swaggerSpecRoute = '/swagger/swagger.yml';
         const options = {
-            customCss: '.swagger-ui .topbar { display: none }',
+            customCss: '.swagger-ui .topbar { display: none } .swagger-ui .info .title .yaml-link { margin-left: 12px; font-size: 14px; }',
             customSiteTitle: 'Handles API',
-            customfavIcon: '/assets/favicon.ico'
+            customfavIcon: '/assets/favicon.ico',
+            customJsStr: `(() => {
+                const mountLink = () => {
+                    const title = document.querySelector('.swagger-ui .info .title');
+                    if (!title || title.querySelector('.yaml-link')) return;
+                    const link = document.createElement('a');
+                    link.href = '${swaggerSpecRoute}';
+                    link.className = 'yaml-link';
+                    link.textContent = 'YAML';
+                    link.target = '_blank';
+                    link.rel = 'noopener noreferrer';
+                    title.appendChild(link);
+                };
+                window.addEventListener('load', () => {
+                    mountLink();
+                    const interval = window.setInterval(() => {
+                        mountLink();
+                        if (document.querySelector('.swagger-ui .info .title .yaml-link')) {
+                            window.clearInterval(interval);
+                        }
+                    }, 100);
+                });
+            })();`
         };
 
         try {
             const swaggerFile = IS_LOCAL ? './docs/swagger.yml' : './swagger.yml';
-            const swaggerDoc = parse(fs.readFileSync(swaggerFile).toString());
+            const swaggerFileContent = fs.readFileSync(swaggerFile).toString();
+            const swaggerDoc = parse(swaggerFileContent);
+            this.app.get(swaggerSpecRoute, (_req, res) => {
+                res.type('application/yaml').send(swaggerFileContent);
+            });
             this.app.use('/swagger', swaggerUi.serve, swaggerUi.setup(swaggerDoc, options));
         } catch (error: any) {
             Logger.log({ message: `Unable to load swagger with error: ${error?.message ?? error}`, category: LogCategory.ERROR, event: 'app.swagger.load' });

@@ -960,6 +960,17 @@ paths:
       responses:
         '200':
           description: This swagger documentation
+  "/swagger/swagger.yml":
+    get:
+      tags:
+      - utils
+      responses:
+        '200':
+          description: Raw OpenAPI specification in YAML format
+          content:
+            application/yaml:
+              schema:
+                type: string
   "/health":
     get:
       tags:
