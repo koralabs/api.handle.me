@@ -664,7 +664,7 @@ describe('Scanner lambda unit tests', () => {
 
         await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
 
-        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/stale_hash/next');
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/stale_hash/next', 181);
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(2, 'blocks/4980/next');
         const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
         expect(txInfoCalls).toHaveLength(0);
@@ -725,7 +725,7 @@ describe('Scanner lambda unit tests', () => {
 
         await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
 
-        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/stale_hash/next');
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/stale_hash/next', 181);
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(2, 'blocks/2840/next');
         const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
         expect(txInfoCalls).toHaveLength(0);
@@ -794,6 +794,33 @@ describe('Scanner lambda unit tests', () => {
         expect(handlesRepo.removeUTxOs).toHaveBeenNthCalledWith(1, ['input_newer#0']);
         expect(handlesRepo.removeUTxOs).toHaveBeenNthCalledWith(2, ['input_older#1']);
         expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
+    });
+
+    it('scan writes tip metrics from latest blockfrost tip (not chunk tail)', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_chunk_tail', slot: 101, confirmations: 5 }] as never);
+        mockedHelpers.blockfrostApiCall.mockImplementation(async (endpoint: string) => {
+            if (endpoint === 'blocks/latest') return { ok: true, json: async () => ({ hash: 'real_tip_hash', slot: 999 }) } as never;
+            return { ok: true, json: async () => ({}) } as never;
+        });
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'tx_1' }] as never;
+            if (path === 'tx_info') return [{ tx_hash: 'tx_1', block_hash: 'block_chunk_tail', inputs: [] }] as never;
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        await scannerModule.Internal.scan();
+
+        expect(handlesRepo.setMetrics).toHaveBeenCalledWith(
+            expect.objectContaining({
+                currentBlockHash: 'block_chunk_tail',
+                currentSlot: 101,
+                tipBlockHash: 'real_tip_hash',
+                lastSlot: 999
+            })
+        );
     });
 
     it('scan logs and rethrows provider errors while unlocking lambdas', async () => {
@@ -953,6 +980,51 @@ describe('Scanner lambda unit tests', () => {
         expect(hasBlockTxBackoffDelay).toBe(true);
     });
 
+    it('splits block_txs batches after retries are exhausted and continues scanning', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        const blocks = Array.from({ length: 20 }, (_, index) => ({
+            hash: `${'e'.repeat(56)}${index.toString().padStart(8, '0')}`,
+            slot: 101 + index,
+            confirmations: 5
+        }));
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue(blocks as never);
+
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') {
+                const parsedBody = JSON.parse(body ?? '{}');
+                const blockHashes: string[] = parsedBody._block_hashes ?? [];
+                if (blockHashes.length > 1) {
+                    const error: any = new Error('Koios block_txs request failed: 429 Too Many Requests');
+                    error.status = 429;
+                    throw error;
+                }
+                return [{ tx_hash: `tx_${blockHashes[0]?.slice(-8) ?? '0'}` }] as never;
+            }
+            if (path === 'tx_info') {
+                const parsedBody = JSON.parse(body ?? '{}');
+                return (parsedBody._tx_hashes ?? []).map((txHash: string) => ({ tx_hash: txHash, block_hash: 'block_newer', inputs: [] })) as never;
+            }
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        const setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation(((callback: TimerHandler) => {
+            (callback as CallableFunction)();
+            return 0 as any;
+        }) as any);
+        try {
+            await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+            const blockTxCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'block_txs');
+            expect(blockTxCalls.length).toBeGreaterThan(4);
+            expect(logSpy.mock.calls.some(([entry]) => `${entry}`.includes('scannerLambda.koiosBlockTxs.splitBatch'))).toBe(true);
+        } finally {
+            setTimeoutSpy.mockRestore();
+            logSpy.mockRestore();
+        }
+    });
+
     it('returns success and still runs rollback when scan block_txs remains throttled with 429', async () => {
         const { scannerModule, store } = setup();
         mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
@@ -1001,6 +1073,80 @@ describe('Scanner lambda unit tests', () => {
         expect(mockedHelpers.blockfrostApiCall).toHaveBeenCalledWith('blocks/latest');
         expect(logEntries.some((entry) => entry.includes('scannerLambda.retriable'))).toBe(true);
         expect(errorEntries.some((entry) => entry.includes('scannerLambda.error'))).toBe(false);
+    });
+
+    it('returns success when scan block_txs repeatedly times out', async () => {
+        const { scannerModule, store } = setup();
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
+        store.getValuesFromOrderedSet.mockReturnValue([]);
+
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') {
+                throw new Error('The operation was aborted due to timeout');
+            }
+            return [] as never;
+        });
+
+        const setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation(((callback: TimerHandler) => {
+            (callback as CallableFunction)();
+            return 0 as any;
+        }) as any);
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        let logEntries: string[] = [];
+        let errorEntries: string[] = [];
+
+        try {
+            await expect(scannerModule.lambdaHandler({} as any, {} as any)).resolves.toEqual({
+                isBase64Encoded: false,
+                statusCode: 200,
+                body: ''
+            });
+            logEntries = logSpy.mock.calls.map(([entry]) => `${entry}`);
+            errorEntries = errorSpy.mock.calls.map(([entry]) => `${entry}`);
+        } finally {
+            setTimeoutSpy.mockRestore();
+            logSpy.mockRestore();
+            errorSpy.mockRestore();
+        }
+
+        const blockTxCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'block_txs');
+        expect(blockTxCalls.length).toBeGreaterThanOrEqual(4);
+        expect(logEntries.some((entry) => entry.includes('scannerLambda.retriable'))).toBe(true);
+        expect(errorEntries.some((entry) => entry.includes('scannerLambda.error'))).toBe(false);
+    });
+
+    it('checkRollback logs and suppresses retriable Koios errors', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentSlot: 130, lockLambdas: LockedLambdaReason.UNLOCKED });
+        store.getValuesFromOrderedSet.mockReturnValue(['utxo#0']);
+
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') {
+                const error: any = new Error('Koios block_txs request failed: 503 Service Unavailable');
+                error.status = 503;
+                error.statusText = 'Service Unavailable';
+                throw error;
+            }
+            return [] as never;
+        });
+
+        const setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation(((callback: TimerHandler) => {
+            (callback as CallableFunction)();
+            return 0 as any;
+        }) as any);
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        let logEntries: string[] = [];
+        try {
+            await expect(scannerModule.Internal.checkRollback()).resolves.toBeUndefined();
+            logEntries = logSpy.mock.calls.map(([entry]) => `${entry}`);
+        } finally {
+            setTimeoutSpy.mockRestore();
+            logSpy.mockRestore();
+        }
+
+        expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
+        expect(logEntries.some((entry) => entry.includes('scannerLambda.rollbackRetriable'))).toBe(true);
     });
 
     it('paces tx_info requests to stay under 6 requests per second and uses smaller soft body batching', async () => {
@@ -1060,6 +1206,118 @@ describe('Scanner lambda unit tests', () => {
 
         const blockTxCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'block_txs');
         expect(blockTxCalls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('processes scanner backlog in bounded block chunks per invocation', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        const blocks = Array.from({ length: 900 }, (_, index) => ({
+            hash: `${'f'.repeat(56)}${index.toString().padStart(8, '0')}`,
+            slot: 10_000 + index,
+            confirmations: 1_000 - index
+        }));
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue(blocks as never);
+
+        const seenBlockHashes: string[] = [];
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') {
+                const parsedBody = JSON.parse(body ?? '{}');
+                seenBlockHashes.push(...(parsedBody._block_hashes ?? []));
+                return [] as never;
+            }
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        await scannerModule.Internal.scan();
+
+        expect(seenBlockHashes.length).toBeGreaterThan(0);
+        expect(new Set(seenBlockHashes).size).toBeLessThan(blocks.length);
+        expect(seenBlockHashes).toContain(blocks[0].hash);
+        expect(seenBlockHashes).not.toContain(blocks[blocks.length - 1].hash);
+    });
+
+    it('pauses scan when the work budget is exhausted and resumes next invocation', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        const blocks = Array.from({ length: 90 }, (_, index) => ({
+            hash: `${'d'.repeat(56)}${index.toString().padStart(8, '0')}`,
+            slot: 20_000 + index,
+            confirmations: 100 - index
+        }));
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue(blocks as never);
+
+        let budgetExceeded = false;
+        const nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => 1_000_000 + (budgetExceeded ? 420_001 : 0));
+        const seenBlockHashes: string[] = [];
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') {
+                const parsedBody = JSON.parse(body ?? '{}');
+                seenBlockHashes.push(...(parsedBody._block_hashes ?? []));
+                budgetExceeded = true;
+                return [] as never;
+            }
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        try {
+            await scannerModule.Internal.scan();
+        } finally {
+            nowSpy.mockRestore();
+            logSpy.mockRestore();
+        }
+
+        expect(seenBlockHashes.length).toBeGreaterThan(0);
+        expect(new Set(seenBlockHashes).size).toBeLessThan(blocks.length);
+    });
+
+    it('stops block_txs batching immediately after a non-retriable failure', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        const blocks = Array.from({ length: 80 }, (_, index) => ({
+            hash: `${'c'.repeat(56)}${index.toString().padStart(8, '0')}`,
+            slot: 101 + index,
+            confirmations: 5
+        }));
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue(blocks as never);
+
+        let blockTxAttempts = 0;
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') {
+                blockTxAttempts++;
+                const error: any = new Error('Koios block_txs request failed: 400 Bad Request');
+                error.status = 400;
+                throw error;
+            }
+            return [] as never;
+        });
+
+        await expect(scannerModule.Internal.scan()).rejects.toThrow('Koios block_txs request failed: 400 Bad Request');
+        expect(blockTxAttempts).toBe(1);
+    });
+
+    it('stops tx_info batching immediately after a non-retriable failure', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
+
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') {
+                return Array.from({ length: 100 }, (_, index) => ({ tx_hash: `${'d'.repeat(56)}${index.toString().padStart(8, '0')}` })) as never;
+            }
+            if (path === 'tx_info') {
+                const error: any = new Error('Koios tx_info request failed: 400 Bad Request');
+                error.status = 400;
+                throw error;
+            }
+            return [] as never;
+        });
+
+        await expect(scannerModule.Internal.scan()).rejects.toThrow('Koios tx_info request failed: 400 Bad Request');
+        const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
+        expect(txInfoCalls).toHaveLength(1);
     });
 
     it('retries asset_utxos on 429 response errors from Koios during rollback reconciliation', async () => {
@@ -1280,7 +1538,7 @@ describe('Scanner lambda unit tests', () => {
         const result = await scannerModule.lambdaHandler({} as any, {} as any);
 
         expect(result).toEqual({ isBase64Encoded: false, statusCode: 200, body: '' });
-        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/start_hash/next');
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/start_hash/next', 181);
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(2, 'blocks/4980/next');
     });
 

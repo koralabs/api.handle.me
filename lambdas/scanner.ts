@@ -1,4 +1,4 @@
-import { AssetNameLabel, asyncForEach, buildHolderInfo, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, NETWORK, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, buildHolderInfo, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, NETWORK, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { WHITELISTED_API_KEYS } from '../config';
 import { BlockfrostBlock, KoiosAssetUTxO, KoiosTxInfo } from '../interfaces/provider.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
@@ -26,6 +26,9 @@ const KOIOS_BLOCK_TXS_MAX_RETRIES = KOIOS_RETRY_DELAYS_MS.length;
 const KOIOS_ASSET_UTXOS_MAX_RPS = 6;
 const KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS = Math.ceil(1000 / KOIOS_ASSET_UTXOS_MAX_RPS);
 const KOIOS_ASSET_UTXOS_MAX_RETRIES = KOIOS_RETRY_DELAYS_MS.length;
+const SCANNER_MAX_BLOCKS_PER_INVOCATION = 180;
+const SCANNER_BLOCK_PREFETCH_CHUNK_SIZE = 30;
+const SCANNER_WORK_BUDGET_MS = 7 * 60_000;
 const ROLLBACK_20_SLOT_WINDOW = 400; // 20 blocks * ~20 seconds per block
 const RECOVERY_REASON_ROLLBACK = 'rollback';
 const RECOVERY_REASON_REINDEX = 'reindex';
@@ -116,6 +119,19 @@ const getKoiosBatches = (
 
 const delayMs = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+const runSequentialBatches = async <T>(
+    batches: T[],
+    intervalMilliseconds: number,
+    callback: (batch: T) => Promise<void>
+) => {
+    for (let index = 0; index < batches.length; index++) {
+        await callback(batches[index]);
+        if (intervalMilliseconds > 0 && index < batches.length - 1) {
+            await delayMs(intervalMilliseconds);
+        }
+    }
+};
+
 const getTxInfoBody = (hashBatch: string[]) => JSON.stringify({ _tx_hashes: hashBatch, ...defaultKoiosSettings });
 
 const getBlockTxsBody = (hashBatch: string[]) => JSON.stringify({ _block_hashes: hashBatch });
@@ -197,6 +213,8 @@ const isRetriableKoiosError = (error: any): boolean => {
     if (message.includes('socket')) return true;
     if (message.includes('econnreset')) return true;
     if (message.includes('fetch failed')) return true;
+    if (message.includes('aborted')) return true;
+    if (message.includes('timed out')) return true;
     if (message.includes('gateway timeout')) return true;
     if (message.includes('too many requests')) return true;
     if (message.includes('payload too large')) return true;
@@ -258,10 +276,10 @@ const getBatchedTxInfo = async (txHashes: string[]) => {
         payload: defaultKoiosSettings
     });
     const txs: KoiosTxInfo[] = [];
-    await asyncForEach(batchedTxHashes, async (hashBatch) => {
+    await runSequentialBatches(batchedTxHashes, KOIOS_TX_INFO_MIN_INTERVAL_MS, async (hashBatch) => {
         const txInfo = await fetchTxInfoBatchWithRetryAndSplit(hashBatch);
         txs.push(...(txInfo ?? []));
-    }, KOIOS_TX_INFO_MIN_INTERVAL_MS);
+    });
     return txs;
 };
 
@@ -285,11 +303,27 @@ const fetchBlockTxHashBatchWithRetry = async (hashBatch: string[], attempt = 0):
             event: 'scannerLambda.koiosBlockTxs.requestFailed'
         });
 
-        if (!retriable || attempt >= KOIOS_BLOCK_TXS_MAX_RETRIES) throw error;
+        if (!retriable) throw error;
 
-        const backoff = getKoiosRetryDelay(attempt);
-        await delayMs(backoff);
-        return fetchBlockTxHashBatchWithRetry(hashBatch, attempt + 1);
+        if (attempt < KOIOS_BLOCK_TXS_MAX_RETRIES) {
+            const backoff = getKoiosRetryDelay(attempt);
+            await delayMs(backoff);
+            return fetchBlockTxHashBatchWithRetry(hashBatch, attempt + 1);
+        }
+
+        if (hashBatch.length <= 1) throw error;
+
+        const midpoint = Math.ceil(hashBatch.length / 2);
+        const leftBatch = hashBatch.slice(0, midpoint);
+        const rightBatch = hashBatch.slice(midpoint);
+        Logger.local({
+            message: `Splitting block_txs batch after retries. originalCount=${hashBatch.length} leftCount=${leftBatch.length} rightCount=${rightBatch.length}`,
+            category: LogCategory.INFO,
+            event: 'scannerLambda.koiosBlockTxs.splitBatch'
+        });
+
+        const [leftTxHashes, rightTxHashes] = [await fetchBlockTxHashBatchWithRetry(leftBatch), await fetchBlockTxHashBatchWithRetry(rightBatch)];
+        return [...leftTxHashes, ...rightTxHashes];
     }
 };
 
@@ -318,9 +352,9 @@ const getBatchedTxHashes = async (blockHashes: string[]) => {
         maxBodyLength: KOIOS_BLOCK_TXS_SOFT_BODY_LIMIT
     });
     const txHashes: string[] = [];
-    await asyncForEach(batchedBlockHashes, async (hashBatch) => {
+    await runSequentialBatches(batchedBlockHashes, KOIOS_BLOCK_TXS_MIN_INTERVAL_MS, async (hashBatch) => {
         txHashes.push(...await fetchBlockTxHashBatchWithRetry(hashBatch));
-    }, KOIOS_BLOCK_TXS_MIN_INTERVAL_MS);
+    });
     return txHashes;
 };
 
@@ -421,7 +455,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
 
     const handleTxHashes: string[] = [];
     // This is a separate set of UTxOs representing the current Handle values (potentially different from above UTxOs)
-    await asyncForEach(batchedHandles, async (handleNames) => {
+    await runSequentialBatches(batchedHandles, KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS, async (handleNames) => {
         const koiosUtxos = await fetchAssetUtxoBatchWithRetry(handleNames);
         if (koiosUtxos !== null) {
             // go through each asset and grab the data we need to test, tx_hash, tx_index, address
@@ -433,7 +467,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
             // this can happen if a mint was rolled back and didn't return
             // Mostly possible with DEMI and Manually added Handles because handle.me uses Blockfrost
         }
-    }, KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS);
+    });
 
     const latestUTxOsForAffectedHandles = await getBatchedUTxOs(handleTxHashes);
 
@@ -572,6 +606,16 @@ const checkRollback = async () => {
         //     // Update last2160check
         //     handlesRepo.setMetrics({ lastMaxRollbackCheck: Date.now() });
         // }
+    } catch (error: any) {
+        if (isRetriableKoiosError(error)) {
+            Logger.log({
+                message: `Retriable Koios rollback failure (will retry next invocation): ${error?.message ?? error}`,
+                category: LogCategory.INFO,
+                event: 'scannerLambda.rollbackRetriable'
+            });
+            return;
+        }
+        throw error;
     } finally {
         handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
     }
@@ -640,11 +684,23 @@ const clearStaleLockIfNeeded = (metrics: ReturnType<HandlesRepository['getMetric
 const scan = async () => {
     Logger.local(`Running scan...`);
     const metrics = handlesRepo.getMetrics();
+    const scanStartedAt = Date.now();
     // Is scanning fast enough to do this without MAX_TIP_SLOTS? Or a much higher one?
     handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.SCANNING, lockLambdasTimestamp: Date.now() });
     try {
-        let bResp: { hash: string; slot: number; confirmations: number }[] = await fetchPaginatedResults(`blocks/${metrics.currentBlockHash}/next`);
+        let bResp: { hash: string; slot: number; confirmations: number }[] = await fetchPaginatedResults(
+            `blocks/${metrics.currentBlockHash}/next`,
+            SCANNER_MAX_BLOCKS_PER_INVOCATION + 1
+        );
         bResp.sort((a, b) => b.confirmations - a.confirmations);
+        if (bResp.length > SCANNER_MAX_BLOCKS_PER_INVOCATION) {
+            Logger.local({
+                message: `Large scanner backlog detected (${bResp.length} blocks). Processing first ${SCANNER_MAX_BLOCKS_PER_INVOCATION} blocks this invocation.`,
+                category: LogCategory.INFO,
+                event: 'scannerLambda.chunkedBacklog'
+            });
+            bResp = bResp.slice(0, SCANNER_MAX_BLOCKS_PER_INVOCATION);
+        }
         if (!bResp.length) {
             const latestBlockResponse = await blockfrostApiCall('blocks/latest');
             if (!latestBlockResponse.ok) {
@@ -668,55 +724,74 @@ const scan = async () => {
             Logger.local(`No new blocks to process from ${metrics.currentBlockHash}`);
             return;
         }
-        const txHashes = [...new Set(await getBatchedTxHashes(bResp.map((b) => b.hash)))];
-        const txList = await getBatchedTxInfo(txHashes);
-        const txInfoByBlockHash = new Map<string, KoiosTxInfo[]>();
-        for (const tx of txList) {
-            const blockHash = tx?.block_hash;
-            if (!blockHash) continue;
-            const existing = txInfoByBlockHash.get(blockHash) ?? [];
-            existing.push(tx);
-            txInfoByBlockHash.set(blockHash, existing);
+        let tipBlockHash = bResp[bResp.length - 1].hash;
+        let lastSlot = bResp[bResp.length - 1].slot;
+        const latestBlockResponse = await blockfrostApiCall('blocks/latest');
+        if (latestBlockResponse.ok) {
+            const latestBlock = await latestBlockResponse.json();
+            tipBlockHash = latestBlock?.hash ?? tipBlockHash;
+            lastSlot = Number(latestBlock?.slot ?? lastSlot);
         }
-        for (const b of bResp) {
-            const block = { id: b.hash, slot: b.slot, confirmations: b.confirmations };
-            const blockTxList = txInfoByBlockHash.get(b.hash) ?? [];
-            const builtUTxOs = buildUTxOsFromKoiosTxs(blockTxList);
+        for (let blockIndex = 0; blockIndex < bResp.length; blockIndex += SCANNER_BLOCK_PREFETCH_CHUNK_SIZE) {
+            if (Date.now() - scanStartedAt >= SCANNER_WORK_BUDGET_MS) {
+                Logger.log({
+                    message: `Scanner work budget reached after ${Date.now() - scanStartedAt}ms. Pausing this invocation at block offset ${blockIndex}/${bResp.length}.`,
+                    category: LogCategory.INFO,
+                    event: 'scannerLambda.workBudgetReached'
+                });
+                break;
+            }
+            const blockChunk = bResp.slice(blockIndex, blockIndex + SCANNER_BLOCK_PREFETCH_CHUNK_SIZE);
+            const txHashes = [...new Set(await getBatchedTxHashes(blockChunk.map((block) => block.hash)))];
+            const txList = await getBatchedTxInfo(txHashes);
+            const txInfoByBlockHash = new Map<string, KoiosTxInfo[]>();
+            for (const tx of txList) {
+                const blockHash = tx?.block_hash;
+                if (!blockHash) continue;
+                const existing = txInfoByBlockHash.get(blockHash) ?? [];
+                existing.push(tx);
+                txInfoByBlockHash.set(blockHash, existing);
+            }
+            for (const b of blockChunk) {
+                const block = { id: b.hash, slot: b.slot, confirmations: b.confirmations };
+                const blockTxList = txInfoByBlockHash.get(b.hash) ?? [];
+                const builtUTxOs = buildUTxOsFromKoiosTxs(blockTxList);
 
-            const handleNames = builtUTxOs.flatMap((u) => u.handles?.flatMap((h) => h[1].map((assetName) => getHandleNameFromAssetName(assetName).name)) ?? []) ?? [];
-            Logger.local(`Processing block ${block.id} at slot ${block.slot} with ${builtUTxOs.length} UTxOs containing ${handleNames.join(', ')} handles from ${blockTxList.length} transactions`);
+                const handleNames = builtUTxOs.flatMap((u) => u.handles?.flatMap((h) => h[1].map((assetName) => getHandleNameFromAssetName(assetName).name)) ?? []) ?? [];
+                Logger.local(`Processing block ${block.id} at slot ${block.slot} with ${builtUTxOs.length} UTxOs containing ${handleNames.join(', ')} handles from ${blockTxList.length} transactions`);
 
-            builtUTxOs.forEach((utxo) => {
-                // ********** BURNS ************* //
-                const burnHandles = (store.pipeline(() => {
-                    utxo.burn
-                        ?.flatMap((b) => b[1])
-                        .forEach((hex) => {
-                            handlesRepo.getHandle(getHandleNameFromAssetName(hex).name);
+                builtUTxOs.forEach((utxo) => {
+                    // ********** BURNS ************* //
+                    const burnHandles = (store.pipeline(() => {
+                        utxo.burn
+                            ?.flatMap((b) => b[1])
+                            .forEach((hex) => {
+                                handlesRepo.getHandle(getHandleNameFromAssetName(hex).name);
+                            });
+                    }) as (StoredHandle | undefined)[]).filter((burned): burned is StoredHandle => !!burned);
+
+                    const uniqueBurnHandles = Array.from(new Map(burnHandles.map((handle) => [handle.name, handle])).values());
+                    store.pipeline(() => {
+                        uniqueBurnHandles.forEach((burned) => {
+                            handlesRepo.removeHandle(burned);
                         });
-                }) as (StoredHandle | undefined)[]).filter((burned): burned is StoredHandle => !!burned);
-
-                const uniqueBurnHandles = Array.from(new Map(burnHandles.map((handle) => [handle.name, handle])).values());
-                store.pipeline(() => {
-                    uniqueBurnHandles.forEach((burned) => {
-                        handlesRepo.removeHandle(burned);
                     });
                 });
-            });
 
-            // ********* UPDATES ************ //
-            handlesRepo.addUTxOsWithMintDataAndUpdateIndexes(builtUTxOs);
+                // ********* UPDATES ************ //
+                handlesRepo.addUTxOsWithMintDataAndUpdateIndexes(builtUTxOs);
 
-            // ******** SPENT UTxOs *********** //
-            const spentUtxoIds = blockTxList.flatMap((tx) => tx.inputs).map((input) => `${input.tx_hash}#${input.tx_index}`);
-            if (spentUtxoIds.length) handlesRepo.removeUTxOs(spentUtxoIds);
+                // ******** SPENT UTxOs *********** //
+                const spentUtxoIds = blockTxList.flatMap((tx) => tx.inputs).map((input) => `${input.tx_hash}#${input.tx_index}`);
+                if (spentUtxoIds.length) handlesRepo.removeUTxOs(spentUtxoIds);
 
-            handlesRepo.setMetrics({
-                currentSlot: block.slot,
-                currentBlockHash: block.id,
-                tipBlockHash: bResp[bResp.length - 1].hash,
-                lastSlot: bResp[bResp.length - 1].slot
-            });
+                handlesRepo.setMetrics({
+                    currentSlot: block.slot,
+                    currentBlockHash: block.id,
+                    tipBlockHash,
+                    lastSlot
+                });
+            }
         }
     } catch (error: any) {
         if (isRetriableKoiosError(error)) {
@@ -736,32 +811,33 @@ const scan = async () => {
 
 export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGatewayProxyEventV2, context: AWSLambda.Context) => {
     store.initialize();
+    const isReindexShortcut = shouldTriggerReindexShortcut(event);
     const leaseOwner = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    if (!acquireScannerLease(leaseOwner)) {
+    const leaseAcquired = acquireScannerLease(leaseOwner);
+    if (!leaseAcquired && !isReindexShortcut) {
         Logger.local('Scanner lease is active in another invocation, skipping');
         return;
+    }
+    if (!leaseAcquired && isReindexShortcut) {
+        Logger.local('Scanner lease is active, but processing authorized reindex shortcut request');
     }
 
     let heartbeat: NodeJS.Timeout | undefined;
     try {
-        heartbeat = setInterval(() => {
-            try {
-                if (!renewScannerLease(leaseOwner)) {
-                    Logger.local('Scanner lease renewal failed, another invocation may take over soon');
+        if (leaseAcquired) {
+            heartbeat = setInterval(() => {
+                try {
+                    if (!renewScannerLease(leaseOwner)) {
+                        Logger.local('Scanner lease renewal failed, another invocation may take over soon');
+                    }
+                } catch (error: any) {
+                    Logger.log({ message: `Scanner lease heartbeat failed: ${error.message}`, category: LogCategory.ERROR, event: 'scannerLambda.leaseHeartbeat' });
                 }
-            } catch (error: any) {
-                Logger.log({ message: `Scanner lease heartbeat failed: ${error.message}`, category: LogCategory.ERROR, event: 'scannerLambda.leaseHeartbeat' });
-            }
-        }, SCANNER_LEASE_HEARTBEAT_MS);
-        heartbeat.unref?.();
-
-        await ensureInitialized();
-        const metrics = handlesRepo.getMetrics();
-        if (metrics.lockLambdas) {
-            Logger.local(`Lambda is locked with: ${metrics.lockLambdas}, skipping`);
-            if (!clearStaleLockIfNeeded(metrics)) return;
+            }, SCANNER_LEASE_HEARTBEAT_MS);
+            heartbeat.unref?.();
         }
 
+        await ensureInitialized();
         if (shouldTriggerReindexShortcut(event)) {
             if (!isWhitelistedScannerShortcutRequest(event)) {
                 Logger.local({
@@ -779,6 +855,12 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
             });
             await processReindex();
             return buildFunctionUrlResponse(200, { message: 'Reindex complete' });
+        }
+
+        const metrics = handlesRepo.getMetrics();
+        if (metrics.lockLambdas) {
+            Logger.local(`Lambda is locked with: ${metrics.lockLambdas}, skipping`);
+            if (!clearStaleLockIfNeeded(metrics)) return;
         }
 
         const recoveryFlag = getRecoveryFlag();
@@ -805,10 +887,12 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
         };
     } finally {
         if (heartbeat) clearInterval(heartbeat);
-        try {
-            releaseScannerLease(leaseOwner);
-        } catch (error: any) {
-            Logger.log({ message: `Failed to release scanner lease: ${error.message}`, category: LogCategory.ERROR, event: 'scannerLambda.leaseRelease' });
+        if (leaseAcquired) {
+            try {
+                releaseScannerLease(leaseOwner);
+            } catch (error: any) {
+                Logger.log({ message: `Failed to release scanner lease: ${error.message}`, category: LogCategory.ERROR, event: 'scannerLambda.leaseRelease' });
+            }
         }
     }
 };

@@ -118,9 +118,9 @@ export class RedisHandlesStore implements IApiStore {
         const utxoIds = (this.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 0) ?? []) as string[];
         Logger.log(`Repopulating indexes from ${utxoIds.length.toLocaleString()} UTxOs Ids`);
         
-        const utxos = this.pipeline(() => {
+        const utxos = (this.pipeline(() => {
             utxoIds.map(utxoId => this.getHashFromIndex(IndexNames.UTXO, utxoId)).filter(Boolean)
-        }) as UTxOWithTxInfo[];
+        }) as (UTxOWithTxInfo | undefined)[]).filter((utxo): utxo is UTxOWithTxInfo => !!utxo && Array.isArray(utxo.handles));
 
         const handleNames = utxos.flatMap(u => u.handles.flatMap(h => h[1]).map(h => getHandleNameFromAssetName(h).name));
 
@@ -178,55 +178,55 @@ export class RedisHandlesStore implements IApiStore {
         Logger.log(`Fetching ${url}`);
         const awsResponse = await fetch(url);
         if (awsResponse.status === 200) {
-            const buff = await awsResponse.arrayBuffer();
-            const unZipPromise = promisify(inflate);
-            const result = await unZipPromise(buff);
-            const text = result.toString('utf8');
-            Logger.log(`Found ${url}`);
-            //const text = fs.readFileSync(`handles_utxos.json`, 'utf8');
-            const storedS3HandlesUTxOJson = JSON.parse(text) as IHandleFileContent;
+        const buff = await awsResponse.arrayBuffer();
+        const unZipPromise = promisify(inflate);
+        const result = await unZipPromise(buff);
+        const text = result.toString('utf8');
+        Logger.log(`Found ${url}`);
+        //const text = fs.readFileSync(`handles_utxos.json`, 'utf8');
+        const storedS3HandlesUTxOJson = JSON.parse(text) as IHandleFileContent;
             const { utxos, slot: s3Slot, mintingData, hash: s3Hash, utxoSchemaVersion } = storedS3HandlesUTxOJson;
 
             if (utxoSchemaVersion == currentUTxOSchemaVersion) {
-                // Save minting data first
-                const mintingDataChunks = chunk(Object.entries(mintingData), MAX_SETS_PER_PIPE);
-                for (const mintingDataChunk of mintingDataChunks) {
-                    this.pipeline(() => {
-                        mintingDataChunk.forEach(([handle, mintData]) => {
-                            mintData.forEach(md => this.addValueToIndexedSet(IndexNames.MINT, handle, JSON.stringify(md)))
-                        });
-                    });
-                }
+        // Save minting data first
+        const mintingDataChunks = chunk(Object.entries(mintingData), MAX_SETS_PER_PIPE);
+        for (const mintingDataChunk of mintingDataChunks) {
+            this.pipeline(() => {
+                mintingDataChunk.forEach(([handle, mintData]) => {
+                    mintData.forEach(md => this.addValueToIndexedSet(IndexNames.MINT, handle, JSON.stringify(md)))
+                });
+            });
+        }
 
-                Logger.log(`Saved minting data for ${Object.keys(mintingData).length.toLocaleString()} handles from S3 snapshot`);
+        Logger.log(`Saved minting data for ${Object.keys(mintingData).length.toLocaleString()} handles from S3 snapshot`);
 
-                // save all the individual handles to the store
-                utxos.sort((a, b) => a.slot - b.slot);
+        // save all the individual handles to the store
+        utxos.sort((a, b) => a.slot - b.slot);
 
-                const utxoChunks = chunk(utxos, MAX_SETS_PER_PIPE);
-                const handles = new Map<string, StoredHandle>();
-                const holders = new Map<string, HolderHandleNames>();
-                const mintData = new Map(Object.entries(mintingData) as [string, MintingData[]][]);
-                for (const utxoChunk of utxoChunks) {
-                    this.pipeline(() => {
-                        utxoChunk.forEach((utxo) => {
-                            utxoFunctions[UTxOFunctionName.ADD_UTXO](utxo);
-                            utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo, mintData, handles, holders);
-                        });
-                    });
-                }
+        const utxoChunks = chunk(utxos, MAX_SETS_PER_PIPE);
+        const handles = new Map<string, StoredHandle>();
+        const holders = new Map<string, HolderHandleNames>();
+        const mintData = new Map(Object.entries(mintingData) as [string, MintingData[]][]);
+        for (const utxoChunk of utxoChunks) {
+            this.pipeline(() => {
+                utxoChunk.forEach((utxo) => {
+                    utxoFunctions[UTxOFunctionName.ADD_UTXO](utxo);
+                    utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo, mintData, handles, holders);
+                });
+            });
+        }
 
-                Logger.log(`Saved ${utxos.length.toLocaleString()} UTxOs from S3 snapshot`);
+        Logger.log(`Saved ${utxos.length.toLocaleString()} UTxOs from S3 snapshot`);
 
 
                 id = s3Hash;
                 slot = s3Slot;
             }
-            
-            const endTime = Date.now();
-            const pad = (num: number) => num.toString().padStart(2, '0');
-            const seconds = (endTime - startTime) / 1000;
-            Logger.log(`Populate from S3 took ${pad(Math.floor(seconds / 3600))}:${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`);
+
+        const endTime = Date.now();
+        const pad = (num: number) => num.toString().padStart(2, '0');
+        const seconds = (endTime - startTime) / 1000;
+        Logger.log(`Populate from S3 took ${pad(Math.floor(seconds / 3600))}:${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`);
         }
 
         const metrics = this.getMetrics();

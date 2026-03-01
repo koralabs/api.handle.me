@@ -171,33 +171,31 @@ export const handler = async (event: any) => {
 
     handlesRepo.setMetrics({ lockLambdas: LOCK_REASON_SNAPSHOT, lockLambdasTimestamp: Date.now() });
     try {
-        const networks = ['mainnet', 'preview', 'preprod']; // We can't do this, each region/network has it's own redis
-        for (let i = 0; i < networks.length; i++) {
-            const fileJson = await processSnapshot(networks[i]);
+        const network = `${process.env.NETWORK ?? 'preview'}`.toLowerCase();
+        const fileJson = await processSnapshot(network);
 
-            const { utxoSchemaVersion = 1 } = fileJson;
-            const fileName = `${networks[i]}/utxo-snapshot/${utxoSchemaVersion}/handles_utxos.gz`;
+        const { utxoSchemaVersion = 1 } = fileJson;
+        const fileName = `${network}/utxo-snapshot/${utxoSchemaVersion}/handles_utxos.gz`;
 
-            const zippedSnapshots = [
-                {
-                    Key: fileName,
-                    Body: zlib.deflateSync(JSON.stringify(fileJson))
-                }
-            ];
+        const zippedSnapshots = [
+            {
+                Key: fileName,
+                Body: zlib.deflateSync(JSON.stringify(fileJson))
+            }
+        ];
 
-            const s3Result = await Promise.all(
-                zippedSnapshots.map(({ Key, Body }) => {
-                    const params = {
-                        Bucket: 'api.handle.me',
-                        Key,
-                        Body
-                    };
-                    return new S3Client({ region: 'us-west-2' }).send(new PutObjectCommand(params));
-                })
-            );
+        const s3Result = await Promise.all(
+            zippedSnapshots.map(({ Key, Body }) => {
+                const params = {
+                    Bucket: 'api.handle.me',
+                    Key,
+                    Body
+                };
+                return new S3Client({ region: 'us-west-2' }).send(new PutObjectCommand(params));
+            })
+        );
 
-            Logger.local(`s3Result ${JSON.stringify(s3Result)}`);
-        }
+        Logger.local(`s3Result ${JSON.stringify(s3Result)}`);
 
         return {
             statusCode: 200,
