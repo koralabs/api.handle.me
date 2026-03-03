@@ -128,3 +128,5 @@ handles_utxos.json
 handles_utxos.gz
 .tmp_*.ts
 build
+# K.O.R.A executor logs
+.kora/executor-logs/
