@@ -19,6 +19,7 @@ const buildStoreMock = () => {
         destroy: jest.fn(),
         rollBackToGenesis: jest.fn(),
         getMetrics: jest.fn().mockReturnValue({}),
+        count: jest.fn().mockReturnValue(0),
         setMetrics: jest.fn(),
         getHashFromIndex: jest.fn(),
         setHashOnIndex: jest.fn(),
@@ -728,6 +729,7 @@ describe('HandlesRepository branch tests', () => {
         const store = buildStoreMock();
         const repo = new HandlesRepository(store);
         store.getKeysFromIndex.mockReturnValue(['beta', 'alpha']);
+        store.count.mockReturnValue(2);
         jest.spyOn(Math, 'random').mockReturnValue(0.2);
 
         const randomResult = repo.search({ page: 1, handlesPerPage: 2, sort: 'random' } as any);
@@ -735,6 +737,13 @@ describe('HandlesRepository branch tests', () => {
 
         expect(randomResult.searchTotal).toBe(2);
         expect(descResult.searchTotal).toBe(2);
+        expect(store.getKeysFromIndex).toHaveBeenCalledWith(
+            IndexNames.HANDLE,
+            expect.objectContaining({
+                orderBy: 'desc',
+                limit: { offset: 0, count: 2 }
+            })
+        );
     });
 
     it('removes root index for subhandle burns and skips nameless assets', () => {
