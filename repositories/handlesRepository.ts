@@ -129,6 +129,62 @@ export class HandlesRepository {
     }
 
     public search(pagination?: HandlePaginationModel, searchModel?: HandleSearchModel, namesOnly = false): { searchTotal: number, handles: (StoredHandle | string)[] } {
+        const hasSearchFilters = Boolean(
+            searchModel?.characters ||
+                searchModel?.length ||
+                searchModel?.rarity ||
+                searchModel?.numeric_modifiers ||
+                searchModel?.holder_address ||
+                searchModel?.og ||
+                searchModel?.personalized ||
+                searchModel?.handle_type
+        );
+        const isUnfilteredPaginatedSearch =
+            !hasSearchFilters &&
+            !searchModel?.search &&
+            !searchModel?.handles?.length &&
+            !pagination?.slotNumber &&
+            pagination?.sort !== 'random';
+
+        if (isUnfilteredPaginatedSearch) {
+            const metrics = this.store.getMetrics();
+            const handleCountFromMetrics = Number(metrics?.handleCount);
+            const searchTotal = Number.isFinite(handleCountFromMetrics)
+                ? handleCountFromMetrics
+                : Number((this.store as any).getHandleCount?.() ?? 0);
+
+            const startIndex = ((pagination?.page ?? 1) - 1) * (pagination?.handlesPerPage ?? 100);
+            const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+            const pageHandleNames = this.store.getKeysFromIndex(IndexNames.HANDLE, {
+                orderBy: sortOrder,
+                limit: { offset: startIndex, count: pagination?.handlesPerPage ?? 100 }
+            }) as string[];
+
+            if (namesOnly) {
+                return { searchTotal, handles: pageHandleNames.map((name) => `${name}`) };
+            }
+
+            let handles = (this.store.pipeline(() => {
+                for (const h of pageHandleNames) {
+                    this.store.getHashFromIndex(IndexNames.HANDLE, h);
+                }
+            }) as StoredHandle[]);
+
+            const defaultHandlesByHolder = this.resolveDefaultHandlesByHolder(handles);
+            handles = handles
+                .map((handle) => {
+                    if (handle) {
+                        handle.name = `${handle.name}`;
+                        handle.hex = `${handle.hex}`;
+                        handle.default_in_wallet = defaultHandlesByHolder.get(handle.holder) ?? handle.name;
+                        return handle;
+                    }
+                })
+                .filter((h): h is StoredHandle => !!h);
+
+            return { searchTotal, handles };
+        }
+
         let handles: StoredHandle[] = [];
         // The ['|empty|'] is important for `AND` searches here and indicates 
         // that we couldn't find any results for one of the search terms
@@ -190,38 +246,6 @@ export class HandlesRepository {
         // Check for the searched term or handle list
         handleNames = handleNames.filter((name) => (!searchModel?.handles || searchModel?.handles.includes(name)) && checkSearch(name, searchModel?.search))
         const searchTotal = handleNames.length;
-
-        const isUnfilteredPaginatedSearch = filtered.length === 0 && !searchModel?.search && !searchModel?.handles?.length && !pagination?.slotNumber && pagination?.sort !== 'random';
-        if (isUnfilteredPaginatedSearch) {
-            const { handleCount } = this.store.getMetrics();
-            const searchTotalFromMetrics = Number(handleCount);
-            if (Number.isFinite(searchTotalFromMetrics)) {
-                const startIndex = ((pagination?.page ?? 1) - 1) * (pagination?.handlesPerPage ?? 100);
-                const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
-                const pageHandleNames = this.store.getKeysFromIndex(IndexNames.HANDLE, {
-                    orderBy: sortOrder,
-                    limit: { offset: startIndex, count: pagination?.handlesPerPage ?? 100 }
-                }) as string[];
-                if (namesOnly) {
-                    return { searchTotal: searchTotalFromMetrics, handles: pageHandleNames.map((name) => `${name}`) };
-                }
-                handles = (this.store.pipeline(() => {
-                    for (const h of pageHandleNames) {
-                        this.store.getHashFromIndex(IndexNames.HANDLE, h);
-                    }
-                }) as StoredHandle[]);
-                const defaultHandlesByHolder = this.resolveDefaultHandlesByHolder(handles);
-                handles = handles.map((handle) => {
-                    if (handle) {
-                        handle.name = `${handle.name}`;
-                        handle.hex = `${handle.hex}`;
-                        handle.default_in_wallet = defaultHandlesByHolder.get(handle.holder) ?? handle.name;
-                        return handle;
-                    }
-                }).filter((h): h is StoredHandle => !!h);
-                return { searchTotal: searchTotalFromMetrics, handles };
-            }
-        }
 
         if (pagination?.slotNumber) {
             const {firstSlot, lastSlot, handleCount} = this.store.getMetrics();
