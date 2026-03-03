@@ -63,7 +63,7 @@ describe('HandlesRepository search', () => {
         const pipelineResults: any[] = [];
         const store: any = {
             getMetrics: jest.fn().mockReturnValue({}),
-            getHandleCount: jest.fn().mockReturnValue(42),
+            count: jest.fn().mockReturnValue(42),
             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
                 if (!options) throw new Error('should not enumerate full HANDLE set');
@@ -81,7 +81,6 @@ describe('HandlesRepository search', () => {
 
         expect(result.searchTotal).toBe(42);
         expect(result.handles).toEqual([]);
-        expect(store.getHandleCount).toHaveBeenCalledTimes(1);
+        expect(store.count).toHaveBeenCalledTimes(1);
     });
 });
-

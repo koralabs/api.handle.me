@@ -1,0 +1,1883 @@
+OpenAI Codex v0.[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]6.0 (research preview)
+--------
+workdir: [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me
+model: gpt-5.2
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR] (network access enabled)
+reasoning effort: high
+reasoning summaries: none
+session id: 0[REDACTED_ENV:SHLVL]9cb[REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]e-[REDACTED_ENV:SHLVL]d75-787[REDACTED_ENV:SHLVL]-9a37-df5fd4528078
+--------
+user
+# You are the K.O.R.A executor Codex agent.
+
+## Directives
+- Perform the assigned repository task directly in this working tree.
+- Be sure to read AGENTS.md if there is one. Read AGENTS.me files in subfolders and parent folders if navigation takes you there.
+- You are running in an unattended mode. NEVER wait for confirmation for any step.
+- You can query AWS resources, but do not add/edit AWS resources.
+- If infra needs to be launched or changed to support the new code, create an infra script and add it to the PR description.
+- If linked GitHub issue IDs are provided in the execution context, reference them in the PR so support/ticket progress remains linked.
+
+## Flow
+- Start in the `~/[REDACTED_ENV:PYTHONPATH]/koralabs` directory and read the AGENTS.md file there. This is not a git repo, it is a parent folder to all of the ecosystem repos.
+- You'll need to figure out from the prompt, context and AGENTS.md which repo needs to be targeted.
+  - It must match one of the subfolders in `~[REDACTED_ENV:PYTHONPATH]/koralabs/` with a corresponding git repository name in the Kora/Handles ecosystem. 
+  - Do not synthesize owner/repo pairs from input strings (for example, do not convert `handle-me` into `owner/handle-me` unless that repo actually exists).
+  - If unknown, infer from, event name, error text, stack trace, evidence links, and/or "Projects in this folder" from AGENTS.md
+  - Don't invent a repo name that doesn't exist. If you can't align with an existing repo, fail the job.
+- Always switch to the main/master/[REDACTED_ENV_FILE:NETWORK] branch and pull the latest from source control.
+- Always checkout to a new branch.
+- Work the task to completion without waiting for confirmation.
+- Do not run `git commit`, `git push`, or `gh pr create`; executor runtime performs finalize/publish after hard checks pass.
+- Do not run `gh pr merge` or enable PR auto-merge; human review/merge is required.
+- Do not post manual completion/status comments to GitHub issues. Executor runtime is the source of truth for status updates.
+
+## Multiple projects
+- Features and bug fixes might span multiple sibling projects
+- Perform code changes in the relevant repos following the flow rules above for those repos as well
+
+Task profile: app-alert remediation.
+
+## Required first step
+- Determine which repository owns the alert before implementing code changes.
+- Use the alert context (`application`, `app_event`) to identify the owning repository.
+- Prefer `log_event.application` / incident `application` as the primary repo hint.
+
+## Issue linkage
+- If no linked GitHub issue is provided in execution context, create one in the resolved owning repository before remediation work continues.
+- Include alert summary, suspected impact, and evidence references in that issue body.
+- Capture the created issue id in your execution notes/output so follow-up can be traced.
+
+## Remediation workflow
+- After issue creation, remediate in the owning repository using a dedicated working branch.
+- Keep changes scoped to the alert root-cause and validation.
+- Add/adjust tests for changed behavior.
+- Do not run `git commit`, `git push`, or `gh pr create`; executor runtime performs finalize/publish.
+- Do not run `gh pr merge` or enable PR auto-merge; human review/merge is required.
+- Do not post manual progress/completion status comments on GitHub issues; executor runtime is authoritative for status.
+
+## Failure contract
+- If you cannot determine the owning repository with high confidence, fail the job explicitly and explain why.
+
+Execution job context:
+- action_id: 3e262c48-306b-4b96-9459-4da2a34544[REDACTED_ENV:SHLVL]e
+- job_id: d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0
+- repo: koralabs/api.handle.me
+- base_branch: main
+- working_branch: kora/alerts/672087adbc[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]5540635d00b0
+- task_type: app_alerts
+- task_summary: App alert remediation for api.handle.me (api.timeout). First determine which repo owns this alert from the incident context, logs, and repo search. Then create a GitHub issue in that repo and continue remediation. Triage summary: [REDACTED_ENV:SHLVL] incident(s) detected for api.handle.me.. Suggested action: Proceed with standard incident response flow.. Evidence: dispatch:discord-3. Initial alert message: timeout exceeded
+- original_request: App alert remediation for api.handle.me (api.timeout). First determine which repo owns this alert from the incident context, logs, and repo search. Then create a GitHub issue in that repo and continue remediation. Triage summary: [REDACTED_ENV:SHLVL] incident(s) detected for api.handle.me.. Suggested action: Proceed with standard incident response flow.. Evidence: dispatch:discord-3. Initial alert message: timeout exceeded
+- linked_issue_ids: none
+- linked_ticket_ids: none
+- community_api_job_folder: unspecified
+- executor_stdout_log: .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stdout.log
+- executor_stderr_log: .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log
+- suggested verification commands:
+- none provided
+- Keep `executor_stdout_log` and `executor_stderr_log` files in the branch commit.
+
+mcp startup: no servers
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs && ls -la' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+total [REDACTED_ENV:SHLVL]72
+drwxr-xr-x 37 [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Feb 27 22:[REDACTED_ENV:SHLVL]2 .
+drwxr-xr-x 30 [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Feb 2[REDACTED_ENV:SHLVL] 07:57 ..
+-rw-r--r--  [REDACTED_ENV:SHLVL] [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME]  347 Feb [REDACTED_ENV:SHLVL]7 [REDACTED_ENV:SHLVL]7:[REDACTED_ENV:SHLVL]8 .env
+drwxr-xr-x  8 [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Mar  2 2[REDACTED_ENV:SHLVL]:57 .git
+-rw-r--r--  [REDACTED_ENV:SHLVL] [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME]   87 Feb 27 22:[REDACTED_ENV:SHLVL]2 .gitignore
+-rw-r--r--  [REDACTED_ENV:SHLVL] [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 9[REDACTED_ENV:SHLVL][REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT] Feb 27 22:[REDACTED_ENV:SHLVL]2 AGENTS.md
+-rw-r--r--  [REDACTED_ENV:SHLVL] [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME]   94 Feb 27 22:[REDACTED_ENV:SHLVL]2 README.md
+drwxr-xr-x [REDACTED_ENV:SHLVL][REDACTED_ENV:SHLVL] [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Feb 2[REDACTED_ENV:SHLVL] 08:09 adahandle-deployments
+drwxr-xr-x  5 [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Feb [REDACTED_ENV:SHLVL]7 2[REDACTED_ENV:SHLVL]:53 adahandle-internal
+drwxr-xr-x 26 [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Mar  2 22:04 api.handle.me
+drwxr-xr-x [REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT] [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Feb [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT] [REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT]:[REDACTED_ENV:SHLVL][REDACTED_ENV:SHLVL] auth.handle.me
+drwxr-xr-x  9 [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Feb [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT] 09:57 chat.handle.me
+drwxr-xr-x  7 [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Feb 22 [REDACTED_ENV:SHLVL]8:44 cip-68-444-minting
+drwxr-xr-x  5 [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Feb [REDACTED_ENV:SHLVL]8 [REDACTED_ENV:SHLVL]7:02 cloudwatch-to-discord
+drwxr-xr-x  9 [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Mar  2 22:02 community-jobs
+drwxr-xr-x [REDACTED_ENV:SHLVL][REDACTED_ENV:SHLVL] [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Feb 22 [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]:40 decentralized-minting
+drwxr-xr-x [REDACTED_ENV:SHLVL]2 [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Feb [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT] [REDACTED_ENV:SHLVL]3:44 docs.handle.me
+drwxr-xr-x  5 [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Jul [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]  20[REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT] hal-glb
+drwxr-xr-x [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT] [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Feb 22 [REDACTED_ENV:SHLVL][REDACTED_ENV:SHLVL]:[REDACTED_ENV:SHLVL][REDACTED_ENV:SHLVL] hal-minting-contracts
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs && sed -n '[REDACTED_ENV:SHLVL],200p' AGENTS.md" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+# AGENTS.md
+This folder contains all of the separate git repositories of the Kora & Handles ecosystem. This file explains their relationships and provides 
+an anchor point for general ecosystem knowledge so AI-directed solutions can be informed and aware.
+
+## [REDACTED_ENV:SHLVL]) Kora Labs
+- Kora Labs, LLC is the creator and current stewards of the Ada Handles protocol - the most widely accepted address resolution project on Cardano
+
+## 2) Official Sites
+Before any *.handle.me request, load `KORA_USER_AGENT` from `.env` and use a User-Agent header. Do not run a probe first.
+- Documentation: `https://docs.handle.me`
+- Handle Minting & Portals: `https://handle.me`
+- Public API (this service): `https://api.handle.me` (Swagger UI is also hosted there)
+- Marketplace: `https://marketplace.handle.me`
+- Merch Store: `https://merch.handle.me`
+- OAuth System: `https://auth.handle.me`
+- H.A.L. NFT: `https://hal.handle.me`
+- H.A.L. Metaverse: `https://metaverse.handle.me`
+- Handle Chat: `https://chat.handle.me`
+- Secrets Vault: `https://secrets.handle.me`
+- Handle Image Rendering: `https://render.handle.me` (private access only)
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && find .. -maxdepth 2 -name AGENTS.md -print' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+../AGENTS.md
+../docs.handle.me/AGENTS.md
+../minting.handle.me/AGENTS.md
+../handle.me/AGENTS.md
+../cloudwatch-to-discord/AGENTS.md
+../handles-discord-bot/AGENTS.md
+../secrets.handle.me/AGENTS.md
+../community-jobs/AGENTS.md
+../kora-bot/AGENTS.md
+../adahandle-internal/AGENTS.md
+../api.handle.me/AGENTS.md
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && sed -n '[REDACTED_ENV:SHLVL],200p' AGENTS.md" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+# AGENTS.md
+
+## [REDACTED_ENV:SHLVL]) Master AGENTS.md
+- [REQUIREMENT] Read the AGENTS.md in this project's parent folder for complete instructions and inter-project (sibling) references
+
+## 2) Operational Safety Rules
+- Never write to Valkey/Redis on default port `6379`.
+- Reading from `6379` is allowed for troubleshooting.
+- If write testing is needed, use a different `REDIS_PORT`.
+- Temporary files must be created in `/tmp`.
+
+## 2) Application Flow / Mechanics
+- Local dev:
+  - `npm run ogmios` starts cardano-node, Ogmios, and Valkey.
+  - `npm run api` is the local app entrypoint and starts/resumes scanning.
+- Container runtime:
+  - `shell/entrypoint.sh` starts the app and supporting services.
+- Production runtime:
+  - ALB-fronted AWS Lambdas + Valkey.
+  - each `/lambdas` file is an entrypoint.
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && ls -ლა .kora/executor-logs && sed -n '[REDACTED_ENV:SHLVL],200p' .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stdout.log && echo '---' && sed -n '[REDACTED_ENV:SHLVL],200p' .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me exited 2 in [REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]ms:
+ls: invalid option -- '�'
+Try 'ls --help' for more information.
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && ls -la .kora/executor-logs && sed -n '[REDACTED_ENV:SHLVL],200p' .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stdout.log && echo '---' && sed -n '[REDACTED_ENV:SHLVL],200p' .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+total 600
+drwxr-xr-x 2 [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME]   4096 Mar  2 22:23 .
+drwxr-xr-x 3 [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME]   4096 Mar  2 22:02 ..
+-rw-r--r-- [REDACTED_ENV:SHLVL] [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 477656 Mar  2 22:[REDACTED_ENV:SHLVL]3 84eefec8-bc3a-4643-98c8-934fab75c440.stderr.log
+-rw-r--r-- [REDACTED_ENV:SHLVL] [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME]   [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]29 Mar  2 22:[REDACTED_ENV:SHLVL]3 84eefec8-bc3a-4643-98c8-934fab75c440.stdout.log
+-rw-r--r-- [REDACTED_ENV:SHLVL] [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME]  528[REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT] Mar  2 22:23 955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70.stderr.log
+-rw-r--r-- [REDACTED_ENV:SHLVL] [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME]   [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]44 Mar  2 22:23 955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70.stdout.log
+-rw-r--r-- [REDACTED_ENV:SHLVL] [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME]  45767 Mar  2 22:[REDACTED_ENV:SHLVL]7 d4399786-4393-47eb-8607-734c948ec2c2.stderr.log
+-rw-r--r-- [REDACTED_ENV:SHLVL] [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME]   [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]08 Mar  2 22:[REDACTED_ENV:SHLVL]7 d4399786-4393-47eb-8607-734c948ec2c2.stdout.log
+-rw-r--r-- [REDACTED_ENV:SHLVL] [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME]   9644 Mar  2 22:24 d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log
+-rw-r--r-- [REDACTED_ENV:SHLVL] [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME]      0 Mar  2 22:23 d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stdout.log
+---
+OpenAI Codex v0.[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]6.0 (research preview)
+--------
+workdir: [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me
+model: gpt-5.2
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR] (network access enabled)
+reasoning effort: high
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && gh --version && gh auth status' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in [REDACTED_ENV:SHLVL]99ms:
+github.com
+  ✓ Logged in to github.com account papag00se ([REDACTED_ENV:HOME]/.config/gh/hosts.yml)
+  - Active account: [REDACTED_ENV_FILE:ENABLE_DATUM_ENDPOINT]
+  - Git operations protocol: https
+  - Token: gho_************************************
+  - Token scopes: 'gist', 'read:org', 'repo', 'workflow'
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && git remote -v && git rev-parse --abbrev-ref HEAD' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in [REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]ms:
+origin	https://github.com/koralabs/api.handle.me.git (fetch)
+origin	https://github.com/koralabs/api.handle.me.git (push)
+kora/alerts/672087adbc[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]5540635d00b0
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && gh issue create -R koralabs/api.handle.me -t \"[ALERT] api.timeout: timeout exceeded\" -b \"Alert: api.handle.me (api.timeout)\\nInitial message: timeout exceeded\\nEvidence: dispatch:discord-3\\nExecutor: action_id=3e262c48-306b-4b96-9459-4da2a34544[REDACTED_ENV:SHLVL]e job_id=d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0\\n\\nSuspected impact:\\n- Public API requests may time out under certain conditions, causing client failures and elevated latency.\\n\\nRemediation plan:\\n- Identify slow/blocked request path(s) in api.handle.me and reduce or bound the work done per request.\\n- Add/adjust tests to prevent regressions.\"" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 89[REDACTED_ENV:SHLVL]ms:
+https://github.com/koralabs/api.handle.me/issues/[REDACTED_ENV:SHLVL]39
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && git fetch origin && git checkout main && git pull --ff-only && git checkout -B kora/alerts/672087adbc[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]5540635d00b0' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me exited [REDACTED_ENV:SHLVL] in [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]8ms:
+error: pathspec 'main' did not match any file(s) known to git
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && git branch -a' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+* kora/alerts/672087adbc[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]5540635d00b0
+  master
+  release/[REDACTED_ENV:SHLVL].[REDACTED_ENV:SHLVL]3.0
+  remotes/origin/HEAD -> origin/master
+  remotes/origin/kora/alerts/672087adbc[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]5540635d00b0
+  remotes/origin/master
+  remotes/origin/release/[REDACTED_ENV:SHLVL].[REDACTED_ENV:SHLVL]2.0
+  remotes/origin/release/[REDACTED_ENV:SHLVL].[REDACTED_ENV:SHLVL]3.0
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && git fetch origin && git checkout master && git pull --ff-only && git checkout -B kora/alerts/672087adbc[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]5540635d00b0' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 684ms:
+Switched to branch 'master'
+Your branch is up to date with 'origin/master'.
+Already up to date.
+Switched to and reset branch 'kora/alerts/672087adbc[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]5540635d00b0'
+Your branch is behind 'origin/kora/alerts/672087adbc[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]5540635d00b0' by 2 commits, and can be fast-forwarded.
+  (use "git pull" to update your local branch)
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && git pull --ff-only' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]4ms:
+Updating e2e8bb7..3df032d
+Fast-forward
+ ...955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70.stderr.log | 700 +++++++++++++++++++++
+ ...955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70.stdout.log |   6 +
+ repositories/handlesRepository.ts                  |  88 ++-
+ .../tests/handles.repository.branches.test.ts      |   9 +
+ .../tests/handles.repository.search.test.ts        |  87 +++
+ 5 files changed, 858 insertions(+), 32 deletions(-)
+ create mode [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0644 .kora/executor-logs/955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70.stderr.log
+ create mode [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0644 .kora/executor-logs/955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70.stdout.log
+ create mode [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0644 repositories/tests/handles.repository.search.test.ts
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && git log --oneline --decorate -[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT] && git show -[REDACTED_ENV:SHLVL] --name-only' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+3df032d (HEAD -> kora/alerts/672087adbc[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]5540635d00b0, origin/kora/alerts/672087adbc[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]5540635d00b0) executor: feature_bug (955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70)
+a526902 executor: feature_bug (84eefec8-bc3a-4643-98c8-934fab75c440)
+e2e8bb7 (origin/master, origin/HEAD, master) get script fix
+7e8b58a chore: resolve npm audit findings in deps
+90f0975 feat(R28-SEC): reduce dependency vuln surface in api tooling
+9a[REDACTED_ENV:SHLVL]fb8e fill missing reference token script from script config
+445704f feat(R0[REDACTED_ENV:SHLVL]-TC3): apply full-source test guardrail coverage
+f4a42ff feat(R0[REDACTED_ENV:SHLVL]-TC2): standardize real-code coverage report output
+7bb80[REDACTED_ENV:SHLVL]a feat(R0[REDACTED_ENV:SHLVL]-DOC): expand product and spec documentation
+4a36366 feat(R0[REDACTED_ENV:SHLVL]-TC): raise coverage and add coverage runner
+commit 3df032db6956957[REDACTED_ENV:SHLVL]b5703b86a08ce[REDACTED_ENV:SHLVL]dc2aa[REDACTED_ENV:SHLVL]ad5c
+Author: K.O.R.A. Executor <kora-executor@local>
+Date:   Mon Mar 2 22:23:49 2026 -0800
+
+    executor: feature_bug (955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70)
+
+.kora/executor-logs/955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70.stderr.log
+.kora/executor-logs/955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70.stdout.log
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && git diff --stat master..HEAD && git diff master..HEAD -- repositories/handlesRepository.ts | sed -n '[REDACTED_ENV:SHLVL],200p'" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+ ...955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70.stderr.log | 700 +++++++++++++++++++++
+ ...955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70.stdout.log |   6 +
+ repositories/handlesRepository.ts                  |  88 ++-
+ .../tests/handles.repository.branches.test.ts      |   9 +
+ .../tests/handles.repository.search.test.ts        |  87 +++
+ 5 files changed, 858 insertions(+), 32 deletions(-)
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index 8f467a8..[REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ec [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0644
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:SHLVL]29,6 +[REDACTED_ENV:SHLVL]29,62 @@ export class HandlesRepository {
+     }
+ 
+     public search(pagination?: HandlePaginationModel, searchModel?: HandleSearchModel, namesOnly = [REDACTED_ENV:KORA_EXECUTOR_ENFORCE_REPO_SYNC]): { searchTotal: number, handles: (StoredHandle | string)[] } {
++        const hasSearchFilters = Boolean(
++            searchModel?.characters ||
++                searchModel?.length ||
++                searchModel?.rarity ||
++                searchModel?.numeric_modifiers ||
++                searchModel?.holder_address ||
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && sed -n '[REDACTED_ENV:SHLVL],220p' repositories/tests/handles.repository.search.test.ts && echo '---' && sed -n '[REDACTED_ENV:SHLVL],220p' repositories/tests/handles.repository.branches.test.ts" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+import { IndexNames } from '@koralabs/kora-labs-common';
+import { HandlesRepository } from '../handlesRepository';
+
+describe('HandlesRepository search', () => {
+    it('pages unfiltered results without enumerating the full HANDLE set', () => {
+        // Feature: unfiltered /handles queries should return quickly via paginated store access.
+        // Failure mode: enumerating the full HANDLE set (smembers) can time out as the dataset grows.
+        // Negative control: the store mock throws if getKeysFromIndex is called without pagination options.
+
+        const handleByName = new Map<string, any>([
+            ['alpha', { name: 'alpha', hex: 'aa', holder: 'holder-alpha' }],
+            ['bravo', { name: 'bravo', hex: 'bb', holder: 'holder-bravo' }]
+        ]);
+
+        const pipelineResults: any[] = [];
+        const store: any = {
+            getMetrics: jest.fn().mockReturnValue({ handleCount: 3 }),
+            getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                if (!options) throw new Error('should not enumerate full HANDLE set');
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && rg -n \"public search\\(\" -n repositories/handlesRepository.ts && sed -n '90,330p' repositories/handlesRepository.ts" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+[REDACTED_ENV:SHLVL]3[REDACTED_ENV:SHLVL]:    public search(pagination?: HandlePaginationModel, searchModel?: HandleSearchModel, namesOnly = [REDACTED_ENV:KORA_EXECUTOR_ENFORCE_REPO_SYNC]): { searchTotal: number, handles: (StoredHandle | string)[] } {
+
+        // Workaround for numeric handles names
+        handle.name = `${handle.name}`
+        handle.hex = `${handle.hex}`
+
+        return handle;
+    }
+
+    public buildHolder(handles: Set<string>, address: string, defaultHandle?: string, totalHandles?: number, includeHandles = [REDACTED_ENV_FILE:ENABLE_DATUM_ENDPOINT], manuallySet?: boolean): Holder | undefined {
+        if(!handles || handles.size === 0) return;
+
+        const holderTotal = totalHandles ?? handles.size;
+
+        const addressDetails = buildHolderInfo(address);
+
+        const holder: Holder = {
+            handles: includeHandles ? [...handles] : [],
+            default_handle: defaultHandle || `${this.getDefaultHandle(handles ?? new Set())?.name ?? ''}`,
+            manually_set: manuallySet ?? (defaultHandle ? [REDACTED_ENV_FILE:ENABLE_DATUM_ENDPOINT] : [REDACTED_ENV:KORA_EXECUTOR_ENFORCE_REPO_SYNC]),
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && rg -n "timeout" .kora/executor-logs/955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70.stderr.log | head && rg -n "HANDLE set" .kora/executor-logs/955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70.stderr.log | head' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+7[REDACTED_ENV:SHLVL]:- task_summary: App alert remediation for api.handle.me (api.timeout). First determine which repo owns this alert from the incident context, logs, and repo search. Then create a GitHub issue in that repo and continue remediation. Triage summary: [REDACTED_ENV:SHLVL] incident(s) detected for api.handle.me.. Suggested action: Proceed with standard incident response flow.. Evidence: dispatch:discord-3. Initial alert message: timeout exceeded
+72:- original_request: App alert remediation for api.handle.me (api.timeout). First determine which repo owns this alert from the incident context, logs, and repo search. Then create a GitHub issue in that repo and continue remediation. Triage summary: [REDACTED_ENV:SHLVL] incident(s) detected for api.handle.me.. Suggested action: Proceed with standard incident response flow.. Evidence: dispatch:discord-3. Initial alert message: timeout exceeded
+84:Follow executor flow: confirm repo ownership from incident context, create an issue, then remediate the timeout with a scoped, tested fix on a dedicated branch.
+89:  • Reproduce and locate timeout
+[REDACTED_ENV:SHLVL]4[REDACTED_ENV:SHLVL]:  • Reproduce and locate timeout
+229:  • Reproduce and locate timeout
+270:  • Reproduce and locate timeout
+277:[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && gh issue create --title "api.timeout: timeout exceeded in api.handle.me" --body $'"'Alert: api.timeout\\nInitial message: timeout exceeded\\nApplication: api.handle.me\\nEvidence: dispatch:discord-3\\n\\nExecutor job context:\\n- action_id: 6ac3c5d8-fdda-40[REDACTED_ENV:SHLVL]9-b22f-54c83cf7be8[REDACTED_ENV:SHLVL]\\n- job_id: 955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70\\n- working_branch: kora/alerts/672087adbc[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]5540635d00b0\\n\\nSuspected impact:\\n- Some API requests to api.handle.me exceed upstream timeout (ALB/Lambda) and return timeouts to clients.\\n\\nNext steps:\\n- Identify slow endpoints and root cause (DB/Valkey contention, chain queries, or scanning interference).\\n- Add targeted fix + tests; keep change scoped to timeout root cause.'" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 874ms:
+280:Created GitHub issue `koralabs/api.handle.me#[REDACTED_ENV:SHLVL]38` to track the api.timeout remediation, per executor workflow.
+285:  → Reproduce and locate timeout
+64[REDACTED_ENV:SHLVL]:     5	    it('pages unfiltered results without enumerating the full HANDLE set', () => {
+643:     7	        // Failure mode: enumerating the full HANDLE set (smembers) can time out as the dataset grows.
+656:    20	                if (!options) throw new Error('should not enumerate full HANDLE set');
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && git status --porcelain=v[REDACTED_ENV:SHLVL]' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && git ls-files .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stdout.log && wc -l .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stdout.log' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+  34[REDACTED_ENV:SHLVL] .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log
+    0 .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stdout.log
+  34[REDACTED_ENV:SHLVL] total
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && cat .gitignore' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Diagnostic reports (https://nodejs.org/api/report.html)
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Directory for instrumented libs generated by jscoverage/JSCover
+lib-cov
+
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && git status --porcelain=v[REDACTED_ENV:SHLVL] --ignored' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+!! .env
+!! .kora/executor-logs/84eefec8-bc3a-4643-98c8-934fab75c440.stderr.log
+!! .kora/executor-logs/84eefec8-bc3a-4643-98c8-934fab75c440.stdout.log
+!! .kora/executor-logs/d4399786-4393-47eb-8607-734c948ec2c2.stderr.log
+!! .kora/executor-logs/d4399786-4393-47eb-8607-734c948ec2c2.stdout.log
+!! .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log
+!! .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stdout.log
+!! coverage/
+!! dist/
+!! node_modules/
+!! tmp/
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && rg -n \"getKeysFromIndex\\(IndexNames\\.HANDLE\\)\"" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+repositories/handlesRepository.ts:227:            handleNames = Array.from(this.store.getKeysFromIndex(IndexNames.HANDLE)).map((handle) => handle as string);
+stores/redis/index.test.ts:399:        const keys = store.getKeysFromIndex(IndexNames.HANDLE);
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && rg -n "getHandleCount" -S' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in [REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]ms:
+repositories/handlesRepository.ts:[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT]4:                : Number((this.store as any).getHandleCount?.() ?? 0);
+repositories/tests/handles.repository.search.test.ts:66:            getHandleCount: jest.fn().mockReturnValue(42),
+repositories/tests/handles.repository.search.test.ts:84:        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+repositories/tests/handles.repository.branches.test.ts:22:        getHandleCount: jest.fn().mockReturnValue(0),
+repositories/tests/handles.repository.branches.test.ts:732:        store.getHandleCount.mockReturnValue(2);
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && ls -la stores && find stores -maxdepth 3 -type f -name '*.ts' | head" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+total [REDACTED_ENV:SHLVL]2
+drwxr-xr-x  3 [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Feb [REDACTED_ENV:SHLVL]7 [REDACTED_ENV:SHLVL]4:26 .
+drwxr-xr-x 26 [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Mar  2 22:04 ..
+drwxr-xr-x  2 [REDACTED_ENV:LOGNAME] [REDACTED_ENV:LOGNAME] 4096 Mar  2 22:04 redis
+stores/redis/index.ts
+stores/redis/index.test.ts
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && sed -n '[REDACTED_ENV:SHLVL],260p' stores/redis/index.ts" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+import { ApiIndexType, chunk, Holder, HolderHandleNames, IApiMetrics, IApiStore, IHandleFileContent, IndexNames, ISlotHistory, isNumeric, LogCategory, Logger, MintingData, NETWORK, SortAndLimitOptions, StoredHandle, UTxOFunctionName, UTxOFunctions, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { GlideString, HashDataType, SortOptions } from '@valkey/valkey-glide';
+import { promisify } from 'util';
+import { MessageChannel, receiveMessageOnPort, Worker } from 'worker_threads';
+import { inflate } from 'zlib';
+import { DISABLE_HANDLES_SNAPSHOT, NODE_ENV } from '../../config';
+import { handleEraBoundaries, MAX_SETS_PER_PIPE, META_INDEXES, ORDERED_SLOTS } from '../../config/constants';
+import { getHandleNameFromAssetName } from '../../services/ogmios/utils';
+
+// const glideClient = await GlideClient.createClient({
+//       addresses: [{ host: 'https://localhost', port: 6379 }],
+//       useTLS: process.env.REDIS_USE_TLS ? process.env.REDIS_USE_TLS == '[REDACTED_ENV_FILE:ENABLE_DATUM_ENDPOINT]' : [REDACTED_ENV_FILE:ENABLE_DATUM_ENDPOINT]
+// });
+
+// glideClient.zremRangeByScore('', {value: 0, isInclusive: [REDACTED_ENV_FILE:ENABLE_DATUM_ENDPOINT]})
+
+const redisTimings: Record<string, number> = {};
+
+export class RedisHandlesStore implements IApiStore {
+    private static _worker: any;
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && rg -n "getHandleCount" stores/redis/index.ts' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me exited [REDACTED_ENV:SHLVL] in 5[REDACTED_ENV:SHLVL]ms:
+
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && rg -n \"getKeysFromIndex\\(\" stores/redis/index.ts" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+3[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]:    public getKeysFromIndex(index: IndexNames, options?: SortAndLimitOptions): (string | number)[] {
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && sed -n '260,380p' stores/redis/index.ts" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+                this.setMetrics({ indexSchemaVersion: this.getIndexSchemaVersion() });
+            }
+
+            return { id: currentBlockHash, slot: currentSlot };
+        } else {
+            if (NODE_ENV === 'local' || DISABLE_HANDLES_SNAPSHOT == '[REDACTED_ENV_FILE:ENABLE_DATUM_ENDPOINT]') {
+                return null;
+            }
+
+            try {
+                const { id, slot } = await this.tryPopulateFromS3UTxOs(utxoFunctions);
+                return { id, slot };
+            } catch (error: any) {
+                Logger.log(`Error fetching file from online with error: ${error.message}`);
+                return null;
+            }
+        }
+    }
+
+    // #endregion
+Plan update
+Triaging api.timeout in api.handle.me; an earlier remediation exists on this working branch, so I’m validating it matches production store behavior and completing the workflow for this action_id.
+  ✓ Confirm repo and open issue
+  ✓ Sync branch with base
+  → Validate timeout fix scope
+  • Add/adjust tests
+  • Run test suite
+  • Force-add executor logs
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && rg -n \"redisClientCall\\(\" -n stores/redis/index.ts | head -n 20" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+59:            const results = this.redisClientCall('batch', pipelineCommands);
+75:        this.redisClientCall('flushdb');
+76:        this.redisClientCall('close');
+85:        this.redisClientCall('flushdb');
+97:            deleted += Number(this.redisClientCall('del', [`{root}:${indexName}`]) ?? 0);
+99:                const [nextCursor, keys] = (this.redisClientCall('scan', cursor, { match: `{root}:${indexName}:*`, count: [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]00 })) as [string, string[]];
+[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]4:                    this.redisClientCall('del', keys);
+[REDACTED_ENV:SHLVL]72:        this.redisClientCall('flushdb');
+284:        return this.redisClientCall('get', `{root}:${index}:${key}`);
+288:        this.redisClientCall('set', `{root}:${index}:${key}`, value);
+297:            return this.parseOrderedSlot(this.redisClientCall('zrangeWithScores', `{root}:${index}`, { start: 0, end: -[REDACTED_ENV:SHLVL] }));
+30[REDACTED_ENV:SHLVL]:        const keys = this.redisClientCall(command, `{root}:${index}`, options);
+3[REDACTED_ENV:SHLVL]3:        return [...this.redisClientCall(command, `{root}:${index}`, options)].map((v) => (isNumeric(v.toString()) && index != IndexNames.HANDLE ? Number(v.toString()) : v.toString()));
+322:        if (META_INDEXES.includes(index)) this.redisClientCall('sadd', `{root}:${index}`, [key]);
+328:            const count = this.redisClientCall('scard', `{root}:${index}:${key}`) as number;
+329:            if ((RedisHandlesStore._pipeline && count == [REDACTED_ENV:SHLVL]) || !count) this.redisClientCall('srem', `{root}:${index}`, [key]);
+339:        this.redisClientCall('del', [`{root}:${index}:${key}`]);
+349:        return new Set([...(this.redisClientCall(command, `{root}:${index}:${key}`, options) ?? [])].map((v) => v.toString()));
+353:        this.redisClientCall('sadd', `{root}:${index}:${key}`, [value]);
+354:        if (META_INDEXES.includes(index)) this.redisClientCall('sadd', `{root}:${index}`, [key]);
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && sed -n '3[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT],460p' stores/redis/index.test.ts" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in [REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]ms:
+            if (cmd === 'zrangeWithScores') {
+                return [{ score: [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT], element: { toString: () => '[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]|{"id":"some_handle"}' } }];
+            }
+            return [];
+        });
+
+        const fullIndex = store.getIndex(IndexNames.SLOT);
+        const slotValues = store.getValuesFromOrderedSet(IndexNames.SLOT, [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]);
+
+        expect(fullIndex.get([REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT])).toEqual({ id: 'some_handle' });
+        expect(slotValues).toEqual([{ id: 'some_handle' }]);
+        expect(redisSpy).toHaveBeenCalledWith('zrangeWithScores', '{root}:slot', expect.any(Object));
+    });
+
+    it('uses sort with default alpha and set/hash helper methods', () => {
+        const store = new RedisHandlesStore();
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd, key] = args as [string, string];
+            if (cmd === 'sort' && key === '{root}:handle') return ['a', 'b'];
+            if (cmd === 'sort' && key === '{root}:holder') return ['[REDACTED_ENV:SHLVL]', '2'];
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && rg -n \"\\bcount\\(\\)\" stores/redis/index.ts | head -n [REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in [REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]ms:
+4[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]:        metrics.handleCount = this.count();
+420:    public count(): number {
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && sed -n '392,460p' stores/redis/index.ts" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in [REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]ms:
+        this.redisClientCall('zrem', `{root}:${index}`, typeof keyOrOrdinal == 'string' ? keyOrOrdinal : JSON.stringify(keyOrOrdinal));
+        return;
+    }
+
+    public getScoresFromOrderedSet(index: IndexNames, values: string[]): number[] {
+        if (!values.length) return [];
+        const scores = this.redisClientCall('zmscore', `{root}:${index}`, values) as (number | string | null | undefined)[];
+        return scores.map((score) => {
+            if (score == null) return 0;
+            return Number(score.toString());
+        });
+    }
+
+    // #endregion
+
+    // #region METRICS *****************************
+    public getMetrics(): IApiMetrics {
+        const metrics = this.rehydrateObjectFromCache('metrics') || ({} as IApiMetrics);
+        metrics.handleCount = this.count();
+        metrics.holderCount = this.holderCount();
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && rg -n \"\\.count\\(\" -S | head" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in [REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]ms:
+stores/redis/index.test.ts:454:        expect(store.count()).toBe(9);
+stores/redis/index.ts:4[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]:        metrics.handleCount = this.count();
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && cat package.json' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+{
+  "name": "handles-public-api",
+  "version": "[REDACTED_ENV:SHLVL].[REDACTED_ENV:SHLVL]3.0",
+  "description": "A downloadable and containerized decentralized API for Handles",
+  "main": "index.js",
+  "repository": "https://github.com/koralabs/handles-public-api.git",
+  "author": "Papa Goose <papa.goose@koralabs.io>",
+  "license": "Mozilla Public License 2.0",
+  "type": "module",
+  "module": "esnext",
+  "scripts": {
+    "ogmios": "chmod +x ./shell/start_local.sh && ./shell/start_local.sh",
+    "api": "tsx -r tsconfig-paths/register -r dotenv/config express.ts",
+    "readonly": "ENABLE_OGMIOS_SCANNING=[REDACTED_ENV:KORA_EXECUTOR_ENFORCE_REPO_SYNC] USE_LAMBDA_SCANNER=[REDACTED_ENV:KORA_EXECUTOR_ENFORCE_REPO_SYNC] PORT=3[REDACTED_ENV:SHLVL]42 tsx -r tsconfig-paths/register -r dotenv/config express.ts",
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "jest -c jest.config.ts --runInBand",
+    "test:e2e": "chmod +x ./shell/local_valkey.sh && REDIS_HOST=[REDACTED_ENV:SHLVL]27.0.0.[REDACTED_ENV:SHLVL] REDIS_PORT=6380 ./shell/local_valkey.sh && (export NETWORK=preview REDIS_HOST=[REDACTED_ENV:SHLVL]27.0.0.[REDACTED_ENV:SHLVL] REDIS_PORT=6380; jest -c jest.e2e.config.ts --forceExit --runInBand)",
+    "test:critical": "chmod +x ./shell/local_valkey.sh && REDIS_HOST=[REDACTED_ENV:SHLVL]27.0.0.[REDACTED_ENV:SHLVL] REDIS_PORT=6380 ./shell/local_valkey.sh && (export NETWORK=preview REDIS_HOST=[REDACTED_ENV:SHLVL]27.0.0.[REDACTED_ENV:SHLVL] REDIS_PORT=6380; jest -c jest.critical.config.ts --forceExit --runInBand)",
+    "test:container": "bash ./shell/test-container.sh",
+    "build:lambda": "npm run copy-dist-files && (cd dist && npm install) && npm exec -c 'rollup -c rollup.lambda.config.js'",
+file update
+M [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT]3,3 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT]3,3 @@
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+apply_patch(auto_approved=[REDACTED_ENV_FILE:ENABLE_DATUM_ENDPOINT]) exited 0 in 5ms:
+Success. Updated the following files:
+M repositories/handlesRepository.ts
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+
+file update
+M [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me/repositories/tests/handles.repository.search.test.ts
+@@ -65,3 +65,3 @@
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+@@ -83,5 +83,4 @@
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+apply_patch(auto_approved=[REDACTED_ENV_FILE:ENABLE_DATUM_ENDPOINT]) exited 0 in 5ms:
+Success. Updated the following files:
+M repositories/tests/handles.repository.search.test.ts
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+Plan update
+  ✓ Confirm repo and open issue
+  ✓ Sync branch with base
+  ✓ Validate timeout fix scope
+  → Add/adjust tests
+  • Run test suite
+  • Force-add executor logs
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+Plan update
+  ✓ Confirm repo and open issue
+  ✓ Sync branch with base
+  ✓ Validate timeout fix scope
+  ✓ Add/adjust tests
+  → Run test suite
+  • Force-add executor logs
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && npm run test:unit' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.mefile update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+ exited [REDACTED_ENV:SHLVL] in 32.77s:
+PASS lambdas/scanner.test.ts (23.66 s)
+PASS routes/handles.route.test.ts
+PASS repositories/tests/handles.repository.search.test.ts
+PASS routes/health.route.test.ts
+PASS routes/holders.route.test.ts
+PASS routes/datum.route.test.ts
+PASS routes/stats.route.test.ts
+PASS routes/home.route.test.ts
+PASS controllers/scripts.controller.test.ts
+PASS controllers/mint.controller.test.ts
+PASS utils/helpers.pagination.test.ts
+FAIL repositories/tests/handles.repository.branches.test.ts
+  ● HandlesRepository branch tests › covers random and descending search sort branches
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 2
+    Received: 0
+
+      737 |
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && sed -n '700,780p' repositories/tests/handles.repository.branches.test.ts" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+            repo.search(
+                { page: [REDACTED_ENV:SHLVL], handlesPerPage: [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT], sort: 'asc' } as any,
+                { holder_address: holder } as any,
+                [REDACTED_ENV_FILE:ENABLE_DATUM_ENDPOINT]
+            )
+        ).toEqual({ searchTotal: 0, handles: [] });
+    });
+
+    it('handles length-range search with sparse indexed length buckets', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        store.getValuesFromIndexedSet.mockImplementation((index: IndexNames, key: string | number) => {
+            if (index === IndexNames.LENGTH && key === [REDACTED_ENV:SHLVL]) return undefined;
+            if (index === IndexNames.LENGTH && key === 2) return new Set(['alpha']);
+            if (index === IndexNames.PERSONALIZED) return new Set(['alpha']);
+            if (index === IndexNames.OG) return new Set(['alpha']);
+            return undefined;
+        });
+
+        expect(
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && sed -n '[REDACTED_ENV:SHLVL],80p' repositories/tests/handles.repository.branches.test.ts" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in [REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]ms:
+import * as common from '@koralabs/kora-labs-common';
+import { AssetNameLabel, decodeAddress, EMPTY, IndexNames, LockedLambdaReason, Logger } from '@koralabs/kora-labs-common';
+import * as crypto from 'crypto';
+import * as config from '../../config';
+import * as ogmiosUtils from '../../services/ogmios/utils';
+import * as ipfs from '../../utils/ipfs';
+import { HandlesRepository, RewoundHandle, UpdatedOwnerHandle } from '../handlesRepository';
+
+const policy = 'f0ff48bbb7bbe9d59a40f[REDACTED_ENV:SHLVL]ce90e9e9d0ff[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]02ec48f232b49ca0fb9a';
+const address = 'addr_test[REDACTED_ENV:SHLVL]qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hjynmsy2cxpc04a6dkqxcsr29qfl7v9cmrd5mm89qfmc97q';
+const holder = 'stake_test[REDACTED_ENV:SHLVL]urc63cmezfacz9vrqu867axmqrvgp4zsyllxzud3k6danjsn0dn70';
+
+const buildStoreMock = () => {
+    const sets = new Map<string, Set<string>>();
+    const setKey = (index: IndexNames, key: string | number) => `${index}:${key}`;
+
+    return {
+        initialize: jest.fn().mockResolvedValue(undefined),
+        destroy: jest.fn(),
+        rollBackToGenesis: jest.fn(),
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && rg -n "getHandleCount" repositories/tests/handles.repository.branches.test.ts' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in [REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]ms:
+22:        getHandleCount: jest.fn().mockReturnValue(0),
+732:        store.getHandleCount.mockReturnValue(2);
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+file update
+M [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me/repositories/tests/handles.repository.branches.test.ts
+@@ -2[REDACTED_ENV:SHLVL],3 +2[REDACTED_ENV:SHLVL],3 @@
+         getMetrics: jest.fn().mockReturnValue({}),
+-        getHandleCount: jest.fn().mockReturnValue(0),
++        count: jest.fn().mockReturnValue(0),
+         setMetrics: jest.fn(),
+@@ -73[REDACTED_ENV:SHLVL],3 +73[REDACTED_ENV:SHLVL],3 @@
+         store.getKeysFromIndex.mockReturnValue(['beta', 'alpha']);
+-        store.getHandleCount.mockReturnValue(2);
++        store.count.mockReturnValue(2);
+         jest.spyOn(Math, 'random').mockReturnValue(0.2);
+apply_patch(auto_approved=[REDACTED_ENV_FILE:ENABLE_DATUM_ENDPOINT]) exited 0 in 7ms:
+Success. Updated the following files:
+M repositories/tests/handles.repository.branches.test.ts
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.branches.test.ts b/repositories/tests/handles.repository.branches.test.ts
+index 4e69ae49f3fa[REDACTED_ENV:SHLVL]682e7379ed9df2aa66545[REDACTED_ENV:SHLVL]bb[REDACTED_ENV:SHLVL]27..629b5ebdf8d[REDACTED_ENV:SHLVL]a292ccd5ac907940f8e0da3[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]327
+--- a/repositories/tests/handles.repository.branches.test.ts
++++ b/repositories/tests/handles.repository.branches.test.ts
+@@ -[REDACTED_ENV:SHLVL]9,7 +[REDACTED_ENV:SHLVL]9,7 @@
+         destroy: jest.fn(),
+         rollBackToGenesis: jest.fn(),
+         getMetrics: jest.fn().mockReturnValue({}),
+-        getHandleCount: jest.fn().mockReturnValue(0),
++        count: jest.fn().mockReturnValue(0),
+         setMetrics: jest.fn(),
+         getHashFromIndex: jest.fn(),
+         setHashOnIndex: jest.fn(),
+@@ -729,7 +729,7 @@
+         const store = buildStoreMock();
+         const repo = new HandlesRepository(store);
+         store.getKeysFromIndex.mockReturnValue(['beta', 'alpha']);
+-        store.getHandleCount.mockReturnValue(2);
++        store.count.mockReturnValue(2);
+         jest.spyOn(Math, 'random').mockReturnValue(0.2);
+ 
+         const randomResult = repo.search({ page: [REDACTED_ENV:SHLVL], handlesPerPage: 2, sort: 'random' } as any);
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.branches.test.ts b/repositories/tests/handles.repository.branches.test.ts
+index 4e69ae49f3fa[REDACTED_ENV:SHLVL]682e7379ed9df2aa66545[REDACTED_ENV:SHLVL]bb[REDACTED_ENV:SHLVL]27..629b5ebdf8d[REDACTED_ENV:SHLVL]a292ccd5ac907940f8e0da3[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]327
+--- a/repositories/tests/handles.repository.branches.test.ts
++++ b/repositories/tests/handles.repository.branches.test.ts
+@@ -[REDACTED_ENV:SHLVL]9,7 +[REDACTED_ENV:SHLVL]9,7 @@
+         destroy: jest.fn(),
+         rollBackToGenesis: jest.fn(),
+         getMetrics: jest.fn().mockReturnValue({}),
+-        getHandleCount: jest.fn().mockReturnValue(0),
++        count: jest.fn().mockReturnValue(0),
+         setMetrics: jest.fn(),
+         getHashFromIndex: jest.fn(),
+         setHashOnIndex: jest.fn(),
+@@ -729,7 +729,7 @@
+         const store = buildStoreMock();
+         const repo = new HandlesRepository(store);
+         store.getKeysFromIndex.mockReturnValue(['beta', 'alpha']);
+-        store.getHandleCount.mockReturnValue(2);
++        store.count.mockReturnValue(2);
+         jest.spyOn(Math, 'random').mockReturnValue(0.2);
+ 
+         const randomResult = repo.search({ page: [REDACTED_ENV:SHLVL], handlesPerPage: 2, sort: 'random' } as any);
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && npm run test:unit' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.mefile update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.branches.test.ts b/repositories/tests/handles.repository.branches.test.ts
+index 4e69ae49f3fa[REDACTED_ENV:SHLVL]682e7379ed9df2aa66545[REDACTED_ENV:SHLVL]bb[REDACTED_ENV:SHLVL]27..629b5ebdf8d[REDACTED_ENV:SHLVL]a292ccd5ac907940f8e0da3[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]327
+--- a/repositories/tests/handles.repository.branches.test.ts
++++ b/repositories/tests/handles.repository.branches.test.ts
+@@ -[REDACTED_ENV:SHLVL]9,7 +[REDACTED_ENV:SHLVL]9,7 @@
+         destroy: jest.fn(),
+         rollBackToGenesis: jest.fn(),
+         getMetrics: jest.fn().mockReturnValue({}),
+-        getHandleCount: jest.fn().mockReturnValue(0),
++        count: jest.fn().mockReturnValue(0),
+         setMetrics: jest.fn(),
+         getHashFromIndex: jest.fn(),
+         setHashOnIndex: jest.fn(),
+@@ -729,7 +729,7 @@
+         const store = buildStoreMock();
+         const repo = new HandlesRepository(store);
+         store.getKeysFromIndex.mockReturnValue(['beta', 'alpha']);
+-        store.getHandleCount.mockReturnValue(2);
++        store.count.mockReturnValue(2);
+         jest.spyOn(Math, 'random').mockReturnValue(0.2);
+ 
+         const randomResult = repo.search({ page: [REDACTED_ENV:SHLVL], handlesPerPage: 2, sort: 'random' } as any);
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+ succeeded in 30.94s:
+PASS repositories/tests/handles.repository.branches.test.ts
+PASS lambdas/scanner.test.ts (22.028 s)
+PASS routes/handles.route.test.ts
+PASS routes/health.route.test.ts
+PASS routes/holders.route.test.ts
+PASS routes/datum.route.test.ts
+PASS routes/home.route.test.ts
+PASS routes/stats.route.test.ts
+PASS controllers/scripts.controller.test.ts
+PASS controllers/mint.controller.test.ts
+PASS utils/helpers.pagination.test.ts
+PASS ./app.test.ts
+PASS lambdas/snapshot.unit.test.ts
+PASS stores/redis/index.test.ts
+PASS controllers/rootHandles.controller.test.ts
+PASS controllers/health.controller.test.ts
+PASS services/ogmios/tests/service.lifecycle.test.ts
+PASS services/ogmios/tests/websocket.client.test.ts
+PASS services/ogmios/tests/processBlock.unit.test.ts
+PASS repositories/tests/handles.repository.search.test.ts
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.branches.test.ts b/repositories/tests/handles.repository.branches.test.ts
+index 4e69ae49f3fa[REDACTED_ENV:SHLVL]682e7379ed9df2aa66545[REDACTED_ENV:SHLVL]bb[REDACTED_ENV:SHLVL]27..629b5ebdf8d[REDACTED_ENV:SHLVL]a292ccd5ac907940f8e0da3[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]327
+--- a/repositories/tests/handles.repository.branches.test.ts
++++ b/repositories/tests/handles.repository.branches.test.ts
+@@ -[REDACTED_ENV:SHLVL]9,7 +[REDACTED_ENV:SHLVL]9,7 @@
+         destroy: jest.fn(),
+         rollBackToGenesis: jest.fn(),
+         getMetrics: jest.fn().mockReturnValue({}),
+-        getHandleCount: jest.fn().mockReturnValue(0),
++        count: jest.fn().mockReturnValue(0),
+         setMetrics: jest.fn(),
+         getHashFromIndex: jest.fn(),
+         setHashOnIndex: jest.fn(),
+@@ -729,7 +729,7 @@
+         const store = buildStoreMock();
+         const repo = new HandlesRepository(store);
+         store.getKeysFromIndex.mockReturnValue(['beta', 'alpha']);
+-        store.getHandleCount.mockReturnValue(2);
++        store.count.mockReturnValue(2);
+         jest.spyOn(Math, 'random').mockReturnValue(0.2);
+ 
+         const randomResult = repo.search({ page: [REDACTED_ENV:SHLVL], handlesPerPage: 2, sort: 'random' } as any);
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && npm run test:e2e' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 28.02s:
+PASS repositories/tests/holders.e2e.test.ts (24.888 s)
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-03-03T06:29:54.249Z" }
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-03-03T06:30:[REDACTED_ENV:SHLVL]7.742Z" }
+PASS lambdas/scanner.e2e.test.ts
+PASS services/ogmios/tests/processBlock.e2e.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-03-03T06:30:20.[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT][REDACTED_ENV:SHLVL]Z" }
+PASS repositories/tests/handles.repository.e2e.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-03-03T06:30:20.856Z" }
+PASS repositories/tests/repository.lifecycle.e2e.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-03-03T06:30:2[REDACTED_ENV:SHLVL].246Z" }
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-03-03T06:30:2[REDACTED_ENV:SHLVL].676Z" }
+PASS lambdas/snapshot.e2e.test.ts
+{"network": "PREVIEW", "application": "TEST", "category": "[32mINFO[0m", "message": "[34m[LOCAL][0m Connected to Valkey", "timestamp": "2026-03-03T06:30:2[REDACTED_ENV:SHLVL].804Z" }
+PASS repositories/tests/og.e2e.test.ts
+
+Test Suites: 7 passed, 7 total
+Tests:       6[REDACTED_ENV:SHLVL] passed, 6[REDACTED_ENV:SHLVL] total
+Snapshots:   0 total
+Time:        29.46 s
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.branches.test.ts b/repositories/tests/handles.repository.branches.test.ts
+index 4e69ae49f3fa[REDACTED_ENV:SHLVL]682e7379ed9df2aa66545[REDACTED_ENV:SHLVL]bb[REDACTED_ENV:SHLVL]27..629b5ebdf8d[REDACTED_ENV:SHLVL]a292ccd5ac907940f8e0da3[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]327
+--- a/repositories/tests/handles.repository.branches.test.ts
++++ b/repositories/tests/handles.repository.branches.test.ts
+@@ -[REDACTED_ENV:SHLVL]9,7 +[REDACTED_ENV:SHLVL]9,7 @@
+         destroy: jest.fn(),
+         rollBackToGenesis: jest.fn(),
+         getMetrics: jest.fn().mockReturnValue({}),
+-        getHandleCount: jest.fn().mockReturnValue(0),
++        count: jest.fn().mockReturnValue(0),
+         setMetrics: jest.fn(),
+         getHashFromIndex: jest.fn(),
+         setHashOnIndex: jest.fn(),
+@@ -729,7 +729,7 @@
+         const store = buildStoreMock();
+         const repo = new HandlesRepository(store);
+         store.getKeysFromIndex.mockReturnValue(['beta', 'alpha']);
+-        store.getHandleCount.mockReturnValue(2);
++        store.count.mockReturnValue(2);
+         jest.spyOn(Math, 'random').mockReturnValue(0.2);
+ 
+         const randomResult = repo.search({ page: [REDACTED_ENV:SHLVL], handlesPerPage: 2, sort: 'random' } as any);
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+Plan update
+  ✓ Confirm repo and open issue
+  ✓ Sync branch with base
+  ✓ Validate timeout fix scope
+  ✓ Add/adjust tests
+  ✓ Run test suite
+  → Force-add executor logs
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.branches.test.ts b/repositories/tests/handles.repository.branches.test.ts
+index 4e69ae49f3fa[REDACTED_ENV:SHLVL]682e7379ed9df2aa66545[REDACTED_ENV:SHLVL]bb[REDACTED_ENV:SHLVL]27..629b5ebdf8d[REDACTED_ENV:SHLVL]a292ccd5ac907940f8e0da3[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]327
+--- a/repositories/tests/handles.repository.branches.test.ts
++++ b/repositories/tests/handles.repository.branches.test.ts
+@@ -[REDACTED_ENV:SHLVL]9,7 +[REDACTED_ENV:SHLVL]9,7 @@
+         destroy: jest.fn(),
+         rollBackToGenesis: jest.fn(),
+         getMetrics: jest.fn().mockReturnValue({}),
+-        getHandleCount: jest.fn().mockReturnValue(0),
++        count: jest.fn().mockReturnValue(0),
+         setMetrics: jest.fn(),
+         getHashFromIndex: jest.fn(),
+         setHashOnIndex: jest.fn(),
+@@ -729,7 +729,7 @@
+         const store = buildStoreMock();
+         const repo = new HandlesRepository(store);
+         store.getKeysFromIndex.mockReturnValue(['beta', 'alpha']);
+-        store.getHandleCount.mockReturnValue(2);
++        store.count.mockReturnValue(2);
+         jest.spyOn(Math, 'random').mockReturnValue(0.2);
+ 
+         const randomResult = repo.search({ page: [REDACTED_ENV:SHLVL], handlesPerPage: 2, sort: 'random' } as any);
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && git status --porcelain=v[REDACTED_ENV:SHLVL] && git add -A && git add -f .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stdout.log && git status --porcelain=v[REDACTED_ENV:SHLVL] && git diff --cached --name-only' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+ M repositories/handlesRepository.ts
+ M repositories/tests/handles.repository.branches.test.ts
+ M repositories/tests/handles.repository.search.test.ts
+A  .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log
+A  .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stdout.log
+M  repositories/handlesRepository.ts
+M  repositories/tests/handles.repository.branches.test.ts
+M  repositories/tests/handles.repository.search.test.ts
+.kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log
+.kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stdout.log
+repositories/handlesRepository.ts
+repositories/tests/handles.repository.branches.test.ts
+repositories/tests/handles.repository.search.test.ts
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.branches.test.ts b/repositories/tests/handles.repository.branches.test.ts
+index 4e69ae49f3fa[REDACTED_ENV:SHLVL]682e7379ed9df2aa66545[REDACTED_ENV:SHLVL]bb[REDACTED_ENV:SHLVL]27..629b5ebdf8d[REDACTED_ENV:SHLVL]a292ccd5ac907940f8e0da3[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]327
+--- a/repositories/tests/handles.repository.branches.test.ts
++++ b/repositories/tests/handles.repository.branches.test.ts
+@@ -[REDACTED_ENV:SHLVL]9,7 +[REDACTED_ENV:SHLVL]9,7 @@
+         destroy: jest.fn(),
+         rollBackToGenesis: jest.fn(),
+         getMetrics: jest.fn().mockReturnValue({}),
+-        getHandleCount: jest.fn().mockReturnValue(0),
++        count: jest.fn().mockReturnValue(0),
+         setMetrics: jest.fn(),
+         getHashFromIndex: jest.fn(),
+         setHashOnIndex: jest.fn(),
+@@ -729,7 +729,7 @@
+         const store = buildStoreMock();
+         const repo = new HandlesRepository(store);
+         store.getKeysFromIndex.mockReturnValue(['beta', 'alpha']);
+-        store.getHandleCount.mockReturnValue(2);
++        store.count.mockReturnValue(2);
+         jest.spyOn(Math, 'random').mockReturnValue(0.2);
+ 
+         const randomResult = repo.search({ page: [REDACTED_ENV:SHLVL], handlesPerPage: 2, sort: 'random' } as any);
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+Plan update
+  ✓ Confirm repo and open issue
+  ✓ Sync branch with base
+  ✓ Validate timeout fix scope
+  ✓ Add/adjust tests
+  ✓ Run test suite
+  ✓ Force-add executor logs
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.branches.test.ts b/repositories/tests/handles.repository.branches.test.ts
+index 4e69ae49f3fa[REDACTED_ENV:SHLVL]682e7379ed9df2aa66545[REDACTED_ENV:SHLVL]bb[REDACTED_ENV:SHLVL]27..629b5ebdf8d[REDACTED_ENV:SHLVL]a292ccd5ac907940f8e0da3[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]327
+--- a/repositories/tests/handles.repository.branches.test.ts
++++ b/repositories/tests/handles.repository.branches.test.ts
+@@ -[REDACTED_ENV:SHLVL]9,7 +[REDACTED_ENV:SHLVL]9,7 @@
+         destroy: jest.fn(),
+         rollBackToGenesis: jest.fn(),
+         getMetrics: jest.fn().mockReturnValue({}),
+-        getHandleCount: jest.fn().mockReturnValue(0),
++        count: jest.fn().mockReturnValue(0),
+         setMetrics: jest.fn(),
+         getHashFromIndex: jest.fn(),
+         setHashOnIndex: jest.fn(),
+@@ -729,7 +729,7 @@
+         const store = buildStoreMock();
+         const repo = new HandlesRepository(store);
+         store.getKeysFromIndex.mockReturnValue(['beta', 'alpha']);
+-        store.getHandleCount.mockReturnValue(2);
++        store.count.mockReturnValue(2);
+         jest.spyOn(Math, 'random').mockReturnValue(0.2);
+ 
+         const randomResult = repo.search({ page: [REDACTED_ENV:SHLVL], handlesPerPage: 2, sort: 'random' } as any);
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+exec
+[REDACTED_ENV:SHELL] -lc "cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && nl -ba repositories/handlesRepository.ts | sed -n '[REDACTED_ENV:SHLVL]20,200p' | head -n 80 && echo '---' && nl -ba repositories/tests/handles.repository.search.test.ts | sed -n '[REDACTED_ENV:SHLVL],[REDACTED_ENV:SHLVL]40p' && echo '---' && nl -ba repositories/tests/handles.repository.branches.test.ts | sed -n '[REDACTED_ENV:SHLVL],60p' && echo '---' && nl -ba repositories/tests/handles.repository.branches.test.ts | sed -n '7[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT],760p'" in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+sed: couldn't flush stdout: Broken pipe
+   [REDACTED_ENV:SHLVL]20	        let n
+   [REDACTED_ENV:SHLVL]2[REDACTED_ENV:SHLVL]	        while (last > 0)
+   [REDACTED_ENV:SHLVL]22	        { 
+   [REDACTED_ENV:SHLVL]23	            n = 0 | Math.random() * last;
+   [REDACTED_ENV:SHLVL]24	            const q = t[n]
+   [REDACTED_ENV:SHLVL][REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]	            const j = --last;
+   [REDACTED_ENV:SHLVL]26	            t[n] = t[j]
+   [REDACTED_ENV:SHLVL]27	            t[j] = q
+   [REDACTED_ENV:SHLVL]28	        }
+   [REDACTED_ENV:SHLVL]29	    }
+   [REDACTED_ENV:SHLVL]30	
+   [REDACTED_ENV:SHLVL]3[REDACTED_ENV:SHLVL]	    public search(pagination?: HandlePaginationModel, searchModel?: HandleSearchModel, namesOnly = [REDACTED_ENV:KORA_EXECUTOR_ENFORCE_REPO_SYNC]): { searchTotal: number, handles: (StoredHandle | string)[] } {
+   [REDACTED_ENV:SHLVL]32	        const hasSearchFilters = Boolean(
+   [REDACTED_ENV:SHLVL]33	            searchModel?.characters ||
+   [REDACTED_ENV:SHLVL]34	                searchModel?.length ||
+   [REDACTED_ENV:SHLVL]35	                searchModel?.rarity ||
+   [REDACTED_ENV:SHLVL]36	                searchModel?.numeric_modifiers ||
+   [REDACTED_ENV:SHLVL]37	                searchModel?.holder_address ||
+   [REDACTED_ENV:SHLVL]38	                searchModel?.og ||
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.branches.test.ts b/repositories/tests/handles.repository.branches.test.ts
+index 4e69ae49f3fa[REDACTED_ENV:SHLVL]682e7379ed9df2aa66545[REDACTED_ENV:SHLVL]bb[REDACTED_ENV:SHLVL]27..629b5ebdf8d[REDACTED_ENV:SHLVL]a292ccd5ac907940f8e0da3[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]327
+--- a/repositories/tests/handles.repository.branches.test.ts
++++ b/repositories/tests/handles.repository.branches.test.ts
+@@ -[REDACTED_ENV:SHLVL]9,7 +[REDACTED_ENV:SHLVL]9,7 @@
+         destroy: jest.fn(),
+         rollBackToGenesis: jest.fn(),
+         getMetrics: jest.fn().mockReturnValue({}),
+-        getHandleCount: jest.fn().mockReturnValue(0),
++        count: jest.fn().mockReturnValue(0),
+         setMetrics: jest.fn(),
+         getHashFromIndex: jest.fn(),
+         setHashOnIndex: jest.fn(),
+@@ -729,7 +729,7 @@
+         const store = buildStoreMock();
+         const repo = new HandlesRepository(store);
+         store.getKeysFromIndex.mockReturnValue(['beta', 'alpha']);
+-        store.getHandleCount.mockReturnValue(2);
++        store.count.mockReturnValue(2);
+         jest.spyOn(Math, 'random').mockReturnValue(0.2);
+ 
+         const randomResult = repo.search({ page: [REDACTED_ENV:SHLVL], handlesPerPage: 2, sort: 'random' } as any);
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && git status --porcelain=v[REDACTED_ENV:SHLVL] && git status' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in 5[REDACTED_ENV:SHLVL]ms:
+AM .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log
+A  .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stdout.log
+M  repositories/handlesRepository.ts
+M  repositories/tests/handles.repository.branches.test.ts
+M  repositories/tests/handles.repository.search.test.ts
+On branch kora/alerts/672087adbc[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]5540635d00b0
+Your branch is up to date with 'origin/kora/alerts/672087adbc[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]5540635d00b0'.
+
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+	new file:   .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log
+	new file:   .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stdout.log
+	modified:   repositories/handlesRepository.ts
+	modified:   repositories/tests/handles.repository.branches.test.ts
+	modified:   repositories/tests/handles.repository.search.test.ts
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.branches.test.ts b/repositories/tests/handles.repository.branches.test.ts
+index 4e69ae49f3fa[REDACTED_ENV:SHLVL]682e7379ed9df2aa66545[REDACTED_ENV:SHLVL]bb[REDACTED_ENV:SHLVL]27..629b5ebdf8d[REDACTED_ENV:SHLVL]a292ccd5ac907940f8e0da3[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]327
+--- a/repositories/tests/handles.repository.branches.test.ts
++++ b/repositories/tests/handles.repository.branches.test.ts
+@@ -[REDACTED_ENV:SHLVL]9,7 +[REDACTED_ENV:SHLVL]9,7 @@
+         destroy: jest.fn(),
+         rollBackToGenesis: jest.fn(),
+         getMetrics: jest.fn().mockReturnValue({}),
+-        getHandleCount: jest.fn().mockReturnValue(0),
++        count: jest.fn().mockReturnValue(0),
+         setMetrics: jest.fn(),
+         getHashFromIndex: jest.fn(),
+         setHashOnIndex: jest.fn(),
+@@ -729,7 +729,7 @@
+         const store = buildStoreMock();
+         const repo = new HandlesRepository(store);
+         store.getKeysFromIndex.mockReturnValue(['beta', 'alpha']);
+-        store.getHandleCount.mockReturnValue(2);
++        store.count.mockReturnValue(2);
+         jest.spyOn(Math, 'random').mockReturnValue(0.2);
+ 
+         const randomResult = repo.search({ page: [REDACTED_ENV:SHLVL], handlesPerPage: 2, sort: 'random' } as any);
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+exec
+[REDACTED_ENV:SHELL] -lc 'cd [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me && git add -f .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log && git status --porcelain=v[REDACTED_ENV:SHLVL]' in [REDACTED_ENV:HOME]/[REDACTED_ENV:PYTHONPATH]/koralabs/api.handle.me succeeded in [REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]ms:
+A  .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log
+A  .kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stdout.log
+M  repositories/handlesRepository.ts
+M  repositories/tests/handles.repository.branches.test.ts
+M  repositories/tests/handles.repository.search.test.ts
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.branches.test.ts b/repositories/tests/handles.repository.branches.test.ts
+index 4e69ae49f3fa[REDACTED_ENV:SHLVL]682e7379ed9df2aa66545[REDACTED_ENV:SHLVL]bb[REDACTED_ENV:SHLVL]27..629b5ebdf8d[REDACTED_ENV:SHLVL]a292ccd5ac907940f8e0da3[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]327
+--- a/repositories/tests/handles.repository.branches.test.ts
++++ b/repositories/tests/handles.repository.branches.test.ts
+@@ -[REDACTED_ENV:SHLVL]9,7 +[REDACTED_ENV:SHLVL]9,7 @@
+         destroy: jest.fn(),
+         rollBackToGenesis: jest.fn(),
+         getMetrics: jest.fn().mockReturnValue({}),
+-        getHandleCount: jest.fn().mockReturnValue(0),
++        count: jest.fn().mockReturnValue(0),
+         setMetrics: jest.fn(),
+         getHashFromIndex: jest.fn(),
+         setHashOnIndex: jest.fn(),
+@@ -729,7 +729,7 @@
+         const store = buildStoreMock();
+         const repo = new HandlesRepository(store);
+         store.getKeysFromIndex.mockReturnValue(['beta', 'alpha']);
+-        store.getHandleCount.mockReturnValue(2);
++        store.count.mockReturnValue(2);
+         jest.spyOn(Math, 'random').mockReturnValue(0.2);
+ 
+         const randomResult = repo.search({ page: [REDACTED_ENV:SHLVL], handlesPerPage: 2, sort: 'random' } as any);
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+codex
+- Owning repo confirmed as `koralabs/api.handle.me`; created tracking issue `koralabs/api.handle.me#[REDACTED_ENV:SHLVL]39`.
+- Keeps unfiltered paginated `/handles` searches from enumerating the full HANDLE set (timeout risk) and uses `store.count()` as the fallback for `searchTotal` when metrics are missing: `repositories/handlesRepository.ts:[REDACTED_ENV:SHLVL]3[REDACTED_ENV:SHLVL]`.
+- Updated unit tests/mocks to match the `count()` fallback: `repositories/tests/handles.repository.search.test.ts:[REDACTED_ENV:SHLVL]`, `repositories/tests/handles.repository.branches.test.ts:[REDACTED_ENV:SHLVL]3`.
+- Force-added this run’s executor logs (per job contract): `.kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log:[REDACTED_ENV:SHLVL]`, `.kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stdout.log:[REDACTED_ENV:SHLVL]`.
+- Verified: `npm run test:unit`, `npm run test:e2e`.
+file update:
+diff --git a/repositories/handlesRepository.ts b/repositories/handlesRepository.ts
+index [REDACTED_ENV:KORA_AMBIENT_RESPONSE_SIZE_PERCENT]5d2ecdbe37e6804096[REDACTED_ENV:SHLVL]ef8435[REDACTED_ENV:SHLVL]72b26ed0af[REDACTED_ENV:SHLVL]a..7e0c[REDACTED_ENV:SHLVL]dacf3f0b5d5cc23df6ab80542883d29c[REDACTED_ENV:SHLVL]23
+--- a/repositories/handlesRepository.ts
++++ b/repositories/handlesRepository.ts
+@@ -[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 +[REDACTED_ENV:KORA_AMBIENT_GIF_RESPONSE_RATE_PERCENT][REDACTED_ENV:SHLVL],7 @@
+             const handleCountFromMetrics = Number(metrics?.handleCount);
+             const searchTotal = Number.isFinite(handleCountFromMetrics)
+                 ? handleCountFromMetrics
+-                : Number((this.store as any).getHandleCount?.() ?? 0);
++                : Number((this.store as any).count?.() ?? 0);
+ 
+             const startIndex = ((pagination?.page ?? [REDACTED_ENV:SHLVL]) - [REDACTED_ENV:SHLVL]) * (pagination?.handlesPerPage ?? [REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]0);
+             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
+diff --git a/repositories/tests/handles.repository.branches.test.ts b/repositories/tests/handles.repository.branches.test.ts
+index 4e69ae49f3fa[REDACTED_ENV:SHLVL]682e7379ed9df2aa66545[REDACTED_ENV:SHLVL]bb[REDACTED_ENV:SHLVL]27..629b5ebdf8d[REDACTED_ENV:SHLVL]a292ccd5ac907940f8e0da3[REDACTED_ENV:KORA_AMBIENT_REACTION_EMOJI_RATE_PERCENT]327
+--- a/repositories/tests/handles.repository.branches.test.ts
++++ b/repositories/tests/handles.repository.branches.test.ts
+@@ -[REDACTED_ENV:SHLVL]9,7 +[REDACTED_ENV:SHLVL]9,7 @@
+         destroy: jest.fn(),
+         rollBackToGenesis: jest.fn(),
+         getMetrics: jest.fn().mockReturnValue({}),
+-        getHandleCount: jest.fn().mockReturnValue(0),
++        count: jest.fn().mockReturnValue(0),
+         setMetrics: jest.fn(),
+         getHashFromIndex: jest.fn(),
+         setHashOnIndex: jest.fn(),
+@@ -729,7 +729,7 @@
+         const store = buildStoreMock();
+         const repo = new HandlesRepository(store);
+         store.getKeysFromIndex.mockReturnValue(['beta', 'alpha']);
+-        store.getHandleCount.mockReturnValue(2);
++        store.count.mockReturnValue(2);
+         jest.spyOn(Math, 'random').mockReturnValue(0.2);
+ 
+         const randomResult = repo.search({ page: [REDACTED_ENV:SHLVL], handlesPerPage: 2, sort: 'random' } as any);
+diff --git a/repositories/tests/handles.repository.search.test.ts b/repositories/tests/handles.repository.search.test.ts
+index defedb673[REDACTED_ENV:SHLVL]e877533f5c847de957703d6f073360..22942807ec664ad0d95fc5c6d2607a[REDACTED_ENV:SHLVL]cfac5ca4[REDACTED_ENV:SHLVL]
+--- a/repositories/tests/handles.repository.search.test.ts
++++ b/repositories/tests/handles.repository.search.test.ts
+@@ -63,7 +63,7 @@
+         const pipelineResults: any[] = [];
+         const store: any = {
+             getMetrics: jest.fn().mockReturnValue({}),
+-            getHandleCount: jest.fn().mockReturnValue(42),
++            count: jest.fn().mockReturnValue(42),
+             getKeysFromIndex: jest.fn((index: IndexNames, options?: any) => {
+                 if (index !== IndexNames.HANDLE) throw new Error('unexpected index');
+                 if (!options) throw new Error('should not enumerate full HANDLE set');
+@@ -8[REDACTED_ENV:SHLVL],7 +8[REDACTED_ENV:SHLVL],6 @@
+ 
+         expect(result.searchTotal).toBe(42);
+         expect(result.handles).toEqual([]);
+-        expect(store.getHandleCount).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
++        expect(store.count).toHaveBeenCalledTimes([REDACTED_ENV:SHLVL]);
+     });
+ });
+-
+
+tokens used
+[REDACTED_ENV:SHLVL]38,83[REDACTED_ENV:SHLVL]

@@ -19,7 +19,7 @@ const buildStoreMock = () => {
         destroy: jest.fn(),
         rollBackToGenesis: jest.fn(),
         getMetrics: jest.fn().mockReturnValue({}),
-        getHandleCount: jest.fn().mockReturnValue(0),
+        count: jest.fn().mockReturnValue(0),
         setMetrics: jest.fn(),
         getHashFromIndex: jest.fn(),
         setHashOnIndex: jest.fn(),
@@ -729,7 +729,7 @@ describe('HandlesRepository branch tests', () => {
         const store = buildStoreMock();
         const repo = new HandlesRepository(store);
         store.getKeysFromIndex.mockReturnValue(['beta', 'alpha']);
-        store.getHandleCount.mockReturnValue(2);
+        store.count.mockReturnValue(2);
         jest.spyOn(Math, 'random').mockReturnValue(0.2);
 
         const randomResult = repo.search({ page: 1, handlesPerPage: 2, sort: 'random' } as any);

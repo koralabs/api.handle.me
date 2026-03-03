@@ -151,7 +151,7 @@ export class HandlesRepository {
             const handleCountFromMetrics = Number(metrics?.handleCount);
             const searchTotal = Number.isFinite(handleCountFromMetrics)
                 ? handleCountFromMetrics
-                : Number((this.store as any).getHandleCount?.() ?? 0);
+                : Number((this.store as any).count?.() ?? 0);
 
             const startIndex = ((pagination?.page ?? 1) - 1) * (pagination?.handlesPerPage ?? 100);
             const sortOrder = pagination?.sort === 'desc' ? 'desc' : 'asc';
