@@ -60,7 +60,7 @@ export class HandlesRepository {
 
     public isCaughtUp(): boolean {
         const { lastSlot = 1, currentSlot = 0, currentBlockHash = '0', tipBlockHash = '1' } = this.store.getMetrics();
-        return lastSlot - currentSlot < 120 && currentBlockHash == tipBlockHash;
+        return lastSlot - currentSlot < 240 && currentBlockHash == tipBlockHash;
     }
     
     public getHandle(key: string): StoredHandle | null {
