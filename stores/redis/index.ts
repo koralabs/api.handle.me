@@ -325,6 +325,10 @@ export class RedisHandlesStore implements IApiStore {
 
     private removeKeyFromMetaIndex(index: IndexNames, key: string | number) {
         if (META_INDEXES.includes(index)) {
+            if (index === IndexNames.HANDLE) {
+                this.redisClientCall('srem', `{root}:${index}`, [key]);
+                return;
+            }
             const count = this.redisClientCall('scard', `{root}:${index}:${key}`) as number;
             if ((RedisHandlesStore._pipeline && count == 1) || !count) this.redisClientCall('srem', `{root}:${index}`, [key]);
         }
