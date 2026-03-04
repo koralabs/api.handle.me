@@ -88,7 +88,7 @@ class PoliciesController {
                 const decodedPolicies = await decodeCborToJson({
                     cborString: policiesDatum,
                     schema: {},
-                    defaultKeyType: req.query.default_key_type as DefaultTextFormat
+                    defaultKeyType: 'hex' as DefaultTextFormat
                 });
                 res.status(handleRepo.currentHttpStatus()).json(normalizePolicies(decodedPolicies));
                 return;

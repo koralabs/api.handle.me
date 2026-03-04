@@ -1038,20 +1038,11 @@ paths:
       summary: Get active Handle policy settings
       description: |
         Returns normalized JSON policy settings from the `handle_policies` datum.
+        Policy IDs are always emitted as hex strings.
         Each policy maps to:
         - `first_minting_slot`: first slot where minting is active
         - `last_minting_slot`: optional last minting slot (`null` when open-ended)
         - `sunset_slot`: optional sunset/deprecation slot (`null` when unset)
-      parameters:
-      - name: default_key_type
-        in: query
-        description: Default key encoding when converting CBOR maps to JSON
-        required: false
-        schema:
-          type: string
-          enum:
-          - utf8
-          - hex
       responses:
         '200':
           description: Successful and up to date
