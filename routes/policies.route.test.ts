@@ -53,12 +53,12 @@ describe('Policies Routes Test', () => {
 
             expect(response.status).toEqual(200);
             expect(response.body).toEqual({
-                '0xf0ff': {
+                f0ff: {
                     first_minting_slot: 47931333,
                     last_minting_slot: null,
                     sunset_slot: null
                 },
-                '0x6c32': {
+                '6c32': {
                     first_minting_slot: 151974982,
                     last_minting_slot: 170000000,
                     sunset_slot: 180000000
@@ -80,7 +80,7 @@ describe('Policies Routes Test', () => {
 
             expect(response.status).toEqual(200);
             expect(response.body).toEqual({
-                '0xf0ff': {
+                f0ff: {
                     first_minting_slot: 47931333,
                     last_minting_slot: null,
                     sunset_slot: null
@@ -104,7 +104,7 @@ describe('Policies Routes Test', () => {
 
             expect(response.status).toEqual(200);
             expect(response.body).toEqual({
-                '0xf0ff': {
+                f0ff: {
                     first_minting_slot: 47931333,
                     last_minting_slot: null,
                     sunset_slot: null

@@ -45,7 +45,7 @@ docker run -p 3141:3141 -v <path_to_node.socket_folder>:/ipc -v handles:/app/han
 # Testing the API 
 - Open a browser to [http://localhost:3141/swagger](http://localhost:3141/swagger)
 - You can also see the current API status at [http://localhost:3141/health](http://localhost:3141/health)
-- Active Handle policy settings are available at [http://localhost:3141/policies](http://localhost:3141/policies) as normalized JSON (`first_minting_slot`, `last_minting_slot`, `sunset_slot` per hex policy ID)
+- Active Handle policy settings are available at [http://localhost:3141/policies](http://localhost:3141/policies) as normalized JSON (`first_minting_slot`, `last_minting_slot`, `sunset_slot` per hex policy ID without `0x` prefix)
 - **🚩WARNING:** All endpoints will return a <span style="color:red">202</span> when it is running but the scan hasn't reached the tip of the chain yet. It is not recommended to use the results until a <span style="color:green">200</span> status is returned.
 
 ## MCP Endpoint
