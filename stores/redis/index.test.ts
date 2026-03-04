@@ -595,19 +595,16 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(redisSpy).toHaveBeenCalledWith('sadd', rootKey('handle'), ['alpha']);
     });
 
-    it('prunes meta index in pipeline mode when one value remains', () => {
+    it('removes handle meta entries without scard checks on hash keys', () => {
         const store = new RedisHandlesStore();
         (RedisHandlesStore as any)._pipeline = [];
-        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
-            const [cmd] = args as [string];
-            if (cmd === 'scard') return 1;
-            return undefined;
-        });
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation(jest.fn());
 
         store.removeKeyFromIndex(IndexNames.HANDLE, 'alpha');
 
         expect(redisSpy).toHaveBeenCalledWith('del', [rootKey('handle:alpha')]);
         expect(redisSpy).toHaveBeenCalledWith('srem', rootKey('handle'), ['alpha']);
+        expect(redisSpy).not.toHaveBeenCalledWith('scard', rootKey('handle:alpha'));
     });
 
     it('repopulates indexes when scan returns deletable keys', () => {
