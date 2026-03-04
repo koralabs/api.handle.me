@@ -1,71 +1,8 @@
 import { HttpException } from '@koralabs/kora-labs-common';
-import { decodeCborToJson, DefaultTextFormat } from '@koralabs/kora-labs-common/utils/cbor';
 import { NextFunction, Request, Response } from 'express';
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
-
-const HANDLE_POLICIES_NAME = 'handle_policies';
-
-interface PolicySettings {
-    first_minting_slot: number;
-    last_minting_slot: number | null;
-    sunset_slot: number | null;
-}
-
-const toNumber = (value: unknown): number => {
-    const numberValue = Number(value);
-    if (!Number.isFinite(numberValue)) {
-        throw new Error('Invalid policy settings format');
-    }
-    return numberValue;
-};
-
-const toOptionalSlot = (value: unknown): number | null => {
-    const numberValue = toNumber(value);
-    return numberValue <= 0 ? null : numberValue;
-};
-
-const mapPolicyTupleToSettings = (tuple: unknown[]): PolicySettings => {
-    if (tuple.length < 3) {
-        throw new Error('Invalid policy tuple format');
-    }
-
-    return {
-        first_minting_slot: toNumber(tuple[0]),
-        last_minting_slot: toOptionalSlot(tuple[1]),
-        sunset_slot: toOptionalSlot(tuple[2])
-    };
-};
-
-const normalizePolicyId = (policyId: string): string => policyId.replace(/^0x/i, '');
-
-const normalizePolicies = (decodedDatum: unknown): Record<string, PolicySettings> => {
-    const settingsMap = Array.isArray(decodedDatum) ? decodedDatum[0] : decodedDatum;
-    if (!settingsMap || typeof settingsMap !== 'object' || Array.isArray(settingsMap)) {
-        throw new Error('Invalid policies datum format');
-    }
-
-    return Object.entries(settingsMap).reduce<Record<string, PolicySettings>>((acc, [policyId, settings]) => {
-        const normalizedPolicyId = normalizePolicyId(policyId);
-
-        if (Array.isArray(settings)) {
-            acc[normalizedPolicyId] = mapPolicyTupleToSettings(settings);
-            return acc;
-        }
-
-        if (settings && typeof settings === 'object' && !Array.isArray(settings)) {
-            const policySettings = settings as Record<string, unknown>;
-            acc[normalizedPolicyId] = {
-                first_minting_slot: toNumber(policySettings.first_minting_slot ?? policySettings.firstMintingSlot ?? 0),
-                last_minting_slot: toOptionalSlot(policySettings.last_minting_slot ?? policySettings.lastMintingSlot ?? 0),
-                sunset_slot: toOptionalSlot(policySettings.sunset_slot ?? policySettings.sunsetSlot ?? 0)
-            };
-            return acc;
-        }
-
-        throw new Error('Invalid policy settings format');
-    }, {});
-};
+import { decodePoliciesDatum, HANDLE_POLICIES_NAME } from '../utils/policies';
 
 class PoliciesController {
     public async index(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -89,12 +26,8 @@ class PoliciesController {
             }
 
             try {
-                const decodedPolicies = await decodeCborToJson({
-                    cborString: policiesDatum,
-                    schema: {},
-                    defaultKeyType: 'hex' as DefaultTextFormat
-                });
-                res.status(handleRepo.currentHttpStatus()).json(normalizePolicies(decodedPolicies));
+                const policies = await decodePoliciesDatum(policiesDatum);
+                res.status(handleRepo.currentHttpStatus()).json(policies);
                 return;
             } catch {
                 res.status(400).json({ message: 'Unable to decode handle policies datum to json' });

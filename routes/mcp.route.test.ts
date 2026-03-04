@@ -1,3 +1,5 @@
+import { HttpException } from '@koralabs/kora-labs-common';
+import * as cbor from '@koralabs/kora-labs-common/utils/cbor';
 import request from 'supertest';
 import App from '../app';
 
@@ -12,16 +14,53 @@ const handleRecord = {
     }
 };
 
+const mockGetHandle = jest.fn((handleName: string) => (handleName === 'burritos' ? handleRecord : null));
+const mockGetHandleByHex = jest.fn((hex: string) => (hex === Buffer.from('burritos', 'utf8').toString('hex') ? handleRecord : null));
+const mockGetUTxO = jest.fn((utxoId: string) => (utxoId === 'tx_id#0' ? { tx_id: 'tx_id', index: 0, lovelace: 1000000 } : null));
+const mockGetMetrics = jest.fn(() => ({ handleCount: 10, holderCount: 5 }));
+const mockCurrentHttpStatus = jest.fn(() => 200);
+const mockSearch = jest.fn((_pagination: unknown, _searchModel: unknown, namesOnly = false) => namesOnly
+    ? { searchTotal: 1, handles: ['burritos'] }
+    : { searchTotal: 1, handles: [handleRecord] });
+const mockGetHolder = jest.fn((address: string) => {
+    if (address !== 'addr1') return undefined;
+    return {
+        address,
+        type: 'base',
+        known_owner_name: '',
+        default_handle: 'burritos',
+        manually_set: false,
+        total_handles: 1,
+        handles: ['burritos']
+    };
+});
+const mockGetAllHolders = jest.fn(({ includeHandles }: { includeHandles?: boolean }) => [{
+    address: 'addr1',
+    type: 'base',
+    known_owner_name: '',
+    default_handle: 'burritos',
+    manually_set: false,
+    total_handles: 1,
+    handles: includeHandles ? ['burritos'] : []
+}]);
+const mockGetHandleDatumByName = jest.fn((handleName: string) => {
+    if (handleName !== 'handle_policies') {
+        throw new HttpException(404, 'Not found');
+    }
+    return 'd87980';
+});
+
 jest.mock('../repositories/handlesRepository', () => ({
     HandlesRepository: jest.fn().mockImplementation(() => ({
-        getHandle: (handleName: string) => (handleName === 'burritos' ? handleRecord : null),
-        getHandleByHex: (hex: string) => (hex === Buffer.from('burritos', 'utf8').toString('hex') ? handleRecord : null),
-        getUTxO: (utxoId: string) => (utxoId === 'tx_id#0' ? { tx_id: 'tx_id', index: 0, lovelace: 1000000 } : null),
-        getMetrics: () => ({ handleCount: 10, holderCount: 5 }),
-        currentHttpStatus: () => 200,
-        search: (_pagination: unknown, _searchModel: unknown, namesOnly = false) => namesOnly
-            ? { searchTotal: 1, handles: ['burritos'] }
-            : { searchTotal: 1, handles: [handleRecord] }
+        getHandle: mockGetHandle,
+        getHandleByHex: mockGetHandleByHex,
+        getUTxO: mockGetUTxO,
+        getMetrics: mockGetMetrics,
+        currentHttpStatus: mockCurrentHttpStatus,
+        search: mockSearch,
+        getHolder: mockGetHolder,
+        getAllHolders: mockGetAllHolders,
+        getHandleDatumByName: mockGetHandleDatumByName
     }))
 }));
 
@@ -38,6 +77,7 @@ describe('MCP Routes Test', () => {
 
     afterEach(() => {
         jest.clearAllMocks();
+        jest.restoreAllMocks();
     });
 
     describe('[GET] /mcp', () => {
@@ -94,8 +134,82 @@ describe('MCP Routes Test', () => {
 
             expect(response.status).toEqual(200);
             expect(response.body.result.tools.map((tool: { name: string }) => tool.name)).toEqual(
-                expect.arrayContaining(['get_handle', 'get_handle_utxo', 'search_handles', 'get_stats'])
+                expect.arrayContaining([
+                    'get_handle',
+                    'get_handle_utxo',
+                    'search_handles',
+                    'get_holder',
+                    'list_holders',
+                    'get_policies',
+                    'get_stats'
+                ])
             );
+        });
+
+        it('should support slot-based handle search pagination', async () => {
+            const response = await request(app?.getServer())
+                .post('/mcp')
+                .send({
+                    jsonrpc: '2.0',
+                    id: 21,
+                    method: 'tools/call',
+                    params: {
+                        name: 'search_handles',
+                        arguments: {
+                            search: 'bur',
+                            holder_address: 'addr1',
+                            slot_number: 123456,
+                            records_per_page: 10,
+                            sort: 'asc',
+                            names_only: true
+                        }
+                    }
+                });
+
+            expect(response.status).toEqual(200);
+            expect(response.body.result.structuredContent).toEqual({
+                status: 200,
+                search_total: 1,
+                handles: ['burritos']
+            });
+            expect(mockSearch).toHaveBeenCalledTimes(1);
+            expect(mockSearch.mock.calls[0][0]).toEqual(expect.objectContaining({
+                handlesPerPage: 10,
+                sort: 'asc',
+                slotNumber: 123456
+            }));
+            expect(mockSearch.mock.calls[0][1]).toEqual(expect.objectContaining({
+                search: 'bur',
+                holder_address: 'addr1'
+            }));
+            expect(mockSearch.mock.calls[0][2]).toEqual(true);
+        });
+
+        it('should reject page when slot_number is provided', async () => {
+            const response = await request(app?.getServer())
+                .post('/mcp')
+                .send({
+                    jsonrpc: '2.0',
+                    id: 26,
+                    method: 'tools/call',
+                    params: {
+                        name: 'search_handles',
+                        arguments: {
+                            slot_number: 123456,
+                            page: 2
+                        }
+                    }
+                });
+
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual({
+                jsonrpc: '2.0',
+                id: 26,
+                result: {
+                    content: [{ type: 'text', text: '`page` cannot be used with `slot_number`' }],
+                    isError: true
+                }
+            });
         });
 
         it('should call get_handle and return structured content', async () => {
@@ -131,6 +245,137 @@ describe('MCP Routes Test', () => {
                         }
                     }
                 }
+            });
+            expect(response.body.result).not.toHaveProperty('isError');
+        });
+
+        it('should call get_holder and return holder details', async () => {
+            const response = await request(app?.getServer())
+                .post('/mcp')
+                .send({
+                    jsonrpc: '2.0',
+                    id: 22,
+                    method: 'tools/call',
+                    params: {
+                        name: 'get_holder',
+                        arguments: {
+                            address: 'addr1'
+                        }
+                    }
+                });
+
+            expect(response.status).toEqual(200);
+            expect(response.body.result.structuredContent).toEqual({
+                status: 200,
+                holder: {
+                    address: 'addr1',
+                    type: 'base',
+                    known_owner_name: '',
+                    default_handle: 'burritos',
+                    manually_set: false,
+                    total_handles: 1,
+                    handles: ['burritos']
+                }
+            });
+        });
+
+        it('should call list_holders with pagination options', async () => {
+            const response = await request(app?.getServer())
+                .post('/mcp')
+                .send({
+                    jsonrpc: '2.0',
+                    id: 23,
+                    method: 'tools/call',
+                    params: {
+                        name: 'list_holders',
+                        arguments: {
+                            page: 1,
+                            records_per_page: 25,
+                            sort: 'desc',
+                            include_handles: true
+                        }
+                    }
+                });
+
+            expect(response.status).toEqual(200);
+            expect(response.body.result.structuredContent).toEqual({
+                status: 200,
+                holders: [{
+                    address: 'addr1',
+                    type: 'base',
+                    known_owner_name: '',
+                    default_handle: 'burritos',
+                    manually_set: false,
+                    total_handles: 1,
+                    handles: ['burritos']
+                }]
+            });
+            expect(mockGetAllHolders).toHaveBeenCalledWith({
+                pagination: expect.objectContaining({
+                    page: 1,
+                    recordsPerPage: 25,
+                    sort: 'desc'
+                }),
+                includeHandles: true
+            });
+        });
+
+        it('should call get_policies and normalize policy keys', async () => {
+            jest.spyOn(cbor, 'decodeCborToJson').mockReturnValue({
+                '0xf0ff': [47931333, 0, 0]
+            } as any);
+
+            const response = await request(app?.getServer())
+                .post('/mcp')
+                .send({
+                    jsonrpc: '2.0',
+                    id: 24,
+                    method: 'tools/call',
+                    params: {
+                        name: 'get_policies',
+                        arguments: {}
+                    }
+                });
+
+            expect(response.status).toEqual(200);
+            expect(response.body.result.structuredContent).toEqual({
+                status: 200,
+                policies: {
+                    f0ff: {
+                        first_minting_slot: 47931333,
+                        last_minting_slot: null,
+                        sunset_slot: null
+                    }
+                }
+            });
+            expect(cbor.decodeCborToJson).toHaveBeenCalledWith({
+                cborString: 'd87980',
+                schema: {},
+                defaultKeyType: 'hex'
+            });
+        });
+
+        it('should return null policies when handle_policies is missing', async () => {
+            mockGetHandleDatumByName.mockImplementationOnce(() => {
+                throw new HttpException(404, 'Not found');
+            });
+
+            const response = await request(app?.getServer())
+                .post('/mcp')
+                .send({
+                    jsonrpc: '2.0',
+                    id: 25,
+                    method: 'tools/call',
+                    params: {
+                        name: 'get_policies',
+                        arguments: {}
+                    }
+                });
+
+            expect(response.status).toEqual(200);
+            expect(response.body.result.structuredContent).toEqual({
+                status: 200,
+                policies: null
             });
             expect(response.body.result).not.toHaveProperty('isError');
         });

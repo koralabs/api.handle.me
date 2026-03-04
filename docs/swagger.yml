@@ -39,6 +39,8 @@ paths:
       description: |
         Streamable HTTP MCP endpoint that accepts JSON-RPC 2.0 requests.
         Supports `initialize`, `ping`, `tools/list`, and `tools/call` methods.
+        Exposes read-only tools for handles, holders, and policies (including slot-based handle pagination).
+        For MCP `search_handles`, `page` and `slot_number` are mutually exclusive.
       parameters:
       - name: MCP-Protocol-Version
         in: header
