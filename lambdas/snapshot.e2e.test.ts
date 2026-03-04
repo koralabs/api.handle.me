@@ -76,34 +76,18 @@ describe('Snapshot lambda e2e', () => {
         jest.clearAllMocks();
     });
 
-    it('creates and uploads snapshots for all networks', async () => {
+    it('creates and uploads a snapshot for the configured network only', async () => {
         const sendSpy = jest.spyOn(mockedS3Instance, 'send');
+        const network = `${process.env.NETWORK ?? 'mainnet'}`.toLowerCase();
 
         const result = await lambda.handler({});
 
         expect(result).toEqual({ body: '', statusCode: 200 });
-        expect(sendSpy).toHaveBeenCalledTimes(3);
-        expect(sendSpy).toHaveBeenNthCalledWith(
-            1,
+        expect(sendSpy).toHaveBeenCalledTimes(1);
+        expect(sendSpy).toHaveBeenCalledWith(
             expect.objectContaining({
                 Bucket: 'api.handle.me',
-                Key: 'mainnet/utxo-snapshot/7/handles_utxos.gz',
-                Body: expect.any(Object)
-            })
-        );
-        expect(sendSpy).toHaveBeenNthCalledWith(
-            2,
-            expect.objectContaining({
-                Bucket: 'api.handle.me',
-                Key: 'preview/utxo-snapshot/7/handles_utxos.gz',
-                Body: expect.any(Object)
-            })
-        );
-        expect(sendSpy).toHaveBeenNthCalledWith(
-            3,
-            expect.objectContaining({
-                Bucket: 'api.handle.me',
-                Key: 'preprod/utxo-snapshot/7/handles_utxos.gz',
+                Key: `${network}/utxo-snapshot/7/handles_utxos.gz`,
                 Body: expect.any(Object)
             })
         );
@@ -145,7 +129,7 @@ describe('Snapshot lambda e2e', () => {
             const result = await pending;
 
             expect(result).toEqual({ body: '', statusCode: 200 });
-            expect(sendSpy).toHaveBeenCalledTimes(3);
+            expect(sendSpy).toHaveBeenCalledTimes(1);
         } finally {
             jest.useRealTimers();
         }
@@ -158,6 +142,6 @@ describe('Snapshot lambda e2e', () => {
         const result = await lambda.handler({});
 
         expect(result).toEqual({ body: '', statusCode: 200 });
-        expect(sendSpy).toHaveBeenCalledTimes(3);
+        expect(sendSpy).toHaveBeenCalledTimes(1);
     });
 });

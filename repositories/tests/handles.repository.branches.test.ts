@@ -669,26 +669,64 @@ describe('HandlesRepository branch tests', () => {
         ).toEqual({ searchTotal: 0, handles: [] });
     });
 
-    it('matches search terms against CIP67 222 and 000 prefixed hex strings', () => {
+    it('matches search terms against handle hex and CIP67-prefixed hex strings', () => {
         const store = buildStoreMock();
         const repo = new HandlesRepository(store);
-        store.getKeysFromIndex.mockReturnValue(['alpha']);
-        const hex = Buffer.from('alpha').toString('hex');
+        const alphaHex = Buffer.from('alpha').toString('hex');
+        const virtualHex = Buffer.from('virtual@root').toString('hex');
+        const plainHex = Buffer.from('plain').toString('hex');
+        store.getKeysFromIndex.mockReturnValue(['alpha', 'virtual@root', 'plain']);
+        store.getHashFromIndex.mockImplementation((index: IndexNames, key: string | number) => {
+            if (index !== IndexNames.HANDLE) return undefined;
+            if (key === 'alpha') return { hex: `${AssetNameLabel.LBL_222}${alphaHex}` };
+            if (key === 'virtual@root') return { hex: `${AssetNameLabel.LBL_000}${virtualHex}` };
+            if (key === 'plain') return { hex: plainHex };
+            return undefined;
+        });
+        store.pipeline.mockImplementation((commands: () => void) => {
+            commands();
+            return [
+                { hex: `${AssetNameLabel.LBL_222}${alphaHex}` },
+                { hex: `${AssetNameLabel.LBL_000}${virtualHex}` },
+                { hex: plainHex }
+            ];
+        });
 
         expect(
             repo.search(
                 { page: 1, handlesPerPage: 10, sort: 'asc' } as any,
-                { search: `${AssetNameLabel.LBL_222}${hex}` } as any,
+                { search: `${AssetNameLabel.LBL_222}${alphaHex}` } as any,
                 true
             ).handles
         ).toEqual(['alpha']);
         expect(
             repo.search(
                 { page: 1, handlesPerPage: 10, sort: 'asc' } as any,
-                { search: `${AssetNameLabel.LBL_000}${hex}` } as any,
+                { search: `${AssetNameLabel.LBL_000}${virtualHex}` } as any,
                 true
             ).handles
-        ).toEqual(['alpha']);
+        ).toEqual(['virtual@root']);
+        expect(
+            repo.search(
+                { page: 1, handlesPerPage: 10, sort: 'asc' } as any,
+                { search: AssetNameLabel.LBL_222 } as any,
+                true
+            )
+        ).toEqual({ searchTotal: 1, handles: ['alpha'] });
+        expect(
+            repo.search(
+                { page: 1, handlesPerPage: 10, sort: 'asc' } as any,
+                { search: AssetNameLabel.LBL_000 } as any,
+                true
+            )
+        ).toEqual({ searchTotal: 1, handles: ['virtual@root'] });
+        expect(
+            repo.search(
+                { page: 1, handlesPerPage: 10, sort: 'asc' } as any,
+                { search: plainHex.slice(2, 8) } as any,
+                true
+            )
+        ).toEqual({ searchTotal: 1, handles: ['plain'] });
     });
 
     it('returns empty holder-address filter results when holder set is missing', () => {

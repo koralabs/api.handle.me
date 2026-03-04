@@ -64,6 +64,29 @@ describe('helpers pagination tests', () => {
         expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
+    it('fetchPaginatedResults should stop when maxResults is reached', async () => {
+        const pageOne = new Array(100).fill(null).map((_, index) => `page1-${index}`);
+        const pageTwo = new Array(100).fill(null).map((_, index) => `page2-${index}`);
+        const fetchMock = jest
+            .fn()
+            .mockResolvedValueOnce({
+                status: 200,
+                json: async () => pageOne
+            })
+            .mockResolvedValueOnce({
+                status: 200,
+                json: async () => pageTwo
+            });
+        global.fetch = fetchMock as any;
+
+        const results = await fetchPaginatedResults<string>('blocks/latest/next', 120);
+
+        expect(results).toHaveLength(120);
+        expect(results[0]).toBe('page1-0');
+        expect(results[119]).toBe('page2-19');
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
     it('fetchPaginatedResults should return empty list and log on thrown error', async () => {
         const fetchMock = jest.fn().mockRejectedValue(new Error('network unavailable'));
         global.fetch = fetchMock as any;
@@ -98,7 +121,8 @@ describe('helpers pagination tests', () => {
                 headers: expect.objectContaining({
                     Authorization: 'Bearer koios-token'
                 }),
-                body: '{"_tx_hashes":["abc"]}'
+                body: '{"_tx_hashes":["abc"]}',
+                signal: expect.anything()
             })
         );
     });

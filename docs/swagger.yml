@@ -27,10 +27,59 @@ paths:
     get:
       tags:
       - utils
-      summary: API liveness endpoint
+      summary: Redirect to Swagger UI
+      responses:
+        '302':
+          description: Redirects to `/swagger`
+  "/mcp":
+    post:
+      tags:
+      - utils
+      summary: Model Context Protocol endpoint
+      description: |
+        Streamable HTTP MCP endpoint that accepts JSON-RPC 2.0 requests.
+        Supports `initialize`, `ping`, `tools/list`, and `tools/call` methods.
+      parameters:
+      - name: MCP-Protocol-Version
+        in: header
+        required: false
+        schema:
+          type: string
+          example: "2025-11-25"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
       responses:
         '200':
-          description: API is reachable
+          description: JSON-RPC response body
+          headers:
+            MCP-Protocol-Version:
+              schema:
+                type: string
+              description: MCP protocol revision used by this server response
+          content:
+            application/json:
+              schema:
+                type: object
+        '202':
+          description: Notification accepted (no response body)
+        '400':
+          description: Unsupported protocol version header
+    get:
+      tags:
+      - utils
+      summary: MCP GET transport status
+      description: SSE transport is currently disabled for this API.
+      responses:
+        '405':
+          description: GET transport is not enabled
+          content:
+            application/json:
+              schema:
+                type: object
   "/handles":
     get:
       tags:
@@ -960,6 +1009,17 @@ paths:
       responses:
         '200':
           description: This swagger documentation
+  "/swagger/swagger.yml":
+    get:
+      tags:
+      - utils
+      responses:
+        '200':
+          description: Raw OpenAPI specification in YAML format
+          content:
+            application/yaml:
+              schema:
+                type: string
   "/health":
     get:
       tags:
@@ -971,6 +1031,71 @@ paths:
           description: Healthy, but scanning is still catching up to the tip of the blockchain
         '503':
           description: HTTP application failure
+  "/policies":
+    get:
+      tags:
+      - utils
+      summary: Get active Handle policy settings
+      description: |
+        Returns normalized JSON policy settings from the `handle_policies` datum.
+        Each policy maps to:
+        - `first_minting_slot`: first slot where minting is active
+        - `last_minting_slot`: optional last minting slot (`null` when open-ended)
+        - `sunset_slot`: optional sunset/deprecation slot (`null` when unset)
+      parameters:
+      - name: default_key_type
+        in: query
+        description: Default key encoding when converting CBOR maps to JSON
+        required: false
+        schema:
+          type: string
+          enum:
+          - utf8
+          - hex
+      responses:
+        '200':
+          description: Successful and up to date
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: object
+                  properties:
+                    first_minting_slot:
+                      type: integer
+                    last_minting_slot:
+                      type: integer
+                      nullable: true
+                    sunset_slot:
+                      type: integer
+                      nullable: true
+              example:
+                "0xf0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a":
+                  first_minting_slot: 47931333
+                  last_minting_slot: null
+                  sunset_slot: null
+        '202':
+          description: Successful, but scanning is still catching up to the tip of the blockchain
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: object
+                  properties:
+                    first_minting_slot:
+                      type: integer
+                    last_minting_slot:
+                      type: integer
+                      nullable: true
+                    sunset_slot:
+                      type: integer
+                      nullable: true
+        '400':
+          description: Unable to decode policies datum
+        '404':
+          description: Policies datum not found
   "/datum":
     post:
       tags:

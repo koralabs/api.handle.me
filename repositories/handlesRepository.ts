@@ -3,6 +3,7 @@ import { AssetNameLabel, bech32FromHex, buildCharacters, buildDrep, buildHolderI
 import { designerSchema, handleDatumSchema, portalSchema, socialsSchema, subHandleSettingsDatumSchema } from '@koralabs/kora-labs-common/utils/cbor';
 import * as crypto from 'crypto';
 import { isDatumEndpointEnabled } from '../config';
+import { MAX_SETS_PER_PIPE } from '../config/constants';
 import { BuildPersonalizationInput, HandleOnChainMetadata, MetadataLabel } from '../interfaces/ogmios.interfaces';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { decodeCborFromIPFSFile } from '../utils/ipfs';
@@ -10,8 +11,8 @@ const blackListedIpfsCids: string[] = [];
 const isTestnet = NETWORK.toLowerCase() !== 'mainnet';
 const magicSlotsRange = 50_000; // This is arbitrary and should be adjusted if not enough or too many slots come back from queries.
 
-process.env.INDEX_SCHEMA_VERSION = '3'
-process.env.UTXO_SCHEMA_VERSION = '1'
+process.env.INDEX_SCHEMA_VERSION ??= '3'
+process.env.UTXO_SCHEMA_VERSION ??= '1'
 
 /********** RewoundHandle IS USED TO FLAG THE HANDLE TO AVOID SAVING SLOT HISTORY ********************/
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
@@ -232,19 +233,46 @@ export class HandlesRepository {
                 // if there is an EMPTY here, there are no results
                 .filter((name) => name !== EMPTY);
         }
-        const checkSearch = (name: string, search?: string) => {
+        const checkSearch = (name: string, search?: string, handleHex?: string) => {
             if (!search) return true;
             if (name.includes(search)) return true;
-
-            const hex = Buffer.from(name, 'utf8').toString('hex');
-            if (`${AssetNameLabel.LBL_222}${hex}`.includes(search)) return true;
-            if (`${AssetNameLabel.LBL_000}${hex}`.includes(search)) return true;
-            
-            return false;
+            return (handleHex ?? '').includes(search);
         }
 
         // Check for the searched term or handle list
-        handleNames = handleNames.filter((name) => (!searchModel?.handles || searchModel?.handles.includes(name)) && checkSearch(name, searchModel?.search))
+        handleNames = handleNames.filter((name) => !searchModel?.handles || searchModel?.handles.includes(name));
+        if (searchModel?.search) {
+            const handlesNeedingHexMatch = handleNames.filter((name) => !name.includes(searchModel.search!));
+            const matchesByHex = new Set<string>();
+            const fieldLookupStore = this.store as IApiStore & {
+                getHashFieldFromIndex?: (index: IndexNames, key: string | number, field: string) => string | undefined;
+            };
+            for (let i = 0; i < handlesNeedingHexMatch.length; i += MAX_SETS_PER_PIPE) {
+                const handleChunk = handlesNeedingHexMatch.slice(i, i + MAX_SETS_PER_PIPE);
+                const handleHexes = (() => {
+                    if (fieldLookupStore.getHashFieldFromIndex) {
+                        return (this.store.pipeline(() => {
+                            for (const handleName of handleChunk) {
+                                fieldLookupStore.getHashFieldFromIndex!(IndexNames.HANDLE, handleName, 'hex');
+                            }
+                        }) as (string | undefined)[]).map((hex, index) => hex ?? Buffer.from(handleChunk[index], 'utf8').toString('hex'));
+                    }
+                    const searchedHandles = (this.store.pipeline(() => {
+                        for (const handleName of handleChunk) {
+                            this.store.getHashFromIndex(IndexNames.HANDLE, handleName);
+                        }
+                    }) as (StoredHandle | undefined)[]);
+                    return handleChunk.map((handleName, index) => `${searchedHandles[index]?.hex ?? Buffer.from(handleName, 'utf8').toString('hex')}`);
+                })();
+                handleChunk.forEach((handleName, index) => {
+                    const handleHex = handleHexes[index];
+                    if (checkSearch(handleName, searchModel.search, handleHex)) {
+                        matchesByHex.add(handleName);
+                    }
+                });
+            }
+            handleNames = handleNames.filter((name) => name.includes(searchModel.search!) || matchesByHex.has(name));
+        }
         const searchTotal = handleNames.length;
 
         if (pagination?.slotNumber) {

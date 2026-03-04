@@ -120,6 +120,29 @@ describe('App lifecycle', () => {
         expect(response.headers['content-encoding']).toBe(encoding);
     });
 
+    it('serves raw swagger yaml at /swagger/swagger.yml', async () => {
+        const app = new App();
+        await app.initialize();
+
+        const response = await request(app.getServer()).get('/swagger/swagger.yml');
+
+        expect(response.status).toBe(200);
+        expect(response.headers['content-type']).toContain('application/yaml');
+        expect(response.text).toContain('openapi: 3.0.0');
+        expect(response.text).not.toContain('<!DOCTYPE html>');
+    });
+
+    it('includes a swagger yaml link in the swagger ui html', async () => {
+        const app = new App();
+        await app.initialize();
+
+        const response = await request(app.getServer()).get('/swagger/');
+
+        expect(response.status).toBe(200);
+        expect(response.text).toContain('/swagger/swagger.yml');
+        expect(response.text).toContain('yaml-link');
+    });
+
     it('initializeOgmios runs readonly path with optional local lambda scanner', async () => {
         const repoInitialize = jest.fn().mockResolvedValue(undefined);
         mockedRepoClass.mockImplementation(() => ({ initialize: repoInitialize }));

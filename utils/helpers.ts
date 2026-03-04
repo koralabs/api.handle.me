@@ -3,6 +3,7 @@ import { KoiosTxInfo } from '../interfaces/provider.interface';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 
 export const defaultKoiosSettings = { _inputs: true, _withdrawals: false, _certs: false, _governance: false, _scripts: true, _bytecode: true, _metadata: true, _assets: true };
+const KOIOS_REQUEST_TIMEOUT_MS = 20_000;
 
 export const blockfrostApiCall = async (endpointSegment: string) => {
     const headers = {
@@ -14,14 +15,14 @@ export const blockfrostApiCall = async (endpointSegment: string) => {
     return await fetch(url, { headers });
 };
 
-export const fetchPaginatedResults = async <T>(endpointSegment: string): Promise<T[]> => {
+export const fetchPaginatedResults = async <T>(endpointSegment: string, maxResults = Infinity): Promise<T[]> => {
     const maxCount = 100;
     let page = 1;
     let hasMorePages = true;
 
     let results: T[] = [];
     try {
-        while (hasMorePages) {
+        while (hasMorePages && results.length < maxResults) {
             const response = await blockfrostApiCall(`${endpointSegment}?order=asc&count=${maxCount}&page=${page}`);
 
             if (response.status == 404) {
@@ -42,7 +43,7 @@ export const fetchPaginatedResults = async <T>(endpointSegment: string): Promise
         return [];
     }
 
-    return results;
+    return Number.isFinite(maxResults) ? results.slice(0, maxResults) : results;
 };
 
 /**
@@ -65,7 +66,8 @@ export const fetchKoios = async (path: string, method = 'GET', body?: string) =>
             'Content-Type': 'application/json',
             Authorization: `Bearer ${process.env.KOIOS_API_BEARER_TOKEN}`
         },
-        body
+        body,
+        signal: AbortSignal.timeout(KOIOS_REQUEST_TIMEOUT_MS)
     });
 
     const responseText = await response.text();

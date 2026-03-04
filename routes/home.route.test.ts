@@ -56,11 +56,11 @@ describe('Home Routes Test', () => {
         jest.clearAllMocks();
     });
 
-    describe('[GET] /home', () => {
-        it('Should return 200', async () => {
+    describe('[GET] /', () => {
+        it('Should redirect to /swagger', async () => {
             const response = await request(app?.getServer()).get('/');
-            expect(response.status).toEqual(200);
-            expect(response.body).toEqual({});
+            expect(response.status).toEqual(302);
+            expect(response.headers.location).toEqual('/swagger');
         });
     });
 });

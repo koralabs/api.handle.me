@@ -19,6 +19,7 @@ jest.mock('worker_threads', () => {
 describe('RedisHandlesStore critical path tests', () => {
     const originalFetch = global.fetch;
     const originalOrderedSlots = [...ORDERED_SLOTS];
+    const rootKey = (suffix: string) => `{root}:${suffix}`;
 
     afterEach(() => {
         global.fetch = originalFetch;
@@ -94,15 +95,15 @@ describe('RedisHandlesStore critical path tests', () => {
         const rehydrateSpy = jest.spyOn(store as any, 'rehydrateObject').mockReturnValue({ name: 'alpha' });
 
         const result = store.pipeline(() => {
-            (RedisHandlesStore as any)._pipeline.push(['hgetall', ['{root}:handle:alpha']]);
+            (RedisHandlesStore as any)._pipeline.push(['hgetall', [rootKey('handle:alpha')]]);
             (RedisHandlesStore as any)._pipeline.push(['set', ['x', '1']]);
         });
 
         expect(redisSpy).toHaveBeenCalledWith('batch', [
-            ['hgetall', ['{root}:handle:alpha']],
+            ['hgetall', [rootKey('handle:alpha')]],
             ['set', ['x', '1']]
         ]);
-        expect(rehydrateSpy).toHaveBeenCalledWith('{root}:handle:alpha', expect.any(Array));
+        expect(rehydrateSpy).toHaveBeenCalledWith(rootKey('handle:alpha'), expect.any(Array));
         expect(result).toEqual([{ name: 'alpha' }, 'ok']);
     });
 
@@ -175,6 +176,34 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(mintingDataArg.get('alpha')).toEqual([]);
     });
 
+    it('skips undefined utxos returned from pipeline during reindex rebuild', () => {
+        const store = new RedisHandlesStore();
+        jest.spyOn(store as any, 'redisClientCall').mockImplementation((cmd: any) => {
+            if (cmd === 'scan') return ['0', []];
+            return undefined;
+        });
+        jest.spyOn(store, 'getValuesFromOrderedSet').mockReturnValue(['utxo#0', 'utxo#1'] as any);
+
+        let callCount = 0;
+        jest.spyOn(store, 'pipeline').mockImplementation((commands: CallableFunction) => {
+            callCount += 1;
+            commands();
+            if (callCount === 1) {
+                return [undefined, { id: 'utxo#1', slot: 2, handles: [['policy', [Buffer.from('alpha').toString('hex')]]] }];
+            }
+            if (callCount === 2) return [new Set([JSON.stringify({ created_slot: 2, metadata: {}, txHash: 'txhash' })])];
+            return [];
+        });
+
+        const updateHandleIndexes = jest.fn();
+        store.repopulateIndexesFromUTxOs({
+            [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: updateHandleIndexes
+        } as any);
+
+        expect(updateHandleIndexes).toHaveBeenCalledTimes(1);
+        expect(updateHandleIndexes.mock.calls[0][0]).toEqual(expect.objectContaining({ id: 'utxo#1' }));
+    });
+
     it('populates from S3 snapshot and replays UTxOs through callbacks', async () => {
         const store = new RedisHandlesStore();
         const setMetricsSpy = jest.spyOn(store, 'setMetrics').mockImplementation(jest.fn());
@@ -234,6 +263,68 @@ describe('RedisHandlesStore critical path tests', () => {
                 utxoSchemaVersion: 1
             })
         );
+    });
+
+    it('falls back to default starting metrics when snapshot file is unavailable', async () => {
+        const store = new RedisHandlesStore();
+        jest.spyOn(store as any, 'redisClientCall').mockImplementation(jest.fn());
+        jest.spyOn(store, 'getUTxOSchemaVersion').mockReturnValue(1);
+        const setMetricsSpy = jest.spyOn(store, 'setMetrics').mockImplementation(jest.fn());
+        global.fetch = jest.fn().mockResolvedValue({
+            status: 404
+        }) as any;
+        const addUtxo = jest.fn();
+        const updateHandleIndexes = jest.fn();
+
+        const result = await store.tryPopulateFromS3UTxOs({
+            [UTxOFunctionName.ADD_UTXO]: addUtxo,
+            [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: updateHandleIndexes
+        } as any);
+
+        expect(result).toEqual(expect.objectContaining({ id: expect.any(String), slot: expect.any(Number) }));
+        expect(addUtxo).not.toHaveBeenCalled();
+        expect(updateHandleIndexes).not.toHaveBeenCalled();
+        expect(setMetricsSpy).toHaveBeenCalledWith(expect.objectContaining({
+            currentBlockHash: result.id,
+            currentSlot: result.slot,
+            utxoSchemaVersion: 1
+        }));
+    });
+
+    it('falls back to default starting metrics when snapshot schema version mismatches', async () => {
+        const store = new RedisHandlesStore();
+        jest.spyOn(store as any, 'redisClientCall').mockImplementation(jest.fn());
+        jest.spyOn(store, 'getUTxOSchemaVersion').mockReturnValue(2);
+        const setMetricsSpy = jest.spyOn(store, 'setMetrics').mockImplementation(jest.fn());
+        const compressed = deflateSync(Buffer.from(JSON.stringify({
+            utxos: [],
+            slot: 22,
+            hash: 'snapshot_hash',
+            mintingData: {},
+            utxoSchemaVersion: 1
+        })));
+        const ab = compressed.buffer.slice(compressed.byteOffset, compressed.byteOffset + compressed.byteLength);
+
+        global.fetch = jest.fn().mockResolvedValue({
+            status: 200,
+            arrayBuffer: async () => ab
+        }) as any;
+        const addUtxo = jest.fn();
+        const updateHandleIndexes = jest.fn();
+
+        const result = await store.tryPopulateFromS3UTxOs({
+            [UTxOFunctionName.ADD_UTXO]: addUtxo,
+            [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: updateHandleIndexes
+        } as any);
+
+        expect(result).toEqual(expect.objectContaining({ id: expect.any(String), slot: expect.any(Number) }));
+        expect(addUtxo).not.toHaveBeenCalled();
+        expect(updateHandleIndexes).not.toHaveBeenCalled();
+        expect(setMetricsSpy).toHaveBeenCalledWith(expect.objectContaining({
+            currentBlockHash: result.id,
+            currentSlot: result.slot,
+            utxoSchemaVersion: 2
+        }));
     });
 
     it('getStartingPoint uses snapshot path when schema/version requires refresh', async () => {
@@ -358,15 +449,15 @@ describe('RedisHandlesStore critical path tests', () => {
 
         expect(fullIndex.get(10)).toEqual({ id: 'some_handle' });
         expect(slotValues).toEqual([{ id: 'some_handle' }]);
-        expect(redisSpy).toHaveBeenCalledWith('zrangeWithScores', '{root}:slot', expect.any(Object));
+        expect(redisSpy).toHaveBeenCalledWith('zrangeWithScores', rootKey('slot'), expect.any(Object));
     });
 
     it('uses sort with default alpha and set/hash helper methods', () => {
         const store = new RedisHandlesStore();
         const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
             const [cmd, key] = args as [string, string];
-            if (cmd === 'sort' && key === '{root}:handle') return ['a', 'b'];
-            if (cmd === 'sort' && key === '{root}:holder') return ['1', '2'];
+            if (cmd === 'sort' && key === rootKey('handle')) return ['a', 'b'];
+            if (cmd === 'sort' && key === rootKey('holder')) return ['1', '2'];
             if (cmd === 'get') return 'value';
             return [];
         });
@@ -384,8 +475,8 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(index).toEqual(new Map([['a', { id: 'alpha' }]]));
         expect(keys).toEqual([1, 2]);
         expect(value).toBe('value');
-        expect(redisSpy).toHaveBeenCalledWith('sort', '{root}:handle', expect.objectContaining({ isAlpha: true }));
-        expect(redisSpy).toHaveBeenCalledWith('set', '{root}:rarity:basic', '1');
+        expect(redisSpy).toHaveBeenCalledWith('sort', rootKey('handle'), expect.objectContaining({ isAlpha: true }));
+        expect(redisSpy).toHaveBeenCalledWith('set', rootKey('rarity:basic'), '1');
     });
 
     it('uses smembers and keeps string values for handle keys without sort options', () => {
@@ -399,7 +490,7 @@ describe('RedisHandlesStore critical path tests', () => {
         const keys = store.getKeysFromIndex(IndexNames.HANDLE);
 
         expect(keys).toEqual(['1', 'alpha']);
-        expect(redisSpy).toHaveBeenCalledWith('smembers', '{root}:handle', undefined);
+        expect(redisSpy).toHaveBeenCalledWith('smembers', rootKey('handle'), undefined);
     });
 
     it('handles ordered-set add/remove and schema-version getters', () => {
@@ -416,9 +507,9 @@ describe('RedisHandlesStore critical path tests', () => {
 
         expect(store.getUTxOSchemaVersion()).toBe(9);
         expect(store.getIndexSchemaVersion()).toBe(4);
-        expect(redisSpy).toHaveBeenCalledWith('zremRangeByScore', '{root}:slot', { value: 15, isInclusive: true }, { value: 15, isInclusive: true });
-        expect(redisSpy).toHaveBeenCalledWith('zremRangeByScore', '{root}:slot', '-', { value: 15, isInclusive: false });
-        expect(redisSpy).toHaveBeenCalledWith('zrem', '{root}:holder', 'holder');
+        expect(redisSpy).toHaveBeenCalledWith('zremRangeByScore', rootKey('slot'), { value: 15, isInclusive: true }, { value: 15, isInclusive: true });
+        expect(redisSpy).toHaveBeenCalledWith('zremRangeByScore', rootKey('slot'), '-', { value: 15, isInclusive: false });
+        expect(redisSpy).toHaveBeenCalledWith('zrem', rootKey('holder'), 'holder');
     });
 
     it('rehydrates hash objects with json and non-json values', () => {
@@ -440,12 +531,28 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(value).toEqual({ name: 'alpha', enabled: true, raw: 'plain-value' });
     });
 
+    it('reads a single hash field from an index record', () => {
+        const store = new RedisHandlesStore();
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'hget') {
+                return { toString: () => '000de140616c706861' };
+            }
+            return undefined;
+        });
+
+        const value = (store as any).getHashFieldFromIndex(IndexNames.HANDLE, 'alpha', 'hex');
+
+        expect(value).toBe('000de140616c706861');
+        expect(redisSpy).toHaveBeenCalledWith('hget', rootKey('handle:alpha'), 'hex');
+    });
+
     it('formats metrics and primitive hash fields before saving', () => {
         const store = new RedisHandlesStore();
         const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
             const [cmd, key] = args as [string, string];
-            if (cmd === 'scard' && key === '{root}:handle') return 9;
-            if (cmd === 'scard' && key === '{root}:holder') return 4;
+            if (cmd === 'scard' && key === rootKey('handle')) return 9;
+            if (cmd === 'scard' && key === rootKey('holder')) return 4;
             return undefined;
         });
 
@@ -474,8 +581,8 @@ describe('RedisHandlesStore critical path tests', () => {
 
         store.removeValueFromIndexedSet(IndexNames.HANDLE, 'alpha', 'handle-id');
 
-        expect(redisSpy).toHaveBeenCalledWith('srem', '{root}:handle:alpha', ['handle-id']);
-        expect(redisSpy).toHaveBeenCalledWith('srem', '{root}:handle', ['alpha']);
+        expect(redisSpy).toHaveBeenCalledWith('srem', rootKey('handle:alpha'), ['handle-id']);
+        expect(redisSpy).toHaveBeenCalledWith('srem', rootKey('handle'), ['alpha']);
     });
 
     it('adds meta keys when writing to indexed sets under meta indexes', () => {
@@ -484,8 +591,8 @@ describe('RedisHandlesStore critical path tests', () => {
 
         store.addValueToIndexedSet(IndexNames.HANDLE, 'alpha', 'alpha-id');
 
-        expect(redisSpy).toHaveBeenCalledWith('sadd', '{root}:handle:alpha', ['alpha-id']);
-        expect(redisSpy).toHaveBeenCalledWith('sadd', '{root}:handle', ['alpha']);
+        expect(redisSpy).toHaveBeenCalledWith('sadd', rootKey('handle:alpha'), ['alpha-id']);
+        expect(redisSpy).toHaveBeenCalledWith('sadd', rootKey('handle'), ['alpha']);
     });
 
     it('removes handle meta entries without scard checks on hash keys', () => {
@@ -495,14 +602,14 @@ describe('RedisHandlesStore critical path tests', () => {
 
         store.removeKeyFromIndex(IndexNames.HANDLE, 'alpha');
 
-        expect(redisSpy).toHaveBeenCalledWith('del', ['{root}:handle:alpha']);
-        expect(redisSpy).toHaveBeenCalledWith('srem', '{root}:handle', ['alpha']);
-        expect(redisSpy).not.toHaveBeenCalledWith('scard', '{root}:handle:alpha');
+        expect(redisSpy).toHaveBeenCalledWith('del', [rootKey('handle:alpha')]);
+        expect(redisSpy).toHaveBeenCalledWith('srem', rootKey('handle'), ['alpha']);
+        expect(redisSpy).not.toHaveBeenCalledWith('scard', rootKey('handle:alpha'));
     });
 
     it('repopulates indexes when scan returns deletable keys', () => {
         const store = new RedisHandlesStore();
-        const scannedKeys = Array.from({ length: 100000 }, (_, index) => `{root}:character:${index}`);
+        const scannedKeys = Array.from({ length: 100000 }, (_, index) => rootKey(`character:${index}`));
         const consoleSpy = jest.spyOn(console, 'log').mockImplementation(jest.fn());
         let scanCount = 0;
         const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
@@ -524,15 +631,15 @@ describe('RedisHandlesStore critical path tests', () => {
             [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: jest.fn()
         } as any);
 
-        expect(redisSpy).toHaveBeenCalledWith('del', [`{root}:${IndexNames.HOLDER_COUNT}`]);
+        expect(redisSpy).toHaveBeenCalledWith('del', [rootKey(IndexNames.HOLDER_COUNT)]);
         expect(redisSpy).toHaveBeenCalledWith('del', scannedKeys);
         expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Deleted: 100,000 keys'));
     });
 
     it('logs scan deletion progress when modulo threshold is crossed by key batch size', () => {
         const store = new RedisHandlesStore();
-        const keysA = Array.from({ length: 99999 }, (_, index) => `{root}:character:${index}`);
-        const keysB = Array.from({ length: 5 }, (_, index) => `{root}:character:b${index}`);
+        const keysA = Array.from({ length: 99999 }, (_, index) => rootKey(`character:${index}`));
+        const keysB = Array.from({ length: 5 }, (_, index) => rootKey(`character:b${index}`));
         const consoleSpy = jest.spyOn(console, 'log').mockImplementation(jest.fn());
         let scanCount = 0;
         jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
@@ -587,7 +694,7 @@ describe('RedisHandlesStore critical path tests', () => {
         const store = new RedisHandlesStore();
         const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
             const [cmd, key] = args as [string, string];
-            if (cmd === 'smembers' && key === '{root}:handle') return ['alpha'];
+            if (cmd === 'smembers' && key === rootKey('handle')) return ['alpha'];
             return [];
         });
         jest.spyOn(store, 'getHashFromIndex').mockReturnValue({ id: 'alpha' } as any);
@@ -595,7 +702,7 @@ describe('RedisHandlesStore critical path tests', () => {
         const index = store.getIndex(IndexNames.HANDLE);
 
         expect(index).toEqual(new Map([['alpha', { id: 'alpha' }]]));
-        expect(redisSpy).toHaveBeenCalledWith('smembers', '{root}:handle', undefined);
+        expect(redisSpy).toHaveBeenCalledWith('smembers', rootKey('handle'), undefined);
     });
 
     it('uses sorted indexed-set lookup with default alpha', () => {
@@ -609,7 +716,7 @@ describe('RedisHandlesStore critical path tests', () => {
         const values = store.getValuesFromIndexedSet(IndexNames.HOLDER, 'stake1', { orderBy: 'ASC' } as any);
 
         expect(values).toEqual(new Set(['beta', 'alpha']));
-        expect(redisSpy).toHaveBeenCalledWith('sort', '{root}:holder:stake1', expect.objectContaining({ isAlpha: true }));
+        expect(redisSpy).toHaveBeenCalledWith('sort', rootKey('holder:stake1'), expect.objectContaining({ isAlpha: true }));
     });
 
     it('adds holder hashes to ordered holder index', () => {
@@ -636,7 +743,7 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(redisSpy).toHaveBeenNthCalledWith(
             1,
             'zrange',
-            '{root}:holder',
+            rootKey('holder'),
             expect.objectContaining({
                 start: { value: -Infinity },
                 end: { value: Infinity }
@@ -646,7 +753,7 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(redisSpy).toHaveBeenNthCalledWith(
             2,
             'zrange',
-            '{root}:holder',
+            rootKey('holder'),
             expect.objectContaining({
                 start: { value: Infinity },
                 end: { value: -Infinity }
@@ -667,7 +774,7 @@ describe('RedisHandlesStore critical path tests', () => {
         store.removeValuesFromOrderedSet(IndexNames.HOLDER, 7);
 
         expect(values).toEqual([42]);
-        expect(redisSpy).toHaveBeenCalledWith('zrem', '{root}:holder', '7');
+        expect(redisSpy).toHaveBeenCalledWith('zrem', rootKey('holder'), '7');
     });
 
     it('reads ordered-set scores for members', () => {
@@ -681,7 +788,7 @@ describe('RedisHandlesStore critical path tests', () => {
         const scores = store.getScoresFromOrderedSet(IndexNames.HOLDER_COUNT, ['holder_a', 'holder_b', 'holder_c']);
 
         expect(scores).toEqual([4, 0, 11]);
-        expect(redisSpy).toHaveBeenCalledWith('zmscore', '{root}:holdercount', ['holder_a', 'holder_b', 'holder_c']);
+        expect(redisSpy).toHaveBeenCalledWith('zmscore', rootKey('holdercount'), ['holder_a', 'holder_b', 'holder_c']);
     });
 
     it('builds metrics from defaults when cache is empty', () => {

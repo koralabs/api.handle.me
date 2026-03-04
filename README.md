@@ -45,7 +45,14 @@ docker run -p 3141:3141 -v <path_to_node.socket_folder>:/ipc -v handles:/app/han
 # Testing the API 
 - Open a browser to [http://localhost:3141/swagger](http://localhost:3141/swagger)
 - You can also see the current API status at [http://localhost:3141/health](http://localhost:3141/health)
+- Active Handle policy settings are available at [http://localhost:3141/policies](http://localhost:3141/policies) as normalized JSON (`first_minting_slot`, `last_minting_slot`, `sunset_slot` per policy ID)
 - **🚩WARNING:** All endpoints will return a <span style="color:red">202</span> when it is running but the scan hasn't reached the tip of the chain yet. It is not recommended to use the results until a <span style="color:green">200</span> status is returned.
+
+## MCP Endpoint
+- `POST /mcp` exposes a Model Context Protocol (MCP) JSON-RPC endpoint.
+- Supported methods: `initialize`, `ping`, `tools/list`, `tools/call`.
+- Included read-only tools: `get_handle`, `get_handle_utxo`, `search_handles`, `get_stats`.
+- `GET /mcp` currently returns `405` (SSE streaming transport is not enabled).
 
 &nbsp;
 
