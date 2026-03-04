@@ -37,6 +37,8 @@ const mapPolicyTupleToSettings = (tuple: unknown[]): PolicySettings => {
     };
 };
 
+const normalizePolicyId = (policyId: string): string => policyId.replace(/^0x/i, '');
+
 const normalizePolicies = (decodedDatum: unknown): Record<string, PolicySettings> => {
     const settingsMap = Array.isArray(decodedDatum) ? decodedDatum[0] : decodedDatum;
     if (!settingsMap || typeof settingsMap !== 'object' || Array.isArray(settingsMap)) {
@@ -44,14 +46,16 @@ const normalizePolicies = (decodedDatum: unknown): Record<string, PolicySettings
     }
 
     return Object.entries(settingsMap).reduce<Record<string, PolicySettings>>((acc, [policyId, settings]) => {
+        const normalizedPolicyId = normalizePolicyId(policyId);
+
         if (Array.isArray(settings)) {
-            acc[policyId] = mapPolicyTupleToSettings(settings);
+            acc[normalizedPolicyId] = mapPolicyTupleToSettings(settings);
             return acc;
         }
 
         if (settings && typeof settings === 'object' && !Array.isArray(settings)) {
             const policySettings = settings as Record<string, unknown>;
-            acc[policyId] = {
+            acc[normalizedPolicyId] = {
                 first_minting_slot: toNumber(policySettings.first_minting_slot ?? policySettings.firstMintingSlot ?? 0),
                 last_minting_slot: toOptionalSlot(policySettings.last_minting_slot ?? policySettings.lastMintingSlot ?? 0),
                 sunset_slot: toOptionalSlot(policySettings.sunset_slot ?? policySettings.sunsetSlot ?? 0)
