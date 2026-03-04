@@ -49,7 +49,7 @@ describe('Policies Routes Test', () => {
                 '0x6c32': [151974982, 170000000, 180000000]
             } as any);
 
-            const response = await request(app?.getServer()).get('/policies?default_key_type=hex');
+            const response = await request(app?.getServer()).get('/policies');
 
             expect(response.status).toEqual(200);
             expect(response.body).toEqual({
@@ -62,6 +62,28 @@ describe('Policies Routes Test', () => {
                     first_minting_slot: 151974982,
                     last_minting_slot: 170000000,
                     sunset_slot: 180000000
+                }
+            });
+            expect(decodeSpy).toHaveBeenCalledWith({
+                cborString: 'd87980',
+                schema: {},
+                defaultKeyType: 'hex'
+            });
+        });
+
+        it('should force hex key decoding even when utf8 is requested', async () => {
+            const decodeSpy = jest.spyOn(cbor, 'decodeCborToJson').mockReturnValue({
+                '0xf0ff': [47931333, 0, 0]
+            } as any);
+
+            const response = await request(app?.getServer()).get('/policies?default_key_type=utf8');
+
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual({
+                '0xf0ff': {
+                    first_minting_slot: 47931333,
+                    last_minting_slot: null,
+                    sunset_slot: null
                 }
             });
             expect(decodeSpy).toHaveBeenCalledWith({
