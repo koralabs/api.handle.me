@@ -51,7 +51,9 @@ docker run -p 3141:3141 -v <path_to_node.socket_folder>:/ipc -v handles:/app/han
 ## MCP Endpoint
 - `POST /mcp` exposes a Model Context Protocol (MCP) JSON-RPC endpoint.
 - Supported methods: `initialize`, `ping`, `tools/list`, `tools/call`.
-- Included read-only tools: `get_handle`, `get_handle_utxo`, `search_handles`, `get_stats`.
+- Included read-only tools: `get_handle`, `get_handle_utxo`, `search_handles`, `get_holder`, `list_holders`, `get_policies`, `get_stats`.
+- `search_handles` supports `slot_number` pagination and holder filtering via `holder_address`.
+- `search_handles` requires `page` and `slot_number` to be mutually exclusive.
 - `GET /mcp` currently returns `405` (SSE streaming transport is not enabled).
 
 &nbsp;
