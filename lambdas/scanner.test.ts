@@ -62,7 +62,7 @@ const buildUtxo = ({
 const loadScannerModule = () => {
     let scannerModule: any;
     jest.isolateModules(() => {
-        scannerModule = require('./scanner');
+        scannerModule = require('./scanner.app');
     });
     return scannerModule;
 };
