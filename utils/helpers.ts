@@ -60,12 +60,16 @@ export const fetchTxList = async (block: string) => {
 
 export const fetchKoios = async (path: string, method = 'GET', body?: string) => {
     const url = `https://${NETWORK.toLowerCase() === 'mainnet' ? 'api' : NETWORK.toLowerCase()}.koios.rest/api/v1/${path}`;
+    const koiosToken = process.env.KOIOS_API_BEARER_TOKEN?.trim();
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+    };
+    if (koiosToken) {
+        headers.Authorization = `Bearer ${koiosToken}`;
+    }
     const response = await fetch(url, {
         method,
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${process.env.KOIOS_API_BEARER_TOKEN}`
-        },
+        headers,
         body,
         signal: AbortSignal.timeout(KOIOS_REQUEST_TIMEOUT_MS)
     });

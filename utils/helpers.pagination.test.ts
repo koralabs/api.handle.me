@@ -127,6 +127,31 @@ describe('helpers pagination tests', () => {
         );
     });
 
+    it('fetchKoios should omit Authorization header when no token is configured', async () => {
+        const koiosResponse = [{ tx_hash: 'abc' }];
+        const fetchMock = jest.fn().mockResolvedValue({
+            ok: true,
+            text: async () => JSON.stringify(koiosResponse)
+        });
+        global.fetch = fetchMock as any;
+        delete process.env.KOIOS_API_BEARER_TOKEN;
+
+        const result = await fetchKoios('tx_info', 'POST', '{"_tx_hashes":["abc"]}');
+
+        expect(result).toEqual(koiosResponse);
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringMatching(/koios\.rest\/api\/v1\/tx_info$/),
+            expect.objectContaining({
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: '{"_tx_hashes":["abc"]}',
+                signal: expect.anything()
+            })
+        );
+    });
+
     it('fetchKoios should throw with status when Koios responds with non-JSON 429', async () => {
         const fetchMock = jest.fn().mockResolvedValue({
             ok: false,
