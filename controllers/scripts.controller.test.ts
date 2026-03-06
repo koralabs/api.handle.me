@@ -10,6 +10,23 @@ const mockResponse = () => {
     return res;
 }
 
+const mockRequest = (query = {}, app?: any) =>
+    ({ query, app } as any);
+
+const mockRegistry = (handles: Record<string, any>) => ({
+    handlesStore: () => ({
+        getHashFromIndex: (_index: string, key: string) => handles[key],
+        getKeysFromIndex: () => Object.keys(handles),
+        getValuesFromIndexedSet: () => undefined,
+        getMetrics: () => ({
+            currentSlot: 10,
+            lastSlot: 10,
+            currentBlockHash: 'a',
+            tipBlockHash: 'a'
+        })
+    })
+});
+
 afterAll(async () => {
     await new Promise<void>((resolve) => setTimeout(() => resolve(), 500));
 });
@@ -44,9 +61,8 @@ describe('Scripts Routes Test', () => {
             const scriptsController = new ScriptsController();
             const response = mockResponse();
             await scriptsController.index(
-                // @ts-expect-error
-                {query: {}},
-                response,
+                mockRequest({}),
+                response as any,
                 () => {}
             );
             expect(response.status).toHaveBeenCalledTimes(0);
@@ -62,9 +78,8 @@ describe('Scripts Routes Test', () => {
             const scriptsController = new ScriptsController();
             const response = mockResponse();
             await scriptsController.index(
-                // @ts-expect-error
-                {query: {latest: true}},
-                response,
+                mockRequest({latest: true}),
+                response as any,
                 () => {}
             );
 
@@ -84,9 +99,8 @@ describe('Scripts Routes Test', () => {
             const scriptsController = new ScriptsController();
             const response = mockResponse();
             await scriptsController.index(
-                // @ts-expect-error
-                {query: {latest: true, type: ScriptType.SUB_HANDLE_SETTINGS}},
-                response,
+                mockRequest({latest: true, type: ScriptType.SUB_HANDLE_SETTINGS}),
+                response as any,
                 () => {}
             );
 
@@ -101,9 +115,8 @@ describe('Scripts Routes Test', () => {
             const scriptsController = new ScriptsController();
             const response = mockResponse();
             await scriptsController.index(
-                // @ts-expect-error
-                {query: {latest: true, type: 'unknown'}},
-                response,
+                mockRequest({latest: true, type: 'unknown'}),
+                response as any,
                 () => {}
             );
 
@@ -117,13 +130,103 @@ describe('Scripts Routes Test', () => {
             const response = mockResponse();
 
             await scriptsController.index(
-                // @ts-expect-error
-                {query: {}},
-                response,
+                mockRequest({}),
+                response as any,
                 () => {}
             );
 
             expect(response.json).toHaveBeenCalledWith(scripts.preview);
+        });
+
+        it('Should synthesize HAL scripts from handle-backed registry and keep only the highest ordinal latest', async () => {
+            const network = process.env.NETWORK ?? 'preview';
+            const [legacyAddress, ordinalAddress] = Object.keys(scripts[network]);
+            const handles = {
+                'hal_mnt_prxy@handle_contract': {
+                    name: 'hal_mnt_prxy@handle_contract',
+                    hex: 'legacyhex',
+                    utxo: 'a'.repeat(64) + '#0',
+                    resolved_addresses: { ada: legacyAddress },
+                    script: { cbor: 'legacycbor' }
+                },
+                'hal-mint-proxy2@handlecontracts': {
+                    name: 'hal-mint-proxy2@handlecontracts',
+                    hex: 'ordinalhex',
+                    utxo: 'b'.repeat(64) + '#1',
+                    resolved_addresses: { ada: ordinalAddress },
+                    script: { cbor: 'ordinalcbor' }
+                }
+            };
+
+            const scriptsController = new ScriptsController();
+            const response = mockResponse();
+            await scriptsController.index(
+                mockRequest({ type: ScriptType.HAL_MINT_PROXY }, { get: () => mockRegistry(handles) }),
+                response as any,
+                () => {}
+            );
+
+            expect(response.status).toHaveBeenCalledTimes(0);
+            expect(response.json).toHaveBeenCalledWith({
+                [legacyAddress]: expect.objectContaining({
+                    handle: 'hal_mnt_prxy@handle_contract',
+                    handleHex: 'legacyhex',
+                    refScriptAddress: legacyAddress,
+                    refScriptUtxo: 'a'.repeat(64) + '#0',
+                    cbor: 'legacycbor',
+                    type: ScriptType.HAL_MINT_PROXY,
+                    latest: false
+                }),
+                [ordinalAddress]: expect.objectContaining({
+                    handle: 'hal-mint-proxy2@handlecontracts',
+                    handleHex: 'ordinalhex',
+                    refScriptAddress: ordinalAddress,
+                    refScriptUtxo: 'b'.repeat(64) + '#1',
+                    cbor: 'ordinalcbor',
+                    type: ScriptType.HAL_MINT_PROXY,
+                    latest: true
+                })
+            });
+        });
+
+        it('Should return latest HAL script from handle-backed registry', async () => {
+            const network = process.env.NETWORK ?? 'preview';
+            const [legacyAddress, ordinalAddress] = Object.keys(scripts[network]);
+            const handles = {
+                'hal_mnt_prxy@handle_contract': {
+                    name: 'hal_mnt_prxy@handle_contract',
+                    hex: 'legacyhex',
+                    utxo: 'a'.repeat(64) + '#0',
+                    resolved_addresses: { ada: legacyAddress },
+                    script: { cbor: 'legacycbor' }
+                },
+                'hal-mint-proxy2@handlecontracts': {
+                    name: 'hal-mint-proxy2@handlecontracts',
+                    hex: 'ordinalhex',
+                    utxo: 'b'.repeat(64) + '#1',
+                    resolved_addresses: { ada: ordinalAddress },
+                    script: { cbor: 'ordinalcbor' }
+                }
+            };
+
+            const scriptsController = new ScriptsController();
+            const response = mockResponse();
+            await scriptsController.index(
+                mockRequest({ latest: true, type: ScriptType.HAL_MINT_PROXY }, { get: () => mockRegistry(handles) }),
+                response as any,
+                () => {}
+            );
+
+            expect(response.status).toHaveBeenCalledTimes(0);
+            expect(response.json).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    scriptAddress: ordinalAddress,
+                    handle: 'hal-mint-proxy2@handlecontracts',
+                    type: ScriptType.HAL_MINT_PROXY,
+                    latest: true,
+                    cbor: 'ordinalcbor'
+                })
+            );
         });
     });
 });
