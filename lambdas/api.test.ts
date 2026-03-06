@@ -34,4 +34,38 @@ describe('API lambda handler', () => {
         expect(serverlessHandler.mock.calls[0]).toHaveLength(2);
         expect(result).toEqual(lambdaResponse);
     });
+
+    it('hydrates before loading the API app module', async () => {
+        const lambdaResponse = { statusCode: 200, body: 'ok' };
+        const event = { requestContext: { elb: {} } } as any;
+        const context = {} as any;
+        let appLoaded = false;
+        let hydrated = false;
+        const appHandler = jest.fn().mockImplementation(async () => {
+            if (!hydrated) {
+                throw new Error('api app loaded before hydration');
+            }
+            return lambdaResponse;
+        });
+        const hydrateKmsEnvironment = jest.fn().mockImplementation(async () => {
+            hydrated = true;
+        });
+
+        jest.doMock('@koralabs/kora-labs-common', () => ({ hydrateKmsEnvironment }));
+        jest.doMock('./api.app', () => {
+            appLoaded = true;
+            return { handler: appHandler };
+        });
+
+        let lambdaModule: any;
+        await jest.isolateModulesAsync(async () => {
+            lambdaModule = await import('./api');
+        });
+
+        expect(appLoaded).toBe(false);
+        await expect(lambdaModule.handler(event, context)).resolves.toEqual(lambdaResponse);
+        expect(appLoaded).toBe(true);
+        expect(hydrateKmsEnvironment).toHaveBeenCalledTimes(1);
+        expect(appHandler).toHaveBeenCalledWith(event, context);
+    });
 });
