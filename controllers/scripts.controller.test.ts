@@ -160,8 +160,8 @@ describe('Scripts Routes Test', () => {
                     resolved_addresses: { ada: legacyAddress },
                     script: { cbor: 'legacycbor' }
                 },
-                'hal-mint-proxy2@handlecontracts': {
-                    name: 'hal-mint-proxy2@handlecontracts',
+                'hal-mint-proxy2@handlecontract': {
+                    name: 'hal-mint-proxy2@handlecontract',
                     hex: 'ordinalhex',
                     utxo: 'b'.repeat(64) + '#1',
                     resolved_addresses: { ada: ordinalAddress },
@@ -189,7 +189,7 @@ describe('Scripts Routes Test', () => {
                     latest: false
                 }),
                 [ordinalAddress]: expect.objectContaining({
-                    handle: 'hal-mint-proxy2@handlecontracts',
+                    handle: 'hal-mint-proxy2@handlecontract',
                     handleHex: 'ordinalhex',
                     refScriptAddress: ordinalAddress,
                     refScriptUtxo: 'b'.repeat(64) + '#1',
@@ -211,8 +211,8 @@ describe('Scripts Routes Test', () => {
                     resolved_addresses: { ada: legacyAddress },
                     script: { cbor: 'legacycbor' }
                 },
-                'hal-mint-proxy2@handlecontracts': {
-                    name: 'hal-mint-proxy2@handlecontracts',
+                'hal-mint-proxy2@handlecontract': {
+                    name: 'hal-mint-proxy2@handlecontract',
                     hex: 'ordinalhex',
                     utxo: 'b'.repeat(64) + '#1',
                     resolved_addresses: { ada: ordinalAddress },
@@ -232,7 +232,7 @@ describe('Scripts Routes Test', () => {
             expect(response.json).toHaveBeenCalledWith(
                 expect.objectContaining({
                     scriptAddress: ordinalAddress,
-                    handle: 'hal-mint-proxy2@handlecontracts',
+                    handle: 'hal-mint-proxy2@handlecontract',
                     type: ScriptType.HAL_MINT_PROXY,
                     latest: true,
                     cbor: 'ordinalcbor'
@@ -251,8 +251,8 @@ describe('Scripts Routes Test', () => {
                     resolved_addresses: { ada: legacyAddress },
                     script: { cbor: 'legacycbor' }
                 },
-                'hal-mint-proxy2@handlecontracts': {
-                    name: 'hal-mint-proxy2@handlecontracts',
+                'hal-mint-proxy2@handlecontract': {
+                    name: 'hal-mint-proxy2@handlecontract',
                     hex: 'ordinalhex',
                     utxo: 'b'.repeat(64) + '#1',
                     resolved_addresses: { ada: ordinalAddress },
@@ -273,7 +273,7 @@ describe('Scripts Routes Test', () => {
             expect(response.json).toHaveBeenCalledWith(
                 expect.objectContaining({
                     scriptAddress: ordinalAddress,
-                    handle: 'hal-mint-proxy2@handlecontracts',
+                    handle: 'hal-mint-proxy2@handlecontract',
                     type: ScriptType.HAL_MINT_PROXY,
                     latest: true
                 })

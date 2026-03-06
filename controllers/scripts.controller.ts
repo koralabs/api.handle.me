@@ -12,37 +12,37 @@ const HAL_HANDLE_MATCHERS: {
     {
         type: ScriptType.HAL_MINT_PROXY,
         legacyHandles: ['hal_mnt_prxy@handle_contract'],
-        futurePattern: /^hal[-_]?mint[-_]?proxy(\d+)@handlecontracts$/i
+        futurePattern: /^hal[-_]?mint[-_]?proxy(\d+)@handlecontract$/i
     },
     {
         type: ScriptType.HAL_MINTING_DATA,
         legacyHandles: ['hal_mnt_data@handle_contract'],
-        futurePattern: /^hal[-_]?minting[-_]?data(\d+)@handlecontracts$/i
+        futurePattern: /^hal[-_]?minting[-_]?data(\d+)@handlecontract$/i
     },
     {
         type: ScriptType.HAL_ORDERS_SPEND,
         legacyHandles: ['hal_ord_spnd@handle_contract'],
-        futurePattern: /^hal[-_]?orders[-_]?spend(\d+)@handlecontracts$/i
+        futurePattern: /^hal[-_]?orders[-_]?spend(\d+)@handlecontract$/i
     },
     {
         type: ScriptType.HAL_REF_SPEND_PROXY,
         legacyHandles: ['hal_rf_sd_px@handle_contract'],
-        futurePattern: /^hal[-_]?ref[-_]?spend[-_]?proxy(\d+)@handlecontracts$/i
+        futurePattern: /^hal[-_]?ref[-_]?spend[-_]?proxy(\d+)@handlecontract$/i
     },
     {
         type: ScriptType.HAL_REF_SPEND,
         legacyHandles: ['hal_ref_spnd@handle_contract'],
-        futurePattern: /^hal[-_]?ref[-_]?spend(\d+)@handlecontracts$/i
+        futurePattern: /^hal[-_]?ref[-_]?spend(\d+)@handlecontract$/i
     },
     {
         type: ScriptType.HAL_ROYALTY_SPEND,
         legacyHandles: ['hal_roy_spnd@handle_contract'],
-        futurePattern: /^hal[-_]?royalty[-_]?spend(\d+)@handlecontracts$/i
+        futurePattern: /^hal[-_]?royalty[-_]?spend(\d+)@handlecontract$/i
     },
     {
         type: ScriptType.HAL_MINT,
         legacyHandles: ['hal_mnt@handle_contract'],
-        futurePattern: /^hal[-_]?mint(\d+)@handlecontracts$/i
+        futurePattern: /^hal[-_]?mint(\d+)@handlecontract$/i
     }
 ];
 
@@ -112,7 +112,7 @@ const loadHandleBackedScripts = (req: Request<any>): { [scriptAddress: string]: 
     const handleNames = new Set(
         Array.from(rawHandleNames ?? [])
             .map((handleName) => `${handleName}`)
-            .filter((handleName) => handleName.includes('@handle_contract') || handleName.includes('@handlecontracts'))
+            .filter((handleName) => handleName.includes('@handle_contract') || handleName.includes('@handlecontract'))
     );
 
     const matchesByType = new Map<ScriptType, { handle: StoredHandle; ordinal: number }[]>();
