@@ -107,7 +107,7 @@ const loadHandleBackedScripts = (req: Request<any>): { [scriptAddress: string]: 
         return {};
     }
 
-    const handleRepo = new HandlesRepository(registry.handlesStore());
+    const handleRepo = new HandlesRepository(new registry.handlesStore());
     const rawHandleNames = handleRepo['store']?.getKeysFromIndex?.(IndexNames.HANDLE);
     const handleNames = new Set(
         Array.from(rawHandleNames ?? [])
