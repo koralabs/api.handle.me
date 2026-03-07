@@ -15,6 +15,7 @@ jest.mock('ioredis', () => ({
         client.exists ??= jest.fn().mockResolvedValue(0);
         client.type ??= jest.fn().mockResolvedValue('none');
         client.callBuffer ??= jest.fn().mockResolvedValue(Buffer.from(''));
+        client.call ??= jest.fn().mockResolvedValue(1);
         client.pttl ??= jest.fn().mockResolvedValue(0);
         client.restore ??= jest.fn().mockResolvedValue('OK');
         mockConstructedClients.push(client);
@@ -97,7 +98,7 @@ describe('lambdas/valkeyutility', () => {
                 .mockResolvedValue(undefined),
             pttl: jest.fn().mockResolvedValue(1200)
         };
-        const target = {
+        const target: any = {
             restore: jest.fn().mockResolvedValue('OK')
         };
         mockRedisClients.push(source, target);
@@ -108,19 +109,20 @@ describe('lambdas/valkeyutility', () => {
             action: 'copy_namespace',
             network: 'preview',
             sourceHost: 'source.cache',
-            targetHost: 'target.cache',
+            targetHost: 'source.cache',
             sourceTls: false,
             targetTls: false
         });
 
         expect(mockConstructedClients[0].options).toEqual(expect.objectContaining({ host: 'source.cache', tls: undefined }));
-        expect(mockConstructedClients[1].options).toEqual(expect.objectContaining({ host: 'target.cache', tls: undefined }));
-        expect(target.restore.mock.calls.map(([key]) => key).sort()).toEqual([
+        expect(mockConstructedClients[1].options).toEqual(expect.objectContaining({ host: 'source.cache', tls: undefined }));
+        expect(target.call.mock.calls.map((call: any[]) => call[2]).sort()).toEqual([
             '{api:preview}:handles:alice',
             '{api:preview}:metrics',
             '{api:preview}:metrics-cache',
             '{api:preview}:scanner:recovery'
         ]);
+        expect(target.restore).not.toHaveBeenCalled();
         expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"copied":4'));
     });
 
@@ -132,7 +134,7 @@ describe('lambdas/valkeyutility', () => {
             callBuffer: jest.fn().mockResolvedValue(Buffer.from('alice')),
             pttl: jest.fn().mockResolvedValue(1200)
         };
-        const target = {
+        const target: any = {
             restore: jest.fn().mockResolvedValue('OK')
         };
         mockRedisClients.push(source, target);
@@ -143,15 +145,45 @@ describe('lambdas/valkeyutility', () => {
             action: 'copy_namespace',
             network: 'preview',
             sourceHost: 'source.cache',
-            targetHost: 'target.cache',
+            targetHost: 'source.cache',
             sourceTls: false,
             targetTls: false,
             includeTargetKeys: false
         });
 
         expect(source.scan).toHaveBeenCalledTimes(1);
-        expect(target.restore).toHaveBeenCalledTimes(1);
+        expect(target.call).toHaveBeenCalledTimes(1);
         expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"includeTargetKeys":false'));
+    });
+
+    it('uses dump and restore when copying across different cache hosts', async () => {
+        const source = {
+            scan: jest
+                .fn()
+                .mockResolvedValueOnce(['0', ['{root}:handles:alice']])
+                .mockResolvedValueOnce(['0', []]),
+            exists: jest.fn().mockResolvedValue(0),
+            type: jest.fn().mockResolvedValue('string'),
+            callBuffer: jest.fn().mockResolvedValue(Buffer.from('alice')),
+            pttl: jest.fn().mockResolvedValue(1200)
+        };
+        const target: any = {
+            restore: jest.fn().mockResolvedValue('OK')
+        };
+        mockRedisClients.push(source, target);
+
+        const lambda = await loadLambda();
+        await lambda.handler({
+            action: 'copy_namespace',
+            network: 'preview',
+            sourceHost: 'source.cache',
+            targetHost: 'target.cache',
+            sourceTls: false,
+            targetTls: false
+        });
+
+        expect(target.restore).toHaveBeenCalledWith('{api:preview}:handles:alice', 1200, expect.any(Buffer), 'REPLACE');
+        expect(target.call).not.toHaveBeenCalled();
     });
 
     it('reports invalid copy requests instead of touching redis', async () => {

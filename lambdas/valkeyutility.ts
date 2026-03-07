@@ -79,6 +79,13 @@ const createClient = ({ host, port, password, db, tls }: RedisConfig) =>
         tls: tls ? {} : undefined
     });
 
+const isSameRedisTarget = (source: RedisConfig, target: RedisConfig) =>
+    source.host == target.host &&
+    source.port == target.port &&
+    source.db == target.db &&
+    source.password == target.password &&
+    source.tls == target.tls;
+
 const collectMatchingKeys = async (client: Redis, pattern: string, scanCount: number) => {
     const keys = new Set<string>();
     let cursor = '0';
@@ -115,10 +122,15 @@ const mapTargetKey = (sourceKey: string, network: string, sourcePrefix: string) 
     return undefined;
 };
 
-const copyKey = async (source: Redis, target: Redis, sourceKey: string, targetKey: string, dryRun: boolean) => {
+const copyKey = async (source: Redis, target: Redis, sourceKey: string, targetKey: string, dryRun: boolean, useServerCopy: boolean) => {
     const type = await source.type(sourceKey);
     if (type === 'none') return { status: 'missing', type };
     if (dryRun) return { status: 'dry-run', type };
+
+    if (useServerCopy) {
+        await target.call('COPY', sourceKey, targetKey, 'REPLACE');
+        return { status: 'copied', type };
+    }
 
     const payload = await source.callBuffer('DUMP', sourceKey) as Buffer;
     const ttl = await source.pttl(sourceKey);
@@ -145,8 +157,11 @@ const copyNamespace = async (event: ValkeyCopyEvent) => {
     const scanCount = toInt(event.scanCount, 1000);
     const includeTargetKeys = toBoolean(event.includeTargetKeys, true);
     const dryRun = toBoolean(event.dryRun, false);
-    const source = createClient(getRedisConfig(event, 'source'));
-    const target = createClient(getRedisConfig(event, 'target'));
+    const sourceConfig = getRedisConfig(event, 'source');
+    const targetConfig = getRedisConfig(event, 'target');
+    const useServerCopy = isSameRedisTarget(sourceConfig, targetConfig);
+    const source = createClient(sourceConfig);
+    const target = createClient(targetConfig);
 
     await source.connect();
     await target.connect();
@@ -160,6 +175,7 @@ const copyNamespace = async (event: ValkeyCopyEvent) => {
             targetHost: target.options.host,
             sourceKeys: sourceKeys.length,
             includeTargetKeys,
+            useServerCopy,
             copied: 0,
             skipped: 0,
             missing: 0,
@@ -177,7 +193,7 @@ const copyNamespace = async (event: ValkeyCopyEvent) => {
 
             if (summary.sample.length < 10) summary.sample.push({ sourceKey, targetKey });
 
-            const result = await copyKey(source, target, sourceKey, targetKey, dryRun);
+            const result = await copyKey(source, target, sourceKey, targetKey, dryRun, useServerCopy);
             summary.byType[result.type] = (summary.byType[result.type] ?? 0) + 1;
 
             if (result.status === 'missing') summary.missing += 1;
