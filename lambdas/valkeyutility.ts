@@ -1,5 +1,4 @@
 import Redis from 'ioredis';
-import { getApiCacheTag, getApiMetricsKey } from '../stores/redis/keys';
 
 const LEGACY_GLOBAL_KEYS = ['metrics', 'scanner:lease', 'scanner:recovery'];
 
@@ -30,6 +29,12 @@ type RedisConfig = {
 };
 
 const jsonReplacer = (_: string, value: any) => (typeof value === 'bigint' ? value.toString() : value);
+
+const normalizeNetwork = (network = process.env.NETWORK || 'mainnet') => `${network}`.toLowerCase();
+
+const getApiCacheTag = (network = process.env.NETWORK || 'mainnet') => `{api:${normalizeNetwork(network)}}`;
+
+const getApiMetricsKey = (network = process.env.NETWORK || 'mainnet') => `${getApiCacheTag(network)}:metrics`;
 
 const toInt = (value: number | string | undefined, fallback: number) => {
     const parsed = Number(value);
