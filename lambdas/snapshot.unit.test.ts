@@ -1,3 +1,6 @@
+import { IndexNames } from '@koralabs/kora-labs-common';
+import { getApiIndexKey } from '../stores/redis/keys';
+
 const mockAwsSdk = () => {
     jest.doMock('@aws-sdk/client-s3', () => ({
         S3Client: jest.fn(() => ({ send: jest.fn().mockResolvedValue('ok') })),
@@ -45,8 +48,8 @@ describe('snapshot unit branches', () => {
             }),
             redisClientCall: jest.fn().mockImplementation(() => {
                 scanCall += 1;
-                if (scanCall === 1) return ['0', Array.from({ length: 10001 }, (_, i) => `{root}:utxo:${i}`)];
-                if (scanCall === 2) return ['0', Array.from({ length: 10001 }, (_, i) => `{root}:mint:${i}`)];
+                if (scanCall === 1) return ['0', Array.from({ length: 10001 }, (_, i) => getApiIndexKey(IndexNames.UTXO, i))];
+                if (scanCall === 2) return ['0', Array.from({ length: 10001 }, (_, i) => getApiIndexKey(IndexNames.MINT, i))];
                 return ['0', []];
             }),
             pipeline: jest.fn().mockImplementation((commands: CallableFunction) => {
@@ -93,8 +96,8 @@ describe('snapshot unit branches', () => {
             }),
             redisClientCall: jest.fn().mockImplementation(() => {
                 scanCall += 1;
-                if (scanCall === 1) return ['0', ['{root}:utxo:1']];
-                if (scanCall === 2) return ['0', ['{root}:mint:1']];
+                if (scanCall === 1) return ['0', [getApiIndexKey(IndexNames.UTXO, '1')]];
+                if (scanCall === 2) return ['0', [getApiIndexKey(IndexNames.MINT, '1')]];
                 return ['0', []];
             }),
             pipeline: jest.fn().mockImplementation((commands: CallableFunction) => {

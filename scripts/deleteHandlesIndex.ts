@@ -1,5 +1,6 @@
 import { IndexNames } from '@koralabs/kora-labs-common';
 import { RedisHandlesStore } from '../stores/redis';
+import { getApiIndexScanPattern } from '../stores/redis/keys';
 
 const redisHandleStore = new RedisHandlesStore();
 await redisHandleStore.initialize();
@@ -10,7 +11,7 @@ for (const indexName of Object.values(IndexNames)) {
     // Skip UTXO and MINT indexes
     if ([IndexNames.UTXO_SLOT, IndexNames.UTXO, IndexNames.MINT].includes(indexName)) continue;
     do {
-        const [nextCursor, keys] = (await redisHandleStore.redisClientCall('scan', cursor, { match: `{root}:${indexName}:*`, count: 1000 })) as [string, string[]];
+        const [nextCursor, keys] = (await redisHandleStore.redisClientCall('scan', cursor, { match: getApiIndexScanPattern(indexName), count: 1000 })) as [string, string[]];
         cursor = nextCursor;
 
         if (keys && keys.length > 0) {

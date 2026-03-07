@@ -2,6 +2,7 @@ import { AssetNameLabel, IndexNames, LockedLambdaReason, UTxOFunctionName } from
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { RedisHandlesStore } from '../stores/redis';
+import { getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
 import * as helpers from '../utils/helpers';
 
 jest.mock('../utils/helpers');
@@ -1505,7 +1506,7 @@ describe('Scanner lambda unit tests', () => {
 
     it('lambdaHandler runs recovery reindex when a recovery flag is present', async () => {
         const { handlesRepo, scannerModule, store } = setup();
-        store.redisClientCall('set', 'scanner:recovery', 'rollback');
+        store.redisClientCall('set', getApiScannerRecoveryKey(), 'rollback');
         handlesRepo.getMetrics.mockReturnValue({
             lockLambdas: LockedLambdaReason.UNLOCKED,
             indexSchemaVersion: 1,
@@ -1517,7 +1518,7 @@ describe('Scanner lambda unit tests', () => {
 
         expect(store.repopulateIndexesFromUTxOs).toHaveBeenCalledTimes(1);
         expect(handlesRepo.getStartingPoint).not.toHaveBeenCalled();
-        expect(store.redisClientCall('get', 'scanner:recovery')).toBeUndefined();
+        expect(store.redisClientCall('get', getApiScannerRecoveryKey())).toBeUndefined();
         expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
     });
 
@@ -1793,7 +1794,7 @@ describe('Scanner lambda unit tests', () => {
             return { unref: jest.fn() } as any;
         }) as any);
         store.redisClientCall.mockImplementation((cmd: string, ...args: any[]) => {
-            if (cmd === 'get' && args[0] === 'scanner:lease') return 'another-owner';
+            if (cmd === 'get' && args[0] === getApiScannerLeaseKey()) return 'another-owner';
             return originalRedisClientCall?.(cmd, ...args);
         });
 
@@ -1803,7 +1804,7 @@ describe('Scanner lambda unit tests', () => {
             setIntervalSpy.mockRestore();
         }
 
-        expect(store.redisClientCall).not.toHaveBeenCalledWith('pexpire', 'scanner:lease', expect.any(Number));
+        expect(store.redisClientCall).not.toHaveBeenCalledWith('pexpire', getApiScannerLeaseKey(), expect.any(Number));
     });
 
     it('handles lease release errors without failing the invocation', async () => {
@@ -1820,7 +1821,7 @@ describe('Scanner lambda unit tests', () => {
         const originalRedisClientCall = store.redisClientCall.getMockImplementation();
         const setIntervalSpy = jest.spyOn(global, 'setInterval').mockImplementation((() => ({ unref: jest.fn() }) as any) as any);
         store.redisClientCall.mockImplementation((cmd: string, ...args: any[]) => {
-            if (cmd === 'get' && args[0] === 'scanner:lease') {
+            if (cmd === 'get' && args[0] === getApiScannerLeaseKey()) {
                 throw new Error('release failed');
             }
             return originalRedisClientCall?.(cmd, ...args);

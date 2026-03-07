@@ -1,4 +1,5 @@
 import { GlideClient } from '@valkey/valkey-glide';
+import { getApiMetricsKey } from '../stores/redis/keys';
 
 const jsonReplacer = (_: string, value: any) => (typeof value === 'bigint' ? value.toString() : value);
 
@@ -41,7 +42,7 @@ const redisCall = async (command: string, args: any[]) => {
 
 export const handler = async () => {
     const command = 'hgetall';
-    const args = ['metrics'];
+    const args = [getApiMetricsKey()];
 
     try {
         const result = await redisCall(command, args);

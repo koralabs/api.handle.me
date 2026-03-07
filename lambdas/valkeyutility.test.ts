@@ -1,3 +1,5 @@
+import { getApiMetricsKey } from '../stores/redis/keys';
+
 jest.mock('@valkey/valkey-glide', () => ({
     GlideClient: {
         createClient: jest.fn()
@@ -49,7 +51,7 @@ describe('lambdas/valkeyutility', () => {
                 useTLS: false
             })
         );
-        expect(hgetall).toHaveBeenCalledWith('metrics');
+        expect(hgetall).toHaveBeenCalledWith(getApiMetricsKey());
         expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"count":"1"'));
     });
 

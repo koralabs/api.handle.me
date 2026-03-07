@@ -2,6 +2,7 @@ import { IndexNames, Logger, UTxOFunctionName } from '@koralabs/kora-labs-common
 import { deflateSync } from 'zlib';
 import { ORDERED_SLOTS } from '../../config/constants';
 import { RedisHandlesStore } from './index';
+import { getApiCacheKey, getApiMetricsKey } from './keys';
 import { Worker } from 'worker_threads';
 
 jest.mock('worker_threads', () => {
@@ -19,7 +20,7 @@ jest.mock('worker_threads', () => {
 describe('RedisHandlesStore critical path tests', () => {
     const originalFetch = global.fetch;
     const originalOrderedSlots = [...ORDERED_SLOTS];
-    const rootKey = (suffix: string) => `{root}:${suffix}`;
+    const rootKey = (suffix: string) => getApiCacheKey(suffix);
 
     afterEach(() => {
         global.fetch = originalFetch;
@@ -560,7 +561,7 @@ describe('RedisHandlesStore critical path tests', () => {
         (store as any).saveObjectToCache('custom:key', { count: 1, active: true, label: 'x' });
         expect(store.count()).toBe(9);
         expect(store.holderCount()).toBe(4);
-        expect(redisSpy).toHaveBeenCalledWith('hset', 'metrics', { currentSlot: '1', currentBlockHash: 'abc' });
+        expect(redisSpy).toHaveBeenCalledWith('hset', getApiMetricsKey(), { currentSlot: '1', currentBlockHash: 'abc' });
         expect(redisSpy).toHaveBeenCalledWith('hset', 'custom:key', { count: '1', active: 'true', label: 'x' });
     });
 
