@@ -226,6 +226,58 @@ describe('lambdas/valkeyutility', () => {
         expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"sourceMode":"namespaced_only"'));
     });
 
+    it('can rename legacy keys in place on a shared cache before cutover', async () => {
+        const target: any = {
+            scan: jest.fn().mockResolvedValueOnce(['0', ['{root}:handles:alice']]),
+            exists: jest
+                .fn()
+                .mockResolvedValueOnce(1)
+                .mockResolvedValueOnce(0)
+                .mockResolvedValueOnce(1),
+            eval: jest.fn().mockResolvedValue(['3', '0', 'string', '1', 'hash', '2'])
+        };
+        mockRedisClients.push(target);
+
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        const lambda = await loadLambda();
+        await lambda.handler({
+            action: 'rename_namespace',
+            network: 'mainnet',
+            sourceHost: 'shared.cache',
+            targetHost: 'shared.cache',
+            sourceTls: false,
+            targetTls: false
+        });
+
+        expect(mockConstructedClients).toHaveLength(1);
+        expect(target.eval).toHaveBeenCalledTimes(1);
+        expect(target.eval.mock.calls[0][1]).toBe(0);
+        expect(target.eval.mock.calls[0].slice(2).sort()).toEqual([
+            'metrics',
+            'scanner:recovery',
+            '{api:mainnet}:handles:alice',
+            '{api:mainnet}:metrics',
+            '{api:mainnet}:scanner:recovery',
+            '{root}:handles:alice'
+        ]);
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"renamed":3'));
+    });
+
+    it('rejects rename requests that span different cache hosts', async () => {
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        const lambda = await loadLambda();
+        await lambda.handler({
+            action: 'rename_namespace',
+            network: 'mainnet',
+            sourceHost: 'source.cache',
+            targetHost: 'target.cache',
+            sourceTls: false,
+            targetTls: false
+        });
+
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('rename_namespace requires sourceHost and targetHost to resolve to the same redis target'));
+    });
+
     it('reports invalid copy requests instead of touching redis', async () => {
         const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
         const lambda = await loadLambda();

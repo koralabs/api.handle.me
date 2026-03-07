@@ -25,9 +25,35 @@ for key_type, count in pairs(by_type) do
 end
 return result
 `;
+const SERVER_RENAME_LUA = `
+local renamed = 0
+local missing = 0
+local by_type = {}
+for i = 1, #ARGV, 2 do
+  local source = ARGV[i]
+  local target = ARGV[i + 1]
+  local key_type = redis.call('TYPE', source)['ok']
+  if key_type == 'none' then
+    missing = missing + 1
+  else
+    if redis.call('EXISTS', target) == 1 then
+      redis.call('DEL', target)
+    end
+    redis.call('RENAME', source, target)
+    renamed = renamed + 1
+    by_type[key_type] = (by_type[key_type] or 0) + 1
+  end
+end
+local result = { tostring(renamed), tostring(missing) }
+for key_type, count in pairs(by_type) do
+  table.insert(result, key_type)
+  table.insert(result, tostring(count))
+end
+return result
+`;
 
 type ValkeyCopyEvent = {
-    action?: 'copy_namespace';
+    action?: 'copy_namespace' | 'rename_namespace';
     sourceHost?: string;
     sourcePort?: number | string;
     sourcePassword?: string;
@@ -194,6 +220,47 @@ const copyKeysServerSide = async (target: Redis, pairs: Array<{ sourceKey: strin
     return summary;
 };
 
+const renameKeysServerSide = async (target: Redis, pairs: Array<{ sourceKey: string; targetKey: string }>) => {
+    const result = await target.eval(SERVER_RENAME_LUA, 0, ...pairs.flatMap(({ sourceKey, targetKey }) => [sourceKey, targetKey])) as string[];
+    const summary = {
+        renamed: Number(result[0] || 0),
+        missing: Number(result[1] || 0),
+        byType: {} as Record<string, number>
+    };
+
+    for (let index = 2; index < result.length; index += 2) {
+        summary.byType[result[index]] = Number(result[index + 1] || 0);
+    }
+
+    return summary;
+};
+
+const buildNamespacePairs = async (
+    source: Redis,
+    network: string,
+    sourcePrefix: string,
+    scanCount: number,
+    sourceMode: 'legacy_only' | 'namespaced_only' | 'all'
+) => {
+    const sourceKeys = await collectSourceKeys(source, network, sourcePrefix, scanCount, sourceMode);
+    const sample: Array<{ sourceKey: string; targetKey: string }> = [];
+    const pairs: Array<{ sourceKey: string; targetKey: string }> = [];
+    let skipped = 0;
+
+    for (const sourceKey of sourceKeys) {
+        const targetKey = mapTargetKey(sourceKey, network, sourcePrefix);
+        if (!targetKey) {
+            skipped += 1;
+            continue;
+        }
+
+        if (sample.length < 10) sample.push({ sourceKey, targetKey });
+        pairs.push({ sourceKey, targetKey });
+    }
+
+    return { sourceKeys, pairs, sample, skipped };
+};
+
 const inspectMetrics = async (event: ValkeyCopyEvent) => {
     const client = createClient(getRedisConfig(event, 'source'));
     await client.connect();
@@ -224,7 +291,7 @@ const copyNamespace = async (event: ValkeyCopyEvent) => {
     await target.connect();
 
     try {
-        const sourceKeys = await collectSourceKeys(source, network, sourcePrefix, scanCount, sourceMode);
+        const { sourceKeys, pairs, sample, skipped } = await buildNamespacePairs(source, network, sourcePrefix, scanCount, sourceMode);
         const summary = {
             action: 'copy_namespace',
             network,
@@ -235,26 +302,14 @@ const copyNamespace = async (event: ValkeyCopyEvent) => {
             sourceMode,
             useServerCopy,
             copied: 0,
-            skipped: 0,
+            skipped,
             missing: 0,
             dryRun,
-            sample: [] as Array<{ sourceKey: string; targetKey: string }>,
+            sample,
             byType: {} as Record<string, number>
         };
 
-        const pairs: Array<{ sourceKey: string; targetKey: string }> = [];
-
-        for (const sourceKey of sourceKeys) {
-            const targetKey = mapTargetKey(sourceKey, network, sourcePrefix);
-            if (!targetKey) {
-                summary.skipped += 1;
-                continue;
-            }
-
-            if (summary.sample.length < 10) summary.sample.push({ sourceKey, targetKey });
-
-            pairs.push({ sourceKey, targetKey });
-
+        for (const { sourceKey, targetKey } of pairs) {
             if (useServerCopy) continue;
 
             const result = await copyKey(source, target, sourceKey, targetKey, dryRun, useServerCopy);
@@ -287,10 +342,67 @@ const copyNamespace = async (event: ValkeyCopyEvent) => {
     }
 };
 
+const renameNamespace = async (event: ValkeyCopyEvent) => {
+    const network = `${event.network || ''}`.toLowerCase();
+    if (!network) throw new Error('network is required for action=rename_namespace');
+
+    const sourcePrefix = event.sourcePrefix ?? '{root}';
+    const scanCount = toInt(event.scanCount, 1000);
+    const dryRun = toBoolean(event.dryRun, false);
+    const sourceMode = normalizeSourceMode(event.sourceMode, false);
+    const sourceConfig = getRedisConfig(event, 'source');
+    const targetConfig = getRedisConfig(event, 'target');
+    if (!isSameRedisTarget(sourceConfig, targetConfig)) {
+        throw new Error('rename_namespace requires sourceHost and targetHost to resolve to the same redis target');
+    }
+
+    const target = createClient(targetConfig);
+    await target.connect();
+
+    try {
+        const { sourceKeys, pairs, sample, skipped } = await buildNamespacePairs(target, network, sourcePrefix, scanCount, sourceMode);
+        const summary = {
+            action: 'rename_namespace',
+            network,
+            targetHost: target.options.host,
+            sourceKeys: sourceKeys.length,
+            sourceMode,
+            renamed: 0,
+            skipped,
+            missing: 0,
+            dryRun,
+            sample,
+            byType: {} as Record<string, number>
+        };
+
+        if (dryRun) {
+            summary.renamed = pairs.length;
+        } else {
+            for (let index = 0; index < pairs.length; index += SERVER_COPY_BATCH_SIZE) {
+                const batch = pairs.slice(index, index + SERVER_COPY_BATCH_SIZE);
+                const result = await renameKeysServerSide(target, batch);
+                summary.renamed += result.renamed;
+                summary.missing += result.missing;
+                for (const [type, count] of Object.entries(result.byType)) {
+                    summary.byType[type] = (summary.byType[type] ?? 0) + count;
+                }
+            }
+        }
+
+        console.log(JSON.stringify(summary, jsonReplacer));
+    } finally {
+        target.disconnect();
+    }
+};
+
 export const handler = async (event: ValkeyCopyEvent = {}) => {
     try {
         if (event.action == 'copy_namespace') {
             await copyNamespace(event);
+            return;
+        }
+        if (event.action == 'rename_namespace') {
+            await renameNamespace(event);
             return;
         }
         await inspectMetrics(event);
