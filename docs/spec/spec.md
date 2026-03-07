@@ -94,6 +94,8 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 ### Utility & Internal
 - `POST /datum` CBOR/JSON encode/decode utility
 - `GET /scripts` network script catalog (`latest`, `type` query support)
+  - script entries are resolved from `<script_type><ordinal>@handlecontract` subhandles
+  - response keys are validator-hash-derived script addresses, while `refScriptAddress` points to the handle-held reference script UTxO address
 - `POST /mint` relay for subhandle minting service (currently rejects `handle_type=handle`)
 
 ## Search and Pagination Behavior

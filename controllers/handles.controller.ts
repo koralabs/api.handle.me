@@ -18,31 +18,31 @@ import { decodeCborToJson, DefaultTextFormat } from '@koralabs/kora-labs-common/
 import { NextFunction, Request, Response } from 'express';
 import { isDatumEndpointEnabled } from '../config';
 import { MAX_PAGINATED_RESULTS, MAX_TEXT_PLAIN_PAGINATED_RESULTS } from '../config/constants';
-import { getScript } from '../config/scripts';
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandleViewModel } from '../models/view/handle.view.model';
 import { HandlesRepository } from '../repositories/handlesRepository';
+import { getScriptByRefAddress } from '../services/scripts.service';
 
 type HandleSearchQueryParams = IGetAllQueryParams & { root_handle?: string };
 
 class HandlesController {
-    private static getScriptByAddress(address?: string): UTxO['script'] | undefined {
+    private static getScriptByAddress(req: Request<any>, address?: string): UTxO['script'] | undefined {
         if (!address) {
             return;
         }
 
-        const script = getScript(address);
+        const script = getScriptByRefAddress(req, address);
         if (script?.cbor && script?.type) {
             return script as unknown as UTxO['script'];
         }
     }
 
-    private static attachReferenceTokenScript(utxo: UTxO): UTxO {
+    private static attachReferenceTokenScript(req: Request<any>, utxo: UTxO): UTxO {
         if (utxo.script) {
             return utxo;
         }
 
-        utxo.script = HandlesController.getScriptByAddress(utxo.address);
+        utxo.script = HandlesController.getScriptByAddress(req, utxo.address);
 
         return utxo;
     }
@@ -232,7 +232,7 @@ class HandlesController {
             const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
             const refUtxo = handleRepo.getUTxO(handleData.handle?.reference_utxo)
             if (refUtxo) {
-                const reference_token = HandlesController.attachReferenceTokenScript(new UTxO(refUtxo));
+                const reference_token = HandlesController.attachReferenceTokenScript(req, new UTxO(refUtxo));
                 return { reference_token, code: handleData.code };
             }
         }
@@ -341,7 +341,7 @@ class HandlesController {
                 return;
             }
 
-            const script = handleData.handle.script ?? HandlesController.getScriptByAddress(handleData.handle.resolved_addresses?.ada);
+            const script = handleData.handle.script ?? HandlesController.getScriptByAddress(req, handleData.handle.resolved_addresses?.ada);
             if (!script) {
                 res.status(404).send({ message: 'Script not found' });
                 return;

@@ -935,6 +935,10 @@ paths:
       tags:
       - utils
       summary: List script metadata by network
+      description: |
+        Returns script metadata derived from subhandles under `@handlecontract`.
+        Response object keys are the script addresses derived from each validator hash.
+        `refScriptAddress` is the on-chain address of the handle that holds the reference script UTxO.
       parameters:
       - name: latest
         in: query
@@ -1647,7 +1651,7 @@ components:
           type: boolean
     Script:
       type: object
-      description: If known, the script/contract details that the UTxO is locked to, if there is one
+      description: Handle-backed script metadata resolved from `@handlecontract` subhandles
       properties:
         handle:
           type: string
@@ -1659,14 +1663,12 @@ components:
           type: string
         validatorHash:
           type: string
+        latest:
+          type: boolean
         type:
           type: string
           $ref: "#/components/schemas/ScriptType"
         cbor:
-          type: string
-        unoptimizedCbor:
-          type: string
-        datum:
           type: string
     SocialEntry:
       type: object

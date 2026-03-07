@@ -1,4 +1,4 @@
-import * as scriptsConfig from '../config/scripts';
+import * as scriptsService from '../services/scripts.service';
 import responseMiddleware from './response.middleware';
 
 describe('response middleware', () => {
@@ -7,10 +7,11 @@ describe('response middleware', () => {
     });
 
     it('adds script payload when endpoint and script lookup match', () => {
-        const getScriptSpy = jest.spyOn(scriptsConfig, 'getScript').mockReturnValue({ validatorHash: 'abc' } as any);
+        const getScriptSpy = jest.spyOn(scriptsService, 'getScriptByRefAddress').mockReturnValue({ validatorHash: 'abc' } as any);
         const originalJson = jest.fn();
         const req = {
-            url: '/handles/example/reference_token'
+            url: '/handles/example/reference_token',
+            app: {}
         } as any;
         const res = { json: originalJson } as any;
         const next = jest.fn();
@@ -18,16 +19,17 @@ describe('response middleware', () => {
         responseMiddleware(req, res, next);
         res.json({ address: 'addr', value: 1 });
 
-        expect(getScriptSpy).toHaveBeenCalledWith('addr');
+        expect(getScriptSpy).toHaveBeenCalledWith(req, 'addr');
         expect(originalJson).toHaveBeenCalledWith({ address: 'addr', value: 1, script: { validatorHash: 'abc' } });
         expect(next).toHaveBeenCalled();
     });
 
     it('keeps payload unchanged when script lookup returns nothing', () => {
-        jest.spyOn(scriptsConfig, 'getScript').mockReturnValue(undefined as any);
+        jest.spyOn(scriptsService, 'getScriptByRefAddress').mockReturnValue(undefined as any);
         const originalJson = jest.fn();
         const req = {
-            url: '/handles/example/utxo'
+            url: '/handles/example/utxo',
+            app: {}
         } as any;
         const res = { json: originalJson } as any;
 

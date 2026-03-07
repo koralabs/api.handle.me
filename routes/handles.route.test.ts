@@ -3,7 +3,7 @@ import * as cbor from '@koralabs/kora-labs-common/utils/cbor';
 import request from 'supertest';
 import App from '../app';
 import * as config from '../config';
-import * as scriptsConfig from '../config/scripts';
+import * as scriptsService from '../services/scripts.service';
 
 jest.mock('../services/ogmios/ogmios.service');
 
@@ -847,7 +847,7 @@ describe('Testing Handles Routes', () => {
         });
 
         it('should attach configured script when handle has no inline script', async () => {
-            jest.spyOn(scriptsConfig, 'getScript').mockReturnValue({
+            jest.spyOn(scriptsService, 'getScriptByRefAddress').mockReturnValue({
                 handle: 'pz_script_01',
                 handleHex: 'hex',
                 validatorHash: 'abc',
@@ -888,7 +888,7 @@ describe('Testing Handles Routes', () => {
         });
 
         it('should attach configured script when reference token utxo has no script', async () => {
-            jest.spyOn(scriptsConfig, 'getScript').mockReturnValue({
+            jest.spyOn(scriptsService, 'getScriptByRefAddress').mockReturnValue({
                 handle: 'pz_script_01',
                 handleHex: 'hex',
                 validatorHash: 'abc',
