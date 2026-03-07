@@ -1,6 +1,30 @@
 import Redis from 'ioredis';
 
 const LEGACY_GLOBAL_KEYS = ['metrics', 'scanner:lease', 'scanner:recovery'];
+const SERVER_COPY_BATCH_SIZE = 200;
+const SERVER_COPY_LUA = `
+local copied = 0
+local missing = 0
+local by_type = {}
+for i = 1, #ARGV, 2 do
+  local source = ARGV[i]
+  local target = ARGV[i + 1]
+  local key_type = redis.call('TYPE', source)['ok']
+  if key_type == 'none' then
+    missing = missing + 1
+  else
+    redis.call('COPY', source, target, 'REPLACE')
+    copied = copied + 1
+    by_type[key_type] = (by_type[key_type] or 0) + 1
+  end
+end
+local result = { tostring(copied), tostring(missing) }
+for key_type, count in pairs(by_type) do
+  table.insert(result, key_type)
+  table.insert(result, tostring(count))
+end
+return result
+`;
 
 type ValkeyCopyEvent = {
     action?: 'copy_namespace';
@@ -155,6 +179,21 @@ const copyKey = async (source: Redis, target: Redis, sourceKey: string, targetKe
     return { status: 'copied', type };
 };
 
+const copyKeysServerSide = async (target: Redis, pairs: Array<{ sourceKey: string; targetKey: string }>) => {
+    const result = await target.eval(SERVER_COPY_LUA, 0, ...pairs.flatMap(({ sourceKey, targetKey }) => [sourceKey, targetKey])) as string[];
+    const summary = {
+        copied: Number(result[0] || 0),
+        missing: Number(result[1] || 0),
+        byType: {} as Record<string, number>
+    };
+
+    for (let index = 2; index < result.length; index += 2) {
+        summary.byType[result[index]] = Number(result[index + 1] || 0);
+    }
+
+    return summary;
+};
+
 const inspectMetrics = async (event: ValkeyCopyEvent) => {
     const client = createClient(getRedisConfig(event, 'source'));
     await client.connect();
@@ -203,6 +242,8 @@ const copyNamespace = async (event: ValkeyCopyEvent) => {
             byType: {} as Record<string, number>
         };
 
+        const pairs: Array<{ sourceKey: string; targetKey: string }> = [];
+
         for (const sourceKey of sourceKeys) {
             const targetKey = mapTargetKey(sourceKey, network, sourcePrefix);
             if (!targetKey) {
@@ -212,11 +253,31 @@ const copyNamespace = async (event: ValkeyCopyEvent) => {
 
             if (summary.sample.length < 10) summary.sample.push({ sourceKey, targetKey });
 
+            pairs.push({ sourceKey, targetKey });
+
+            if (useServerCopy) continue;
+
             const result = await copyKey(source, target, sourceKey, targetKey, dryRun, useServerCopy);
             summary.byType[result.type] = (summary.byType[result.type] ?? 0) + 1;
 
             if (result.status === 'missing') summary.missing += 1;
             else summary.copied += 1;
+        }
+
+        if (useServerCopy) {
+            if (dryRun) {
+                summary.copied += pairs.length;
+            } else {
+                for (let index = 0; index < pairs.length; index += SERVER_COPY_BATCH_SIZE) {
+                    const batch = pairs.slice(index, index + SERVER_COPY_BATCH_SIZE);
+                    const result = await copyKeysServerSide(target, batch);
+                    summary.copied += result.copied;
+                    summary.missing += result.missing;
+                    for (const [type, count] of Object.entries(result.byType)) {
+                        summary.byType[type] = (summary.byType[type] ?? 0) + count;
+                    }
+                }
+            }
         }
 
         console.log(JSON.stringify(summary, jsonReplacer));

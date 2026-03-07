@@ -16,6 +16,7 @@ jest.mock('ioredis', () => ({
         client.type ??= jest.fn().mockResolvedValue('none');
         client.callBuffer ??= jest.fn().mockResolvedValue(Buffer.from(''));
         client.call ??= jest.fn().mockResolvedValue(1);
+        client.eval ??= jest.fn().mockResolvedValue(['0', '0']);
         client.pttl ??= jest.fn().mockResolvedValue(0);
         client.restore ??= jest.fn().mockResolvedValue('OK');
         mockConstructedClients.push(client);
@@ -99,6 +100,7 @@ describe('lambdas/valkeyutility', () => {
             pttl: jest.fn().mockResolvedValue(1200)
         };
         const target: any = {
+            eval: jest.fn().mockResolvedValue(['4', '0', 'string', '1', 'hash', '3']),
             restore: jest.fn().mockResolvedValue('OK')
         };
         mockRedisClients.push(source, target);
@@ -116,11 +118,17 @@ describe('lambdas/valkeyutility', () => {
 
         expect(mockConstructedClients[0].options).toEqual(expect.objectContaining({ host: 'source.cache', tls: undefined }));
         expect(mockConstructedClients[1].options).toEqual(expect.objectContaining({ host: 'source.cache', tls: undefined }));
-        expect(target.call.mock.calls.map((call: any[]) => call[2]).sort()).toEqual([
+        expect(target.eval).toHaveBeenCalledTimes(1);
+        expect(target.eval.mock.calls[0][1]).toBe(0);
+        expect(target.eval.mock.calls[0].slice(2).sort()).toEqual([
+            'metrics',
+            'scanner:recovery',
             '{api:preview}:handles:alice',
             '{api:preview}:metrics',
             '{api:preview}:metrics-cache',
-            '{api:preview}:scanner:recovery'
+            '{api:preview}:metrics-cache',
+            '{api:preview}:scanner:recovery',
+            '{root}:handles:alice'
         ]);
         expect(target.restore).not.toHaveBeenCalled();
         expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"copied":4'));
@@ -135,6 +143,7 @@ describe('lambdas/valkeyutility', () => {
             pttl: jest.fn().mockResolvedValue(1200)
         };
         const target: any = {
+            eval: jest.fn().mockResolvedValue(['1', '0', 'string', '1']),
             restore: jest.fn().mockResolvedValue('OK')
         };
         mockRedisClients.push(source, target);
@@ -152,7 +161,7 @@ describe('lambdas/valkeyutility', () => {
         });
 
         expect(source.scan).toHaveBeenCalledTimes(1);
-        expect(target.call).toHaveBeenCalledTimes(1);
+        expect(target.eval).toHaveBeenCalledTimes(1);
         expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"includeTargetKeys":false'));
     });
 
