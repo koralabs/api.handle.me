@@ -18,6 +18,7 @@ type ValkeyCopyEvent = {
     sourcePrefix?: string;
     scanCount?: number | string;
     includeTargetKeys?: boolean | string;
+    sourceMode?: 'legacy_only' | 'namespaced_only' | 'all';
     dryRun?: boolean | string;
 };
 
@@ -46,6 +47,14 @@ const toBoolean = (value: boolean | string | undefined, fallback: boolean) => {
     if (typeof value === 'boolean') return value;
     if (typeof value === 'string') return value.toLowerCase() === 'true';
     return fallback;
+};
+
+const normalizeSourceMode = (
+    value: ValkeyCopyEvent['sourceMode'] | undefined,
+    includeTargetKeys: boolean
+): 'legacy_only' | 'namespaced_only' | 'all' => {
+    if (value == 'legacy_only' || value == 'namespaced_only' || value == 'all') return value;
+    return includeTargetKeys ? 'all' : 'legacy_only';
 };
 
 const getRedisHost = () => {
@@ -97,12 +106,20 @@ const collectMatchingKeys = async (client: Redis, pattern: string, scanCount: nu
     return keys;
 };
 
-const collectSourceKeys = async (client: Redis, network: string, sourcePrefix: string, scanCount: number, includeTargetKeys: boolean) => {
+const collectSourceKeys = async (
+    client: Redis,
+    network: string,
+    sourcePrefix: string,
+    scanCount: number,
+    sourceMode: 'legacy_only' | 'namespaced_only' | 'all'
+) => {
     const targetTag = getApiCacheTag(network);
     const keys = new Set<string>();
 
-    for (const key of await collectMatchingKeys(client, `${sourcePrefix}:*`, scanCount)) keys.add(key);
-    if (includeTargetKeys) {
+    if (sourceMode != 'namespaced_only') {
+        for (const key of await collectMatchingKeys(client, `${sourcePrefix}:*`, scanCount)) keys.add(key);
+    }
+    if (sourceMode != 'legacy_only') {
         for (const key of await collectMatchingKeys(client, `${targetTag}:*`, scanCount)) keys.add(key);
     }
 
@@ -156,6 +173,7 @@ const copyNamespace = async (event: ValkeyCopyEvent) => {
     const sourcePrefix = event.sourcePrefix ?? '{root}';
     const scanCount = toInt(event.scanCount, 1000);
     const includeTargetKeys = toBoolean(event.includeTargetKeys, true);
+    const sourceMode = normalizeSourceMode(event.sourceMode, includeTargetKeys);
     const dryRun = toBoolean(event.dryRun, false);
     const sourceConfig = getRedisConfig(event, 'source');
     const targetConfig = getRedisConfig(event, 'target');
@@ -167,7 +185,7 @@ const copyNamespace = async (event: ValkeyCopyEvent) => {
     await target.connect();
 
     try {
-        const sourceKeys = await collectSourceKeys(source, network, sourcePrefix, scanCount, includeTargetKeys);
+        const sourceKeys = await collectSourceKeys(source, network, sourcePrefix, scanCount, sourceMode);
         const summary = {
             action: 'copy_namespace',
             network,
@@ -175,6 +193,7 @@ const copyNamespace = async (event: ValkeyCopyEvent) => {
             targetHost: target.options.host,
             sourceKeys: sourceKeys.length,
             includeTargetKeys,
+            sourceMode,
             useServerCopy,
             copied: 0,
             skipped: 0,
