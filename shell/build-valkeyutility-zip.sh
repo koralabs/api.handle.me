@@ -22,7 +22,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-VALKEY_GLIDE_VERSION="$(cd "$REPO_ROOT" && node -e "const lock=require('./package-lock.json'); const pkg=require('./package.json'); const v=lock?.packages?.['node_modules/@valkey/valkey-glide']?.version || (pkg.dependencies?.['@valkey/valkey-glide']||'').replace(/^[^0-9]*/, ''); if(!v) throw new Error('Unable to resolve @valkey/valkey-glide version'); process.stdout.write(v);")"
+IOREDIS_VERSION="$(cd "$REPO_ROOT" && node -e "const lock=require('./package-lock.json'); const pkg=require('./package.json'); const v=lock?.packages?.['node_modules/ioredis']?.version || (pkg.dependencies?.ioredis||'').replace(/^[^0-9]*/, ''); if(!v) throw new Error('Unable to resolve ioredis version'); process.stdout.write(v);")"
 
 mkdir -p "$WORKDIR/build" "$OUT_DIR"
 
@@ -33,7 +33,7 @@ cat > "$WORKDIR/package.json" <<JSON
   "private": true,
   "type": "commonjs",
   "dependencies": {
-    "@valkey/valkey-glide": "${VALKEY_GLIDE_VERSION}"
+    "ioredis": "${IOREDIS_VERSION}"
   }
 }
 JSON

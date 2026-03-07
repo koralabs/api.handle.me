@@ -1,13 +1,26 @@
 import { getApiMetricsKey } from '../stores/redis/keys';
 
-jest.mock('@valkey/valkey-glide', () => ({
-    GlideClient: {
-        createClient: jest.fn()
-    }
-}));
+const mockRedisClients: any[] = [];
+const mockConstructedClients: any[] = [];
 
-const getCreateClientMock = () =>
-    ((jest.requireMock('@valkey/valkey-glide') as { GlideClient: { createClient: jest.Mock } }).GlideClient.createClient);
+jest.mock('ioredis', () => ({
+    __esModule: true,
+    default: jest.fn().mockImplementation((options: any) => {
+        const client = mockRedisClients.shift() ?? {};
+        client.options = options;
+        client.connect ??= jest.fn().mockResolvedValue(undefined);
+        client.disconnect ??= jest.fn();
+        client.hgetall ??= jest.fn().mockResolvedValue({});
+        client.scan ??= jest.fn().mockResolvedValue(['0', []]);
+        client.exists ??= jest.fn().mockResolvedValue(0);
+        client.type ??= jest.fn().mockResolvedValue('none');
+        client.callBuffer ??= jest.fn().mockResolvedValue(Buffer.from(''));
+        client.pttl ??= jest.fn().mockResolvedValue(0);
+        client.restore ??= jest.fn().mockResolvedValue('OK');
+        mockConstructedClients.push(client);
+        return client;
+    })
+}));
 
 const loadLambda = async () => {
     let moduleRef: any;
@@ -28,69 +41,95 @@ const resetEnv = () => {
 describe('lambdas/valkeyutility', () => {
     beforeEach(() => {
         resetEnv();
+        mockRedisClients.length = 0;
+        mockConstructedClients.length = 0;
         jest.resetModules();
         jest.clearAllMocks();
     });
 
-    it('uses regional host, integer port, and stringifies bigint output', async () => {
+    it('reads metrics from the region-scoped cache config by default', async () => {
         process.env.AWS_REGION = 'us-west-2';
         process.env.REDIS_HOST_US_WEST_2 = 'redis.regional';
         process.env.REDIS_PORT = '6381';
         process.env.REDIS_USE_TLS = 'false';
 
-        const hgetall = jest.fn().mockResolvedValue({ count: 1n });
-        getCreateClientMock().mockResolvedValue({ hgetall });
+        const hgetall = jest.fn().mockResolvedValue({ count: '1' });
+        mockRedisClients.push({ hgetall });
 
         const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
         const lambda = await loadLambda();
         await lambda.handler();
 
-        expect(getCreateClientMock()).toHaveBeenCalledWith(
+        expect(mockConstructedClients[0].options).toEqual(
             expect.objectContaining({
-                addresses: [{ host: 'redis.regional', port: 6381 }],
-                useTLS: false
+                host: 'redis.regional',
+                port: 6381,
+                tls: undefined
             })
         );
+        expect(mockConstructedClients[0].connect).toHaveBeenCalled();
         expect(hgetall).toHaveBeenCalledWith(getApiMetricsKey());
-        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"count":"1"'));
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"command":"hgetall"'));
+        expect(mockConstructedClients[0].disconnect).toHaveBeenCalled();
     });
 
-    it('falls back to REDIS_HOST and default port when REDIS_PORT is invalid', async () => {
-        process.env.REDIS_HOST = 'redis.fallback';
-        process.env.REDIS_PORT = 'not-a-number';
-
-        const hgetall = jest.fn().mockResolvedValue({});
-        getCreateClientMock().mockResolvedValue({ hgetall });
-
-        const lambda = await loadLambda();
-        await lambda.handler();
-
-        expect(getCreateClientMock()).toHaveBeenCalledWith(
-            expect.objectContaining({
-                addresses: [{ host: 'redis.fallback', port: 6379 }]
-            })
-        );
-    });
-
-    it('logs unknown-command errors when the client does not expose the command', async () => {
-        getCreateClientMock().mockResolvedValue({});
+    it('copies legacy and global cache keys into the env namespace', async () => {
+        const source = {
+            scan: jest
+                .fn()
+                .mockResolvedValueOnce(['0', ['{root}:handles:alice']])
+                .mockResolvedValueOnce(['0', ['{api:preview}:metrics-cache']]),
+            exists: jest
+                .fn()
+                .mockResolvedValueOnce(1)
+                .mockResolvedValueOnce(0)
+                .mockResolvedValueOnce(1),
+            type: jest
+                .fn()
+                .mockResolvedValueOnce('string')
+                .mockResolvedValueOnce('hash')
+                .mockResolvedValueOnce('hash'),
+            callBuffer: jest
+                .fn()
+                .mockResolvedValueOnce(Buffer.from('alice'))
+                .mockResolvedValueOnce(Buffer.from('metrics'))
+                .mockResolvedValueOnce(Buffer.from('recovery'))
+                .mockResolvedValue(undefined),
+            pttl: jest.fn().mockResolvedValue(1200)
+        };
+        const target = {
+            restore: jest.fn().mockResolvedValue('OK')
+        };
+        mockRedisClients.push(source, target);
 
         const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
         const lambda = await loadLambda();
-        await lambda.handler();
-
-        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Unknown Valkey command: hgetall'));
-    });
-
-    it('logs raw thrown values when the redis call rejects with a non-Error value', async () => {
-        getCreateClientMock().mockResolvedValue({
-            hgetall: jest.fn().mockRejectedValue('plain-string-error')
+        await lambda.handler({
+            action: 'copy_namespace',
+            network: 'preview',
+            sourceHost: 'source.cache',
+            targetHost: 'target.cache',
+            sourceTls: false,
+            targetTls: false
         });
 
+        expect(mockConstructedClients[0].options).toEqual(expect.objectContaining({ host: 'source.cache', tls: undefined }));
+        expect(mockConstructedClients[1].options).toEqual(expect.objectContaining({ host: 'target.cache', tls: undefined }));
+        expect(target.restore.mock.calls.map(([key]) => key).sort()).toEqual([
+            '{api:preview}:handles:alice',
+            '{api:preview}:metrics',
+            '{api:preview}:metrics-cache',
+            '{api:preview}:scanner:recovery'
+        ]);
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"copied":4'));
+    });
+
+    it('reports invalid copy requests instead of touching redis', async () => {
         const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
         const lambda = await loadLambda();
-        await lambda.handler();
+        await lambda.handler({ action: 'copy_namespace', sourceHost: 'source.cache' });
 
-        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('plain-string-error'));
+        expect(mockConstructedClients).toHaveLength(0);
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('network is required'));
     });
 });
