@@ -123,6 +123,19 @@ describe('HandlesRepository query e2e', () => {
         expect((byType.handles as StoredHandle[])[0].name).toBe('v@taco');
     });
 
+    it('filters subhandles by root_handle in the indexed store', () => {
+        // Feature: `root_handle` should return only subhandles indexed beneath that root in the real store.
+        // Failure mode: the repository could ignore the subhandle index and return unrelated handles or roots.
+        // Negative control: if the seeded `v@taco` subhandle were not indexed under `taco`, this would return zero results.
+        const byRoot = repo.search(
+            new HandlePaginationModel(),
+            new HandleSearchModel({ root_handle: 'taco', handle_type: HandleType.VIRTUAL_SUBHANDLE } as any)
+        );
+
+        expect(byRoot.searchTotal).toBe(1);
+        expect((byRoot.handles as StoredHandle[])[0].name).toBe('v@taco');
+    });
+
     it('supports slot pagination and search term filtering', () => {
         const firstSlot = handlesFixture[0].updated_slot_number;
         const pageBySlot = repo.search(

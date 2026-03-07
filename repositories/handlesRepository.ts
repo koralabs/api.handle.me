@@ -130,20 +130,22 @@ export class HandlesRepository {
     }
 
     public search(pagination?: HandlePaginationModel, searchModel?: HandleSearchModel, namesOnly = false): { searchTotal: number, handles: (StoredHandle | string)[] } {
+        const searchFilters = searchModel as (HandleSearchModel & { root_handle?: string }) | undefined;
         const hasSearchFilters = Boolean(
-            searchModel?.characters ||
-                searchModel?.length ||
-                searchModel?.rarity ||
-                searchModel?.numeric_modifiers ||
-                searchModel?.holder_address ||
-                searchModel?.og ||
-                searchModel?.personalized ||
-                searchModel?.handle_type
+            searchFilters?.characters ||
+                searchFilters?.length ||
+                searchFilters?.rarity ||
+                searchFilters?.numeric_modifiers ||
+                searchFilters?.holder_address ||
+                searchFilters?.root_handle ||
+                searchFilters?.og ||
+                searchFilters?.personalized ||
+                searchFilters?.handle_type
         );
         const isUnfilteredPaginatedSearch =
             !hasSearchFilters &&
-            !searchModel?.search &&
-            !searchModel?.handles?.length &&
+            !searchFilters?.search &&
+            !searchFilters?.handles?.length &&
             !pagination?.slotNumber &&
             pagination?.sort !== 'random';
 
@@ -198,31 +200,32 @@ export class HandlesRepository {
         };
 
         // get handle name arrays for all the search parameters
-        const characterArray = checkEmptyResult(IndexNames.CHARACTER, searchModel?.characters);
+        const characterArray = checkEmptyResult(IndexNames.CHARACTER, searchFilters?.characters);
         let lengthArray: string[] = [];
-        if (searchModel?.length?.includes('-')) {
-            for (let i = parseInt(searchModel?.length.split('-')[0]); i <= parseInt(searchModel?.length.split('-')[1]); i++) {
+        if (searchFilters?.length?.includes('-')) {
+            for (let i = parseInt(searchFilters?.length.split('-')[0]); i <= parseInt(searchFilters?.length.split('-')[1]); i++) {
                 lengthArray = lengthArray.concat([...this.store.getValuesFromIndexedSet(IndexNames.LENGTH, i) ?? new Set<string>()]);
             }
             if (lengthArray.length === 0) lengthArray = [EMPTY];
         } else {
-            lengthArray = checkEmptyResult(IndexNames.LENGTH, parseInt(searchModel?.length || '0'));
+            lengthArray = checkEmptyResult(IndexNames.LENGTH, parseInt(searchFilters?.length || '0'));
         }
-        const pzArray = searchModel?.personalized ? checkEmptyResult(IndexNames.PERSONALIZED, 1) : [];
-        const typeArray = checkEmptyResult(IndexNames.HANDLE_TYPE, searchModel?.handle_type);
-        const rarityArray = checkEmptyResult(IndexNames.RARITY, searchModel?.rarity);
-        const numericModifiersArray = checkEmptyResult(IndexNames.NUMERIC_MODIFIER, searchModel?.numeric_modifiers);
-        const ogArray = searchModel?.og ? checkEmptyResult(IndexNames.OG, 1) : [];
+        const pzArray = searchFilters?.personalized ? checkEmptyResult(IndexNames.PERSONALIZED, 1) : [];
+        const typeArray = checkEmptyResult(IndexNames.HANDLE_TYPE, searchFilters?.handle_type);
+        const rarityArray = checkEmptyResult(IndexNames.RARITY, searchFilters?.rarity);
+        const numericModifiersArray = checkEmptyResult(IndexNames.NUMERIC_MODIFIER, searchFilters?.numeric_modifiers);
+        const rootHandleArray = checkEmptyResult(IndexNames.SUBHANDLE, searchFilters?.root_handle);
+        const ogArray = searchFilters?.og ? checkEmptyResult(IndexNames.OG, 1) : [];
         const holderArray = (() => {
-            if (!searchModel?.holder_address) return [];
-            const holder = this.store.getValuesFromIndexedSet(IndexNames.HOLDER, searchModel?.holder_address) as HolderHandleNames | undefined;
+            if (!searchFilters?.holder_address) return [];
+            const holder = this.store.getValuesFromIndexedSet(IndexNames.HOLDER, searchFilters?.holder_address) as HolderHandleNames | undefined;
             return holder?.size ? [...holder] : [EMPTY];
         })();
 
         let handleNames:string[] | undefined = undefined;
         
         // filter out any empty arrays
-        const filtered = [characterArray, lengthArray, typeArray, rarityArray, numericModifiersArray, holderArray, ogArray, pzArray].filter((a) => a?.length)
+        const filtered = [characterArray, lengthArray, typeArray, rarityArray, numericModifiersArray, holderArray, rootHandleArray, ogArray, pzArray].filter((a) => a?.length)
         if (filtered.length == 0) {
             // This means request had no filtered terms, so we need to start with the whole set
             handleNames = Array.from(this.store.getKeysFromIndex(IndexNames.HANDLE)).map((handle) => handle as string);
@@ -240,9 +243,9 @@ export class HandlesRepository {
         }
 
         // Check for the searched term or handle list
-        handleNames = handleNames.filter((name) => !searchModel?.handles || searchModel?.handles.includes(name));
-        if (searchModel?.search) {
-            const handlesNeedingHexMatch = handleNames.filter((name) => !name.includes(searchModel.search!));
+        handleNames = handleNames.filter((name) => !searchFilters?.handles || searchFilters?.handles.includes(name));
+        if (searchFilters?.search) {
+            const handlesNeedingHexMatch = handleNames.filter((name) => !name.includes(searchFilters.search!));
             const matchesByHex = new Set<string>();
             const fieldLookupStore = this.store as IApiStore & {
                 getHashFieldFromIndex?: (index: IndexNames, key: string | number, field: string) => string | undefined;
@@ -266,12 +269,12 @@ export class HandlesRepository {
                 })();
                 handleChunk.forEach((handleName, index) => {
                     const handleHex = handleHexes[index];
-                    if (checkSearch(handleName, searchModel.search, handleHex)) {
+                    if (checkSearch(handleName, searchFilters.search, handleHex)) {
                         matchesByHex.add(handleName);
                     }
                 });
             }
-            handleNames = handleNames.filter((name) => name.includes(searchModel.search!) || matchesByHex.has(name));
+            handleNames = handleNames.filter((name) => name.includes(searchFilters.search!) || matchesByHex.has(name));
         }
         const searchTotal = handleNames.length;
 

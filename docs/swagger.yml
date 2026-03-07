@@ -150,6 +150,12 @@ paths:
             - virtual_subhandle
             - nft_subhandle
             - handle
+      - name: root_handle
+        in: query
+        description: Filter subhandles by their exact root handle name
+        required: false
+        schema:
+          type: string
       - name: records_per_page
         in: query
         description: Number of Handles to return per page in paginated results. Maximum of 250 for `application/json` and 50000 for `text/plain`.

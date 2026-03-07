@@ -743,6 +743,47 @@ describe('HandlesRepository branch tests', () => {
         ).toEqual({ searchTotal: 0, handles: [] });
     });
 
+    it('intersects root_handle with other search filters and explicit handle lists', () => {
+        // Feature: `root_handle` should reuse the subhandle index and compose with other `/handles` filters.
+        // Failure mode: root filtering could be applied separately or not at all, leaking subhandles from other roots.
+        // Negative control: changing the SUBHANDLE set below to omit `alpha@root` would make this expectation fail.
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        store.getValuesFromIndexedSet.mockImplementation((index: IndexNames, key: string | number) => {
+            if (index === IndexNames.SUBHANDLE && key === 'root') return new Set(['alpha@root', 'beta@root']);
+            if (index === IndexNames.CHARACTER && key === 'letters') return new Set(['alpha@root', 'gamma@elsewhere']);
+            return undefined;
+        });
+
+        expect(
+            repo.search(
+                { page: 1, handlesPerPage: 10, sort: 'asc' } as any,
+                { root_handle: 'root', characters: 'letters', handles: ['alpha@root', 'gamma@elsewhere'] } as any,
+                true
+            )
+        ).toEqual({ searchTotal: 1, handles: ['alpha@root'] });
+    });
+
+    it('returns empty results when the requested root_handle has no indexed subhandles', () => {
+        // Feature: `root_handle` should return no matches when that root has no subhandle index entries.
+        // Failure mode: missing root indexes could accidentally fall back to an unfiltered handle scan.
+        // Negative control: adding any handle name to the mocked SUBHANDLE set would change this result.
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        store.getValuesFromIndexedSet.mockImplementation((index: IndexNames) => {
+            if (index === IndexNames.SUBHANDLE) return undefined;
+            return new Set(['alpha']);
+        });
+
+        expect(
+            repo.search(
+                { page: 1, handlesPerPage: 10, sort: 'asc' } as any,
+                { root_handle: 'missing-root' } as any,
+                true
+            )
+        ).toEqual({ searchTotal: 0, handles: [] });
+    });
+
     it('handles length-range search with sparse indexed length buckets', () => {
         const store = buildStoreMock();
         const repo = new HandlesRepository(store);

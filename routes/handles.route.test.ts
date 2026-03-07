@@ -416,6 +416,22 @@ describe('Testing Handles Routes', () => {
             expect(response.headers['x-handles-search-total']).toEqual('999');
         });
 
+        it('should forward root_handle with other search filters', async () => {
+            // Feature: `/handles` should accept `root_handle` alongside other filters when searching subhandles.
+            // Failure mode: the controller could drop `root_handle`, returning matches from unrelated roots.
+            // Negative control: if `root_handle` were omitted from the search model, the expectation below would fail.
+            const response = await request(app?.getServer()).get('/handles?root_handle=handle&characters=letters&search=burr');
+
+            expect(response.status).toEqual(200);
+            const repoInstance = MockedHandlesRepository.mock.results.at(-1)?.value;
+            const [, searchModel] = repoInstance.search.mock.calls.at(-1);
+            expect(searchModel).toEqual(expect.objectContaining({
+                root_handle: 'handle',
+                characters: 'letters',
+                search: 'burr'
+            }));
+        });
+
         it('should default text/plain records_per_page to 50000', async () => {
             const response = await request(app?.getServer()).get('/handles?sort=asc').set('Accept', 'text/plain');
 
@@ -551,6 +567,25 @@ describe('Testing Handles Routes', () => {
             expect(response.status).toEqual(200);
             expect(response.text).toEqual('burritos');
             expect(response.headers['x-handles-search-total']).toEqual('999');
+        });
+
+        it('should combine root_handle with list body filtering', async () => {
+            // Feature: `/handles/list` should intersect explicit handle lists with the `root_handle` filter.
+            // Failure mode: the batch lookup path could ignore `root_handle` and return handles from outside the root.
+            // Negative control: if `root_handle` were not forwarded, the asserted search model would not contain it.
+            const response = await request(app?.getServer())
+                .post('/handles/list?root_handle=handle&numeric_modifiers=decimal')
+                .set('Content-Type', 'application/json')
+                .send(['burritos']);
+
+            expect(response.status).toEqual(200);
+            const repoInstance = MockedHandlesRepository.mock.results.at(-1)?.value;
+            const [, searchModel] = repoInstance.search.mock.calls.at(-1);
+            expect(searchModel).toEqual(expect.objectContaining({
+                root_handle: 'handle',
+                numeric_modifiers: 'decimal',
+                handles: ['burritos']
+            }));
         });
 
         it('should default text/plain list records_per_page to 50000', async () => {

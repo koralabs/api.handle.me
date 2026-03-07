@@ -98,7 +98,8 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 
 ## Search and Pagination Behavior
 - Handles endpoints support:
-  - `search`, `characters`, `length`, `rarity`, `numeric_modifiers`, `og`, `personalized`, `handle_type`, `holder_address`
+  - `search`, `characters`, `length`, `rarity`, `numeric_modifiers`, `og`, `personalized`, `handle_type`, `holder_address`, `root_handle`
+  - `root_handle` limits results to subhandles indexed under that exact root handle and composes with the other filters above
   - pagination via `records_per_page` + `page` OR `slot_number`
   - `records_per_page` maximum is `250` for `application/json` and `50000` for `text/plain` on `/handles` and `/handles/list`
   - default page size is `100` for `application/json` and `50000` for `text/plain`

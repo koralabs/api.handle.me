@@ -23,6 +23,8 @@ import { IRegistry } from '../interfaces/registry.interface';
 import { HandleViewModel } from '../models/view/handle.view.model';
 import { HandlesRepository } from '../repositories/handlesRepository';
 
+type HandleSearchQueryParams = IGetAllQueryParams & { root_handle?: string };
+
 class HandlesController {
     private static getScriptByAddress(address?: string): UTxO['script'] | undefined {
         if (!address) {
@@ -82,7 +84,7 @@ class HandlesController {
     }
 
     public static parseQueryAndSearchHandles(req: Request<Request, {}, {}, IGetAllQueryParams>, handleRepo: HandlesRepository, handles?: ISearchBody) {
-        const { records_per_page, page, characters, length, rarity, numeric_modifiers, slot_number, search: searchQuery, holder_address, og, handle_type, sort, personalized } = req.query;
+        const { records_per_page, page, characters, length, rarity, numeric_modifiers, slot_number, search: searchQuery, holder_address, og, handle_type, sort, personalized, root_handle } = req.query as HandleSearchQueryParams;
         const namesOnly = req.headers?.accept?.startsWith('text/plain') ?? false;
         const maxRecordsPerPage = namesOnly ? MAX_TEXT_PLAIN_PAGINATED_RESULTS : MAX_PAGINATED_RESULTS;
         HandlesController.validateRecordsPerPage(records_per_page, maxRecordsPerPage);
@@ -95,11 +97,12 @@ class HandlesController {
             numeric_modifiers,
             search: searchQuery,
             holder_address,
+            root_handle,
             personalized,
             handle_type,            
             og,
             handles
-        });
+        } as ConstructorParameters<typeof HandleSearchModel>[0] & { root_handle?: string });
 
         const recordsPerPageAsNumber = Number(effectiveRecordsPerPage);
         const bypassCommonLimitForTextResponses = namesOnly && Number.isFinite(recordsPerPageAsNumber) && recordsPerPageAsNumber > 1000;
