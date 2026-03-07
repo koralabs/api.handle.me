@@ -124,6 +124,36 @@ describe('lambdas/valkeyutility', () => {
         expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"copied":4'));
     });
 
+    it('can skip already-namespaced keys when rerunning a same-cache seed', async () => {
+        const source = {
+            scan: jest.fn().mockResolvedValueOnce(['0', ['{root}:handles:alice']]),
+            exists: jest.fn().mockResolvedValue(0),
+            type: jest.fn().mockResolvedValue('string'),
+            callBuffer: jest.fn().mockResolvedValue(Buffer.from('alice')),
+            pttl: jest.fn().mockResolvedValue(1200)
+        };
+        const target = {
+            restore: jest.fn().mockResolvedValue('OK')
+        };
+        mockRedisClients.push(source, target);
+
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        const lambda = await loadLambda();
+        await lambda.handler({
+            action: 'copy_namespace',
+            network: 'preview',
+            sourceHost: 'source.cache',
+            targetHost: 'target.cache',
+            sourceTls: false,
+            targetTls: false,
+            includeTargetKeys: false
+        });
+
+        expect(source.scan).toHaveBeenCalledTimes(1);
+        expect(target.restore).toHaveBeenCalledTimes(1);
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"includeTargetKeys":false'));
+    });
+
     it('reports invalid copy requests instead of touching redis', async () => {
         const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
         const lambda = await loadLambda();

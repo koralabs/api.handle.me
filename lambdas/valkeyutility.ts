@@ -17,6 +17,7 @@ type ValkeyCopyEvent = {
     network?: string;
     sourcePrefix?: string;
     scanCount?: number | string;
+    includeTargetKeys?: boolean | string;
     dryRun?: boolean | string;
 };
 
@@ -89,12 +90,14 @@ const collectMatchingKeys = async (client: Redis, pattern: string, scanCount: nu
     return keys;
 };
 
-const collectSourceKeys = async (client: Redis, network: string, sourcePrefix: string, scanCount: number) => {
+const collectSourceKeys = async (client: Redis, network: string, sourcePrefix: string, scanCount: number, includeTargetKeys: boolean) => {
     const targetTag = getApiCacheTag(network);
     const keys = new Set<string>();
 
     for (const key of await collectMatchingKeys(client, `${sourcePrefix}:*`, scanCount)) keys.add(key);
-    for (const key of await collectMatchingKeys(client, `${targetTag}:*`, scanCount)) keys.add(key);
+    if (includeTargetKeys) {
+        for (const key of await collectMatchingKeys(client, `${targetTag}:*`, scanCount)) keys.add(key);
+    }
 
     for (const key of LEGACY_GLOBAL_KEYS) {
         if (await client.exists(key)) keys.add(key);
@@ -140,6 +143,7 @@ const copyNamespace = async (event: ValkeyCopyEvent) => {
 
     const sourcePrefix = event.sourcePrefix ?? '{root}';
     const scanCount = toInt(event.scanCount, 1000);
+    const includeTargetKeys = toBoolean(event.includeTargetKeys, true);
     const dryRun = toBoolean(event.dryRun, false);
     const source = createClient(getRedisConfig(event, 'source'));
     const target = createClient(getRedisConfig(event, 'target'));
@@ -148,13 +152,14 @@ const copyNamespace = async (event: ValkeyCopyEvent) => {
     await target.connect();
 
     try {
-        const sourceKeys = await collectSourceKeys(source, network, sourcePrefix, scanCount);
+        const sourceKeys = await collectSourceKeys(source, network, sourcePrefix, scanCount, includeTargetKeys);
         const summary = {
             action: 'copy_namespace',
             network,
             sourceHost: source.options.host,
             targetHost: target.options.host,
             sourceKeys: sourceKeys.length,
+            includeTargetKeys,
             copied: 0,
             skipped: 0,
             missing: 0,
