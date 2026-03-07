@@ -6,6 +6,8 @@ export const getApiCacheTag = (network = NETWORK) => `{api:${normalizeNetwork(ne
 
 export const getApiCacheKey = (suffix: string, network = NETWORK) => `${getApiCacheTag(network)}:${suffix}`;
 
+export const getApiNamespaceScanPattern = (network = NETWORK) => `${getApiCacheTag(network)}:*`;
+
 export const getApiIndexRootKey = (index: IndexNames, network = NETWORK) => getApiCacheKey(index, network);
 
 export const getApiIndexKey = (index: IndexNames, key: string | number, network = NETWORK) => getApiCacheKey(`${index}:${key}`, network);

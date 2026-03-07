@@ -6,7 +6,7 @@ import { inflate } from 'zlib';
 import { DISABLE_HANDLES_SNAPSHOT, NODE_ENV } from '../../config';
 import { handleEraBoundaries, MAX_SETS_PER_PIPE, META_INDEXES, ORDERED_SLOTS } from '../../config/constants';
 import { getHandleNameFromAssetName } from '../../services/ogmios/utils';
-import { getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey } from './keys';
+import { getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey, getApiNamespaceScanPattern } from './keys';
 
 // const glideClient = await GlideClient.createClient({
 //       addresses: [{ host: 'https://localhost', port: 6379 }],
@@ -73,7 +73,7 @@ export class RedisHandlesStore implements IApiStore {
     }
 
     public destroy(): void {
-        this.redisClientCall('flushdb');
+        this.clearNamespace();
         this.redisClientCall('close');
         RedisHandlesStore._pipeline = undefined;
         if (RedisHandlesStore._worker.terminate) RedisHandlesStore._worker.terminate();
@@ -81,9 +81,8 @@ export class RedisHandlesStore implements IApiStore {
     }
 
     public rollBackToGenesis(): void {
-        Logger.log({ message: 'Calling FLUSHDB', category: LogCategory.INFO, event: 'this.rollBackToGenesis' });
-        // Clear all redis cache
-        this.redisClientCall('flushdb');
+        Logger.log({ message: 'Clearing scoped cache namespace', category: LogCategory.INFO, event: 'this.rollBackToGenesis' });
+        this.clearNamespace();
         RedisHandlesStore._pipeline = undefined;
     }
 
@@ -170,7 +169,7 @@ export class RedisHandlesStore implements IApiStore {
 
     public async tryPopulateFromS3UTxOs(utxoFunctions: UTxOFunctions): Promise<{ slot: number; id: string }> {
         const startTime = Date.now();
-        this.redisClientCall('flushdb');
+        this.clearNamespace();
         let id = handleEraBoundaries[NETWORK].id;
         let slot = handleEraBoundaries[NETWORK].slot;
         const currentUTxOSchemaVersion = this.getUTxOSchemaVersion();
@@ -447,6 +446,17 @@ export class RedisHandlesStore implements IApiStore {
     // #endregion
 
     // #region PRIVATE *******************************
+
+    private clearNamespace() {
+        let cursor = '0';
+        do {
+            const [nextCursor, keys] = (this.redisClientCall('scan', cursor, { match: getApiNamespaceScanPattern(), count: 1000 })) as [string, string[]];
+            cursor = nextCursor;
+            if (keys && keys.length > 0) {
+                this.redisClientCall('del', keys);
+            }
+        } while (cursor !== '0');
+    }
 
     private parseOrderedSlot(results: { score: number; element: GlideString }[]) {
         return results.reduce((acc: Map<number, ISlotHistory | string>, value: { score: number; element: GlideString }) => {

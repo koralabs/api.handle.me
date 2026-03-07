@@ -1,11 +1,12 @@
 import { IndexNames } from '@koralabs/kora-labs-common';
-import { extractApiIndexMember, getApiCacheKey, getApiCacheTag, getApiIndexKey, getApiIndexScanPattern, getApiMetricsKey, getApiScannerLeaseKey, getApiScannerRecoveryKey } from './keys';
+import { extractApiIndexMember, getApiCacheKey, getApiCacheTag, getApiIndexKey, getApiIndexScanPattern, getApiMetricsKey, getApiNamespaceScanPattern, getApiScannerLeaseKey, getApiScannerRecoveryKey } from './keys';
 
 describe('stores/redis/keys', () => {
     it('formats env-scoped hash tags and derived cache keys', () => {
         expect(getApiCacheTag('MAINNET')).toBe('{api:mainnet}');
         expect(getApiCacheKey('metrics', 'PREPROD')).toBe('{api:preprod}:metrics');
         expect(getApiMetricsKey('PREVIEW')).toBe('{api:preview}:metrics');
+        expect(getApiNamespaceScanPattern('PREVIEW')).toBe('{api:preview}:*');
         expect(getApiScannerLeaseKey('PREVIEW')).toBe('{api:preview}:scanner:lease');
         expect(getApiScannerRecoveryKey('MAINNET')).toBe('{api:mainnet}:scanner:recovery');
     });
