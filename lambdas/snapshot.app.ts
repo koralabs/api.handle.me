@@ -5,6 +5,7 @@ import stdOut from 'node:readline';
 import zlib from 'zlib';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { RedisHandlesStore } from '../stores/redis';
+import { extractApiIndexMember, getApiIndexScanPattern } from '../stores/redis/keys';
 process.env.ENABLE_OGMIOS_SCANNING = 'false';
 
 declare global {
@@ -62,7 +63,7 @@ const getRedisItems = async () => {
         utxoSchemaVersion = Number(metrics.utxoSchemaVersion);
 
         do {
-            const [nextCursor, keys] = redisHandleStore.redisClientCall('scan', cursor, { match: `{root}:${IndexNames.UTXO}:*`, count: 1000 }) as [string, string[]];
+            const [nextCursor, keys] = redisHandleStore.redisClientCall('scan', cursor, { match: getApiIndexScanPattern(IndexNames.UTXO), count: 1000 }) as [string, string[]];
             cursor = nextCursor;
 
             if (keys && keys.length > 0) {
@@ -73,11 +74,11 @@ const getRedisItems = async () => {
                     console.sameLine(`Progress: ${totalKeys.toLocaleString()} keys scanned (cursor: ${cursor})`);
                 }
 
-                // check if keys starts with ({root}:utxo_slot | {root}:utxo) and add to utxoKeys
+                // check if keys start with the env-scoped utxo prefix and add the member key
                 const pipelineResults: UTxOWithTxInfo[] = redisHandleStore.pipeline(() => {
                     for (const key of keys) {
-                        const keyParts = `${key}`.split(':');
-                        const utxoKey = keyParts[2];
+                        const utxoKey = extractApiIndexMember(`${key}`, IndexNames.UTXO);
+                        if (!utxoKey) continue;
                         redisHandleStore.getHashFromIndex(IndexNames.UTXO, utxoKey) as UTxOWithTxInfo | null;
                     }
                 });
@@ -89,7 +90,7 @@ const getRedisItems = async () => {
         } while (cursor !== '0');
 
         do {
-            const [nextCursor, keys] = redisHandleStore.redisClientCall('scan', cursor, { match: `{root}:${IndexNames.MINT}:*`, count: 1000 }) as [string, string[]];
+            const [nextCursor, keys] = redisHandleStore.redisClientCall('scan', cursor, { match: getApiIndexScanPattern(IndexNames.MINT), count: 1000 }) as [string, string[]];
             cursor = nextCursor;
 
             if (keys && keys.length > 0) {
@@ -100,23 +101,25 @@ const getRedisItems = async () => {
                     console.sameLine(`Progress: ${totalKeys.toLocaleString()} keys scanned (cursor: ${cursor})`);
                 }
 
-                // check if keys starts with ({root}:utxo_slot | {root}:utxo) and add to utxoKeys
+                // check if keys start with the env-scoped mint prefix and add the member key
                 const pipelineResults: (Set<string> | undefined)[] = redisHandleStore.pipeline(() => {
                     for (const key of keys) {
-                        const keyParts = `${key}`.split(':');
-                        const mintKey = keyParts[2];
+                        const mintKey = extractApiIndexMember(`${key}`, IndexNames.MINT);
+                        if (!mintKey) continue;
                         redisHandleStore.getValuesFromIndexedSet(IndexNames.MINT, mintKey);
                     }
                 });
                 // Logger.local('PIPELINE RESULTS LENGTH', pipelineResults, pipelineResults.length);
                 for (let i = 0; i < pipelineResults.length; i++) {
                     const item = pipelineResults[i];
+                    const mintKey = extractApiIndexMember(`${keys[i]}`, IndexNames.MINT);
+                    if (!mintKey) continue;
                     const filteredResults: MintingData[] = item
                         ? Array.from(item)
                               .map((md) => JSON.parse(md))
                               .filter((md) => md.created_slot <= lastSlot)
                         : [];
-                    mints.set(keys[i].split(':')[2], filteredResults);
+                    mints.set(mintKey, filteredResults);
                 }
             }
         } while (cursor !== '0');

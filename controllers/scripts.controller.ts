@@ -18,18 +18,15 @@ class ScriptsController {
                 );
 
                 if (!latestScript) {
-                    // send a 404 if no latest script is found
                     res.status(404).send({ message: 'Latest script not found' });
                     return;
                 }
 
                 const [scriptAddress, scriptData] = latestScript;
-                const result = {
+                res.json({
                     ...scriptData,
                     scriptAddress
-                };
-
-                res.json(result);
+                });
                 return;
             }
 

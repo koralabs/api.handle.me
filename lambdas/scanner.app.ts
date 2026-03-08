@@ -4,14 +4,15 @@ import { BlockfrostBlock, KoiosAssetUTxO, KoiosTxInfo } from '../interfaces/prov
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { RedisHandlesStore } from '../stores/redis';
+import { getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
 import { blockfrostApiCall, buildUTxOsFromKoiosTxs, defaultKoiosSettings, fetchKoios, fetchPaginatedResults } from '../utils/helpers';
 
 const store = new RedisHandlesStore(); // I hate this
 const handlesRepo = new HandlesRepository(store);
 let initialized = false;
 
-const SCANNER_LEASE_KEY = 'scanner:lease';
-const SCANNER_RECOVERY_KEY = 'scanner:recovery';
+const SCANNER_LEASE_KEY = getApiScannerLeaseKey();
+const SCANNER_RECOVERY_KEY = getApiScannerRecoveryKey();
 const SCANNER_LEASE_TTL_MS = 60_000;
 const SCANNER_LEASE_HEARTBEAT_MS = 20_000;
 const KOIOS_RETRY_DELAYS_MS = [500, 1_500, 4_000];

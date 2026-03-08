@@ -948,7 +948,7 @@ paths:
           type: boolean
       - name: type
         in: query
-        description: Filter scripts by script type
+        description: Filter scripts by script type. During the slug migration this still uses legacy API aliases such as `marketplace_contract`, `demi_mint_proxy`, and `hal_mint_proxy`, even when the underlying deployment handles follow the canonical slug rule `<app><[ord|mnt|ref|roy]><[mpt]>`.
         required: false
         schema:
           $ref: "#/components/schemas/ScriptType"
@@ -1512,7 +1512,7 @@ components:
       - virtual_subhandle
     ScriptType:
       type: string
-      description: Script categories returned by `/scripts`
+      description: Legacy script category aliases returned by `/scripts` during the canonical slug migration. Repo-owned canonical contract names now follow `<app><[ord|mnt|ref|roy]><[mpt]>`, but this enum remains the public compatibility layer until the API contract is intentionally revised.
       enum:
       - pz_contract
       - sub_handle_settings

@@ -98,6 +98,28 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
   - response keys are validator-hash-derived script addresses, while `refScriptAddress` points to the handle-held reference script UTxO address
 - `POST /mint` relay for subhandle minting service (currently rejects `handle_type=handle`)
 
+## Contract Slug Naming
+`api.handle.me` follows the shared contract slug naming rule defined in `kora-bot/docs/spec/contract-deployment-pipeline.md`.
+
+Canonical slug shape:
+
+```text
+<app><[ord|mnt|ref|roy]><[mpt]>
+```
+
+Rules:
+- `app` is a 3 or 4 letter repo, project, or app abbreviation.
+- `ord`, `mnt`, `ref`, and `roy` identify order, minting, reference, and royalty contract families.
+- spend is implied when omitted.
+- `mpt` marks the Merkle Patricia Trie root managing contract.
+- canonical `contract_slug`, `script_type`, and `deployment_handle_slug` values must match.
+- canonical slugs must be 10 characters or fewer and must not contain `-` or `_`.
+
+API transition rule:
+- canonical slug naming is the long-term source of truth for new deployment handles and new repo-owned contract identifiers.
+- `/scripts` still exposes legacy script-type aliases during the migration window through `old_script_type` values such as `marketplace_contract`, `demi_mint_proxy`, and `hal_mint_proxy`.
+- handle-backed discovery in the controller should map new ordinalized `*.handlecontract` names back onto those legacy API type enums until the public API contract is intentionally changed.
+
 ## Search and Pagination Behavior
 - Handles endpoints support:
   - `search`, `characters`, `length`, `rarity`, `numeric_modifiers`, `og`, `personalized`, `handle_type`, `holder_address`, `root_handle`

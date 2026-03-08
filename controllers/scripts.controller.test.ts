@@ -1,5 +1,5 @@
 import { bech32AddressFromHashes, decodeAddress, IndexNames, ScriptType } from '@koralabs/kora-labs-common';
-import ScriptsController from './scripts.controller'
+import ScriptsController from './scripts.controller';
 
 const mockResponse = () => {
     const res = {json: jest.fn(), status: jest.fn(), send: jest.fn()};

@@ -1,6 +1,7 @@
 import { IndexNames, LockedLambdaReason, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { RedisHandlesStore } from '../stores/redis';
+import { getApiScannerRecoveryKey } from '../stores/redis/keys';
 import * as helpers from '../utils/helpers';
 
 jest.mock('../utils/helpers');
@@ -205,7 +206,7 @@ describe('Scanner lambda e2e', () => {
     });
 
     it('runs recovery reindex when recovery flag is set', async () => {
-        store.redisClientCall('set', 'scanner:recovery', 'rollback');
+        store.redisClientCall('set', getApiScannerRecoveryKey(), 'rollback');
         repo.setMetrics({
             lockLambdas: LockedLambdaReason.UNLOCKED,
             indexSchemaVersion: Number(store.getIndexSchemaVersion()),
@@ -216,7 +217,7 @@ describe('Scanner lambda e2e', () => {
         const result = await lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
 
         expect(result).toBeUndefined();
-        expect(store.redisClientCall('get', 'scanner:recovery')).toBeFalsy();
+        expect(store.redisClientCall('get', getApiScannerRecoveryKey())).toBeFalsy();
     });
 
     it('requires whitelisted api-key for function-url reindex shortcut', async () => {

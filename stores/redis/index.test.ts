@@ -2,6 +2,7 @@ import { IndexNames, Logger, UTxOFunctionName } from '@koralabs/kora-labs-common
 import { deflateSync } from 'zlib';
 import { ORDERED_SLOTS } from '../../config/constants';
 import { RedisHandlesStore } from './index';
+import { getApiCacheKey, getApiMetricsKey, getApiNamespaceScanPattern } from './keys';
 import { Worker } from 'worker_threads';
 
 jest.mock('worker_threads', () => {
@@ -19,7 +20,7 @@ jest.mock('worker_threads', () => {
 describe('RedisHandlesStore critical path tests', () => {
     const originalFetch = global.fetch;
     const originalOrderedSlots = [...ORDERED_SLOTS];
-    const rootKey = (suffix: string) => `{root}:${suffix}`;
+    const rootKey = (suffix: string) => getApiCacheKey(suffix);
 
     afterEach(() => {
         global.fetch = originalFetch;
@@ -31,7 +32,12 @@ describe('RedisHandlesStore critical path tests', () => {
 
     it('initializes a worker once and handles worker lifecycle hooks', () => {
         const store = new RedisHandlesStore();
-        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation(jest.fn());
+        const currentNamespaceKeys = [getApiMetricsKey(), rootKey('handle:alpha')];
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'scan') return ['0', currentNamespaceKeys];
+            return undefined;
+        });
         const loggerSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
         const workerCtor = Worker as unknown as jest.Mock;
 
@@ -55,10 +61,32 @@ describe('RedisHandlesStore critical path tests', () => {
 
         store.rollBackToGenesis();
         store.destroy();
-        expect(redisSpy).toHaveBeenCalledWith('flushdb');
+        expect(redisSpy).toHaveBeenCalledWith('scan', '0', { match: getApiNamespaceScanPattern(), count: 1000 });
+        expect(redisSpy).toHaveBeenCalledWith('del', currentNamespaceKeys);
+        expect(redisSpy).not.toHaveBeenCalledWith('flushdb');
         expect(redisSpy).toHaveBeenCalledWith('close');
         expect(worker.terminate).toHaveBeenCalled();
         expect((RedisHandlesStore as any)._worker).toBeUndefined();
+    });
+
+    it('rollBackToGenesis clears only the current env namespace and leaves sibling env keys untouched', () => {
+        const store = new RedisHandlesStore();
+        const currentNamespaceKeys = [getApiMetricsKey(), rootKey('handle:alpha')];
+        const siblingNamespaceKeys = [getApiCacheKey('metrics', 'MAINNET'), getApiCacheKey('handle:beta', 'MAINNET')];
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd, cursor, options] = args as [string, string, { match: string; count: number }];
+            if (cmd === 'scan') {
+                if (options.match === getApiNamespaceScanPattern()) return ['0', currentNamespaceKeys];
+                return ['0', [...currentNamespaceKeys, ...siblingNamespaceKeys]];
+            }
+            return undefined;
+        });
+
+        store.rollBackToGenesis();
+
+        const deleteCalls = redisSpy.mock.calls.filter(([cmd]) => cmd === 'del');
+        expect(deleteCalls).toEqual([['del', currentNamespaceKeys]]);
+        expect(redisSpy).not.toHaveBeenCalledWith('flushdb');
     });
 
     it('returns empty results when a pipeline has no commands', () => {
@@ -209,7 +237,11 @@ describe('RedisHandlesStore critical path tests', () => {
         const setMetricsSpy = jest.spyOn(store, 'setMetrics').mockImplementation(jest.fn());
         jest.spyOn(store, 'getMetrics').mockReturnValue({ handleCount: 1 } as any);
         jest.spyOn(store, 'getUTxOSchemaVersion').mockReturnValue(1);
-        jest.spyOn(store as any, 'redisClientCall').mockImplementation(() => undefined);
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'scan') return ['0', []];
+            return undefined;
+        });
         jest.spyOn(store, 'pipeline').mockImplementation((commands: CallableFunction) => {
             commands();
             return [];
@@ -263,11 +295,17 @@ describe('RedisHandlesStore critical path tests', () => {
                 utxoSchemaVersion: 1
             })
         );
+        expect(redisSpy).toHaveBeenCalledWith('scan', '0', { match: getApiNamespaceScanPattern(), count: 1000 });
+        expect(redisSpy).not.toHaveBeenCalledWith('flushdb');
     });
 
     it('falls back to default starting metrics when snapshot file is unavailable', async () => {
         const store = new RedisHandlesStore();
-        jest.spyOn(store as any, 'redisClientCall').mockImplementation(jest.fn());
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'scan') return ['0', []];
+            return undefined;
+        });
         jest.spyOn(store, 'getUTxOSchemaVersion').mockReturnValue(1);
         const setMetricsSpy = jest.spyOn(store, 'setMetrics').mockImplementation(jest.fn());
         global.fetch = jest.fn().mockResolvedValue({
@@ -289,11 +327,17 @@ describe('RedisHandlesStore critical path tests', () => {
             currentSlot: result.slot,
             utxoSchemaVersion: 1
         }));
+        expect(redisSpy).toHaveBeenCalledWith('scan', '0', { match: getApiNamespaceScanPattern(), count: 1000 });
+        expect(redisSpy).not.toHaveBeenCalledWith('flushdb');
     });
 
     it('falls back to default starting metrics when snapshot schema version mismatches', async () => {
         const store = new RedisHandlesStore();
-        jest.spyOn(store as any, 'redisClientCall').mockImplementation(jest.fn());
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'scan') return ['0', []];
+            return undefined;
+        });
         jest.spyOn(store, 'getUTxOSchemaVersion').mockReturnValue(2);
         const setMetricsSpy = jest.spyOn(store, 'setMetrics').mockImplementation(jest.fn());
         const compressed = deflateSync(Buffer.from(JSON.stringify({
@@ -325,6 +369,8 @@ describe('RedisHandlesStore critical path tests', () => {
             currentSlot: result.slot,
             utxoSchemaVersion: 2
         }));
+        expect(redisSpy).toHaveBeenCalledWith('scan', '0', { match: getApiNamespaceScanPattern(), count: 1000 });
+        expect(redisSpy).not.toHaveBeenCalledWith('flushdb');
     });
 
     it('getStartingPoint uses snapshot path when schema/version requires refresh', async () => {
@@ -560,7 +606,7 @@ describe('RedisHandlesStore critical path tests', () => {
         (store as any).saveObjectToCache('custom:key', { count: 1, active: true, label: 'x' });
         expect(store.count()).toBe(9);
         expect(store.holderCount()).toBe(4);
-        expect(redisSpy).toHaveBeenCalledWith('hset', 'metrics', { currentSlot: '1', currentBlockHash: 'abc' });
+        expect(redisSpy).toHaveBeenCalledWith('hset', getApiMetricsKey(), { currentSlot: '1', currentBlockHash: 'abc' });
         expect(redisSpy).toHaveBeenCalledWith('hset', 'custom:key', { count: '1', active: 'true', label: 'x' });
     });
 
