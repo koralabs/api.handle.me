@@ -9,6 +9,9 @@ const HAL_HANDLE_MATCHERS: {
     legacyHandles: string[];
     futurePattern: RegExp;
 }[] = [
+    // Canonical repo-owned contract slugs now follow <app><[ord|mnt|ref|roy]><[mpt]>,
+    // but this controller still maps handle-backed discovery onto legacy ScriptType values
+    // so the public /scripts API remains backward compatible during migration.
     {
         type: ScriptType.HAL_MINT_PROXY,
         legacyHandles: ['hal_mnt_prxy@handle_contract'],
