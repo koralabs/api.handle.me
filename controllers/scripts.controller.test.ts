@@ -113,21 +113,35 @@ describe('Scripts Routes Test', () => {
         });
 
         it('Should keep preprod legacy script refs aligned with the current live outputs', async () => {
-            const currentWalletAddress = 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx';
             const expectedRefs = {
-                'mint_proxy@handle_settings': '06b4bc72862b78417109c68a2a62b9ca151b74d499d34216ac13531209581cc4#0',
-                'mint_v1@handle_settings': 'e4d1cf8e8d53edfa9680369743c22c0edd3983b9aa348bdcb2f873f3598b869a#0',
-                'mint_data@handle_settings': '63656ce1a088391f736442d91bcbfb2eddc8ad5cacaf5ce1d73f7907e90b19d9#0',
-                'orders@handle_settings': '147ed75a75f79cd12bb7f43ec7f0738406108b5c3b73e943754298d24b2e003b#0',
-                pz_contract_04: '1d4dc99c6839ce913c4fa371bcc5961febc0e47476e65ece5073a85d08739717#0'
+                'mint_proxy@handle_settings': {
+                    refScriptAddress: 'addr_test1xrs2yysvp95rj065a8763cnha4s7xghlqkqhz0mzxddjknyyuxk7y483dmwpls9gv3zjk2rfevdhkku7w0f5v56g2yhs70r6j5',
+                    refScriptUtxo: '5a86b49175043ec496e3b993a29bb5825ad205ca41ec22156ed6ac3109fbd927#1'
+                },
+                'mint_v1@handle_settings': {
+                    refScriptAddress: 'addr_test1xrs2yysvp95rj065a8763cnha4s7xghlqkqhz0mzxddjknyyuxk7y483dmwpls9gv3zjk2rfevdhkku7w0f5v56g2yhs70r6j5',
+                    refScriptUtxo: 'd4fc8a9d7510f40d4e931ee55a08d9863379ddeeb09a69038d993cfb7cbf6d37#3'
+                },
+                'mint_data@handle_settings': {
+                    refScriptAddress: 'addr_test1xrs2yysvp95rj065a8763cnha4s7xghlqkqhz0mzxddjknyyuxk7y483dmwpls9gv3zjk2rfevdhkku7w0f5v56g2yhs70r6j5',
+                    refScriptUtxo: '70078412adbe1a0d9faa7261bacaf3f8627bee92ee4b8e65d54b0f7e68ff3ae4#0'
+                },
+                'orders@handle_settings': {
+                    refScriptAddress: 'addr_test1xrs2yysvp95rj065a8763cnha4s7xghlqkqhz0mzxddjknyyuxk7y483dmwpls9gv3zjk2rfevdhkku7w0f5v56g2yhs70r6j5',
+                    refScriptUtxo: '70078412adbe1a0d9faa7261bacaf3f8627bee92ee4b8e65d54b0f7e68ff3ae4#2'
+                },
+                pz_contract_04: {
+                    refScriptAddress: 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx',
+                    refScriptUtxo: '1d4dc99c6839ce913c4fa371bcc5961febc0e47476e65ece5073a85d08739717#0'
+                }
             };
 
-            for (const [handle, refScriptUtxo] of Object.entries(expectedRefs)) {
+            for (const [handle, expected] of Object.entries(expectedRefs)) {
                 const entry = Object.values(scripts.preprod).find((script) => script.handle === handle);
 
                 expect(entry).toBeDefined();
-                expect(entry?.refScriptAddress).toEqual(currentWalletAddress);
-                expect(entry?.refScriptUtxo).toEqual(refScriptUtxo);
+                expect(entry?.refScriptAddress).toEqual(expected.refScriptAddress);
+                expect(entry?.refScriptUtxo).toEqual(expected.refScriptUtxo);
             }
         });
 
