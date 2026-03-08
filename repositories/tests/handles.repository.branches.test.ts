@@ -1,5 +1,5 @@
 import * as common from '@koralabs/kora-labs-common';
-import { AssetNameLabel, decodeAddress, EMPTY, IndexNames, LockedLambdaReason, Logger } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, decodeAddress, EMPTY, getSlotNumberFromDate, IndexNames, LockedLambdaReason, Logger } from '@koralabs/kora-labs-common';
 import * as crypto from 'crypto';
 import * as config from '../../config';
 import * as ogmiosUtils from '../../services/ogmios/utils';
@@ -542,10 +542,11 @@ describe('HandlesRepository branch tests', () => {
     it('evaluates caught-up status and HTTP code from metrics', () => {
         const store = buildStoreMock();
         const repo = new HandlesRepository(store);
+        const freshCurrentSlot = getSlotNumberFromDate(new Date(Date.now() - 60_000));
 
         store.getMetrics.mockReturnValue({
-            lastSlot: 120,
-            currentSlot: 50,
+            lastSlot: freshCurrentSlot + 100,
+            currentSlot: freshCurrentSlot,
             currentBlockHash: 'tip',
             tipBlockHash: 'tip'
         });
@@ -553,8 +554,8 @@ describe('HandlesRepository branch tests', () => {
         expect(repo.currentHttpStatus()).toBe(200);
 
         store.getMetrics.mockReturnValue({
-            lastSlot: 500,
-            currentSlot: 50,
+            lastSlot: freshCurrentSlot + 500,
+            currentSlot: freshCurrentSlot,
             currentBlockHash: 'block',
             tipBlockHash: 'tip'
         });
@@ -562,8 +563,8 @@ describe('HandlesRepository branch tests', () => {
         expect(repo.currentHttpStatus()).toBe(202);
 
         store.getMetrics.mockReturnValue({
-            lastSlot: 120,
-            currentSlot: 50,
+            lastSlot: freshCurrentSlot + 100,
+            currentSlot: freshCurrentSlot,
             currentBlockHash: 'tip',
             tipBlockHash: 'tip',
             lockLambdas: LockedLambdaReason.REINDEX
@@ -572,13 +573,29 @@ describe('HandlesRepository branch tests', () => {
         expect(repo.currentHttpStatus()).toBe(202);
 
         store.getMetrics.mockReturnValue({
-            lastSlot: 120,
-            currentSlot: 50,
+            lastSlot: freshCurrentSlot + 100,
+            currentSlot: freshCurrentSlot,
             currentBlockHash: 'tip',
             tipBlockHash: 'tip',
             lockLambdas: LockedLambdaReason.ROLLBACK_2160
         });
         expect(repo.isCaughtUp()).toBe(true);
+        expect(repo.currentHttpStatus()).toBe(202);
+    });
+
+    it('treats a stale slot head as not caught up even when stored tip metrics match', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        const staleCurrentSlot = getSlotNumberFromDate(new Date(Date.now() - (60 * 60 * 1000)));
+
+        store.getMetrics.mockReturnValue({
+            lastSlot: staleCurrentSlot + 10,
+            currentSlot: staleCurrentSlot,
+            currentBlockHash: 'tip',
+            tipBlockHash: 'tip'
+        });
+
+        expect(repo.isCaughtUp()).toBe(false);
         expect(repo.currentHttpStatus()).toBe(202);
     });
 
