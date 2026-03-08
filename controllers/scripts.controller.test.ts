@@ -94,6 +94,43 @@ describe('Scripts Routes Test', () => {
             }
         });
 
+        it('Should point preview pz contract refs at the migrated multisig outputs', async () => {
+            const migratedWalletAddress = 'addr_test1xp5gahy5jpx99p4vtnq2mfsmnjz84rfrqxyznqewp62mzy2tqcwlsq95pxz027092fzsjgpfzzaunne0qa9glmj38dfqafd0cf';
+            const expectedRefs = {
+                pz_contract_04: '93bcbc0281d43ded0ea10e0178f60a61b1bdc01729fcfb05039c8fd5715649f5#0',
+                pz_contract_3: '4a0535b225f7d6d5589afc1260e491b937da58fa2718bedfc21ed2935314f42b#0',
+                pz_contract_2: 'd055154b7d09ede9a1458c6cdfcd970bac83a9ea6642557eee2221ff27c558f7#0',
+                pz_contract_1: '5ea0b5b3d2cb2306377ac00d4ac72df29a210cfddfbbc55983fb7753b399fd9f#0'
+            };
+
+            for (const [handle, refScriptUtxo] of Object.entries(expectedRefs)) {
+                const entry = Object.values(scripts.preview).find((script) => script.handle === handle);
+
+                expect(entry).toBeDefined();
+                expect(entry?.refScriptAddress).toEqual(migratedWalletAddress);
+                expect(entry?.refScriptUtxo).toEqual(refScriptUtxo);
+            }
+        });
+
+        it('Should keep preprod legacy script refs aligned with the current live outputs', async () => {
+            const currentWalletAddress = 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx';
+            const expectedRefs = {
+                'mint_proxy@handle_settings': '06b4bc72862b78417109c68a2a62b9ca151b74d499d34216ac13531209581cc4#0',
+                'mint_v1@handle_settings': 'e4d1cf8e8d53edfa9680369743c22c0edd3983b9aa348bdcb2f873f3598b869a#0',
+                'mint_data@handle_settings': '63656ce1a088391f736442d91bcbfb2eddc8ad5cacaf5ce1d73f7907e90b19d9#0',
+                'orders@handle_settings': '147ed75a75f79cd12bb7f43ec7f0738406108b5c3b73e943754298d24b2e003b#0',
+                pz_contract_04: '1d4dc99c6839ce913c4fa371bcc5961febc0e47476e65ece5073a85d08739717#0'
+            };
+
+            for (const [handle, refScriptUtxo] of Object.entries(expectedRefs)) {
+                const entry = Object.values(scripts.preprod).find((script) => script.handle === handle);
+
+                expect(entry).toBeDefined();
+                expect(entry?.refScriptAddress).toEqual(currentWalletAddress);
+                expect(entry?.refScriptUtxo).toEqual(refScriptUtxo);
+            }
+        });
+
         it('Should return scripts data', async () => {
             const scriptsController = new ScriptsController();
             const response = mockResponse();
