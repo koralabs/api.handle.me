@@ -847,7 +847,7 @@ describe('Testing Handles Routes', () => {
         });
 
         it('should attach configured script when handle has no inline script', async () => {
-            jest.spyOn(scriptsService, 'getScriptByRefAddress').mockReturnValue({
+            jest.spyOn(scriptsService, 'getScriptByRefAddress').mockResolvedValue({
                 handle: 'pz_script_01',
                 handleHex: 'hex',
                 validatorHash: 'abc',
@@ -888,7 +888,7 @@ describe('Testing Handles Routes', () => {
         });
 
         it('should attach configured script when reference token utxo has no script', async () => {
-            jest.spyOn(scriptsService, 'getScriptByRefAddress').mockReturnValue({
+            jest.spyOn(scriptsService, 'getScriptByRefAddress').mockResolvedValue({
                 handle: 'pz_script_01',
                 handleHex: 'hex',
                 validatorHash: 'abc',

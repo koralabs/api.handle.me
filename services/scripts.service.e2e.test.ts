@@ -34,13 +34,26 @@ describe('scripts service e2e', () => {
         await repo.initialize();
     });
 
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
     beforeEach(() => {
         repo.rollBackToGenesis();
+        jest.spyOn(global, 'fetch').mockImplementation(async (input: any) => {
+            const slug = `${input}`.match(/\/([^/]+)\.unoptimized\.cbor$/)?.[1];
+            const unoptimized = slug === 'pers' ? 'unp-pz' : slug === 'demimnt' ? 'unp-demi' : '';
+
+            return {
+                ok: Boolean(unoptimized),
+                text: async () => unoptimized
+            } as Response;
+        });
 
         [
-            ['pz_contract1@handlecontract', previewRefAddresses[0], 'cbor1'],
-            ['pz_contract2@handlecontract', previewRefAddresses[1], 'cbor2'],
-            ['demi_mint3@handlecontract', previewRefAddresses[2], 'cbor3']
+            ['pers1@handlecontract', previewRefAddresses[0], 'cbor1'],
+            ['pers2@handlecontract', previewRefAddresses[1], 'cbor2'],
+            ['demimnt3@handlecontract', previewRefAddresses[2], 'cbor3']
         ].forEach(([name, address, cbor]) => {
             const handle = repo.Internal.buildHandle({
                 name,
@@ -62,43 +75,47 @@ describe('scripts service e2e', () => {
         repo.destroy();
     });
 
-    it('builds a script catalog from indexed @handlecontract subhandles', () => {
+    it('builds a script catalog from indexed @handlecontract subhandles', async () => {
         // Feature: the script resolver should read real indexed subhandles and key the catalog by derived script address.
         // Failure mode: a resolver bug could key entries by refScriptAddress or miss the highest ordinal latest selection.
-        // Negative control: if `pz_contract2@handlecontract` were renamed to ordinal `1`, the latest assertion below would fail.
-        const scripts = getScriptsIndex(req);
+        // Negative control: if `pers2@handlecontract` were renamed to ordinal `1`, the latest assertion below would fail.
+        const scripts = await getScriptsIndex(req);
 
         expect(scripts).toEqual({
             [buildScriptAddress(previewRefAddresses[0])]: expect.objectContaining({
-                handle: 'pz_contract1@handlecontract',
+                handle: 'pers1@handlecontract',
                 refScriptAddress: previewRefAddresses[0],
                 latest: false,
-                type: ScriptType.PZ_CONTRACT
+                type: ScriptType.PZ_CONTRACT,
+                unoptimizedCbor: 'unp-pz'
             }),
             [buildScriptAddress(previewRefAddresses[1])]: expect.objectContaining({
-                handle: 'pz_contract2@handlecontract',
+                handle: 'pers2@handlecontract',
                 refScriptAddress: previewRefAddresses[1],
                 latest: true,
-                type: ScriptType.PZ_CONTRACT
+                type: ScriptType.PZ_CONTRACT,
+                unoptimizedCbor: 'unp-pz'
             }),
             [buildScriptAddress(previewRefAddresses[2])]: expect.objectContaining({
-                handle: 'demi_mint3@handlecontract',
+                handle: 'demimnt3@handlecontract',
                 refScriptAddress: previewRefAddresses[2],
                 latest: true,
-                type: ScriptType.DEMI_MINT
+                type: ScriptType.DEMI_MINT,
+                unoptimizedCbor: 'unp-demi'
             })
         });
     });
 
-    it('finds a script by refScriptAddress', () => {
+    it('finds a script by refScriptAddress', async () => {
         // Feature: non-`/scripts` callers should resolve script metadata from the handle-held reference script address.
         // Failure mode: address enrichment paths could stop working after removing the static lookup table.
         // Negative control: querying with an unknown refScriptAddress would return `undefined` instead of this script.
-        expect(getScriptByRefAddress(req, previewRefAddresses[1])).toEqual(
+        expect(await getScriptByRefAddress(req, previewRefAddresses[1])).toEqual(
             expect.objectContaining({
-                handle: 'pz_contract2@handlecontract',
+                handle: 'pers2@handlecontract',
                 refScriptAddress: previewRefAddresses[1],
-                latest: true
+                latest: true,
+                unoptimizedCbor: 'unp-pz'
             })
         );
     });

@@ -6,7 +6,27 @@ import { HandlesRepository } from '../repositories/handlesRepository';
 const SCRIPT_ROOT_HANDLE = 'handlecontract';
 const MAX_SCRIPT_RESULTS = '50000';
 const HANDLE_SUFFIX = `@${SCRIPT_ROOT_HANDLE}`;
-const SCRIPT_TYPES = Object.values(ScriptType).sort((left, right) => right.length - left.length);
+const DEFAULT_NETWORK = 'preview';
+const GITHUB_RAW_BASE_URL = 'https://raw.githubusercontent.com/koralabs';
+const SCRIPT_SOURCES: Record<ScriptType, { slug: string; repo: string }> = {
+    [ScriptType.PZ_CONTRACT]: { slug: 'pers', repo: 'handles-personalization' },
+    [ScriptType.SUB_HANDLE_SETTINGS]: { slug: 'subh', repo: 'handles-subhandle-settings' },
+    [ScriptType.MARKETPLACE_CONTRACT]: { slug: 'mkpl', repo: 'handles-marketplace-contracts' },
+    [ScriptType.DEMI_MINT_PROXY]: { slug: 'demimntprx', repo: 'decentralized-minting' },
+    [ScriptType.DEMI_MINT]: { slug: 'demimnt', repo: 'decentralized-minting' },
+    [ScriptType.DEMI_MINTING_DATA]: { slug: 'demimntmpt', repo: 'decentralized-minting' },
+    [ScriptType.DEMI_ORDERS]: { slug: 'demiord', repo: 'decentralized-minting' },
+    [ScriptType.HAL_MINT_PROXY]: { slug: 'halmntprx', repo: 'hal-minting-contracts' },
+    [ScriptType.HAL_MINT]: { slug: 'halmnt', repo: 'hal-minting-contracts' },
+    [ScriptType.HAL_MINTING_DATA]: { slug: 'halmntmpt', repo: 'hal-minting-contracts' },
+    [ScriptType.HAL_ORDERS_SPEND]: { slug: 'halord', repo: 'hal-minting-contracts' },
+    [ScriptType.HAL_REF_SPEND_PROXY]: { slug: 'halrefprx', repo: 'hal-minting-contracts' },
+    [ScriptType.HAL_REF_SPEND]: { slug: 'halref', repo: 'hal-minting-contracts' },
+    [ScriptType.HAL_ROYALTY_SPEND]: { slug: 'halroy', repo: 'hal-minting-contracts' }
+};
+const SCRIPT_TYPES_BY_SLUG = Object.entries(SCRIPT_SOURCES)
+    .sort(([, left], [, right]) => right.slug.length - left.slug.length)
+    .map(([type, source]) => [source.slug, type as ScriptType] as const);
 
 const createRepo = (req: Request<any>): HandlesRepository | null => {
     const registry = req.app?.get?.('registry') as IRegistry | undefined;
@@ -24,12 +44,12 @@ const parseScriptHandle = (handleName: string): { type: ScriptType; ordinal: num
     }
 
     const slugWithOrdinal = normalizedName.slice(0, -HANDLE_SUFFIX.length);
-    for (const type of SCRIPT_TYPES) {
-        if (!slugWithOrdinal.startsWith(type)) {
+    for (const [slug, type] of SCRIPT_TYPES_BY_SLUG) {
+        if (!slugWithOrdinal.startsWith(slug)) {
             continue;
         }
 
-        const ordinal = slugWithOrdinal.slice(type.length);
+        const ordinal = slugWithOrdinal.slice(slug.length);
         if (!/^\d+$/.test(ordinal)) {
             return null;
         }
@@ -43,7 +63,50 @@ const parseScriptHandle = (handleName: string): { type: ScriptType; ordinal: num
     return null;
 };
 
-const buildScriptEntry = (handle: StoredHandle, type: ScriptType, latest: boolean): [string, ScriptDetails] | null => {
+const getNetwork = () => {
+    const network = process.env.NETWORK?.toLowerCase();
+    return network === 'mainnet' || network === 'preprod' ? network : DEFAULT_NETWORK;
+};
+
+const getUnoptimizedCborUrl = (type: ScriptType) => {
+    const source = SCRIPT_SOURCES[type];
+    if (!source) {
+        return null;
+    }
+
+    return `${GITHUB_RAW_BASE_URL}/${source.repo}/master/${getNetwork()}/${source.slug}.unoptimized.cbor`;
+};
+
+const fetchUnoptimizedCbor = async (type: ScriptType, cache: Map<ScriptType, Promise<string | undefined>>) => {
+    const cached = cache.get(type);
+    if (cached) {
+        return cached;
+    }
+
+    const url = getUnoptimizedCborUrl(type);
+    const request = (async () => {
+        if (!url) {
+            return;
+        }
+
+        try {
+            const response = await fetch(url);
+            if (!response.ok) {
+                return;
+            }
+
+            const unoptimizedCbor = (await response.text()).trim();
+            return unoptimizedCbor || undefined;
+        } catch {
+            return;
+        }
+    })();
+
+    cache.set(type, request);
+    return request;
+};
+
+const buildScriptEntry = async (handle: StoredHandle, type: ScriptType, latest: boolean, unoptimizedCbor?: string): Promise<[string, ScriptDetails] | null> => {
     const refScriptAddress = handle.resolved_addresses?.ada;
     const validatorHash = refScriptAddress ? decodeAddress(refScriptAddress)?.slice(2, 58) : null;
     if (!refScriptAddress || !validatorHash || !handle.script?.cbor) {
@@ -67,6 +130,7 @@ const buildScriptEntry = (handle: StoredHandle, type: ScriptType, latest: boolea
             refScriptAddress,
             refScriptUtxo: handle.utxo,
             cbor: handle.script.cbor,
+            unoptimizedCbor,
             validatorHash,
             latest,
             type
@@ -80,16 +144,18 @@ const getCandidateHandles = (req: Request<any>, type?: string): StoredHandle[] =
         return [];
     }
 
+    const search = type && type in SCRIPT_SOURCES ? SCRIPT_SOURCES[type as ScriptType].slug : type;
+
     return handleRepo.search(
         { handlesPerPage: Number(MAX_SCRIPT_RESULTS), sort: 'asc', page: 1 } as any,
         new HandleSearchModel({
             root_handle: SCRIPT_ROOT_HANDLE,
-            search: type
+            search
         } as ConstructorParameters<typeof HandleSearchModel>[0] & { root_handle?: string })
     ).handles as StoredHandle[];
 };
 
-export const getScriptsIndex = (req: Request<any>, type?: string): { [scriptAddress: string]: ScriptDetails } => {
+export const getScriptsIndex = async (req: Request<any>, type?: string): Promise<{ [scriptAddress: string]: ScriptDetails }> => {
     const matchesByType = new Map<ScriptType, { handle: StoredHandle; ordinal: number }[]>();
 
     for (const handle of getCandidateHandles(req, type)) {
@@ -104,10 +170,13 @@ export const getScriptsIndex = (req: Request<any>, type?: string): { [scriptAddr
     }
 
     const scripts: { [scriptAddress: string]: ScriptDetails } = {};
+    const unoptimizedCborCache = new Map<ScriptType, Promise<string | undefined>>();
+
     for (const [scriptType, matches] of matchesByType.entries()) {
         const latestOrdinal = Math.max(...matches.map(({ ordinal }) => ordinal));
+        const unoptimizedCbor = await fetchUnoptimizedCbor(scriptType, unoptimizedCborCache);
         for (const { handle, ordinal } of matches) {
-            const scriptEntry = buildScriptEntry(handle, scriptType, ordinal === latestOrdinal);
+            const scriptEntry = await buildScriptEntry(handle, scriptType, ordinal === latestOrdinal, unoptimizedCbor);
             if (scriptEntry) {
                 scripts[scriptEntry[0]] = scriptEntry[1];
             }
@@ -117,10 +186,10 @@ export const getScriptsIndex = (req: Request<any>, type?: string): { [scriptAddr
     return scripts;
 };
 
-export const getScriptByRefAddress = (req: Request<any>, refScriptAddress?: string): ScriptDetails | undefined => {
+export const getScriptByRefAddress = async (req: Request<any>, refScriptAddress?: string): Promise<ScriptDetails | undefined> => {
     if (!refScriptAddress) {
         return;
     }
 
-    return Object.values(getScriptsIndex(req)).find((script) => script.refScriptAddress === refScriptAddress);
+    return Object.values(await getScriptsIndex(req)).find((script) => script.refScriptAddress === refScriptAddress);
 };

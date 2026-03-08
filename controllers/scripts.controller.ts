@@ -7,7 +7,7 @@ class ScriptsController {
         try {
             const { latest = false, type = null } = req.query;
 
-            const indexedScripts = getScriptsIndex(req, typeof type === 'string' ? type : undefined);
+            const indexedScripts = await getScriptsIndex(req, typeof type === 'string' ? type : undefined);
             const allScripts = type
                 ? Object.entries(indexedScripts).filter(([_, value]) => value.type === type)
                 : Object.entries(indexedScripts);
