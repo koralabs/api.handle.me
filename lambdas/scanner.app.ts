@@ -376,14 +376,49 @@ const filterUTxOToHandleNames = (utxo: UTxOWithTxInfo, handleNames: Set<string>)
     };
 };
 
-const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotify = false }: { currentSlot: number; rollbackOffset: number; suppressNotify?: boolean }) => {
-    Logger.local(`Running rollback check - ${rollbackOffset}`);
+const getLatestChainTip = async () => {
     const latestBlockResponse = await blockfrostApiCall('blocks/latest');
-    if (!latestBlockResponse.ok) {
-        throw new Error('Not good!');
+    if (latestBlockResponse.ok) {
+        const latestBlock = await latestBlockResponse.json();
+        return {
+            hash: `${latestBlock?.hash ?? ''}`,
+            slot: Number(latestBlock?.slot ?? 0),
+            height: Number(latestBlock?.height ?? 0)
+        };
     }
 
-    const latestBlock = await latestBlockResponse.json();
+    try {
+        const koiosTipResponse = await fetchKoios('tip');
+        const latestTip = Array.isArray(koiosTipResponse) ? koiosTipResponse[0] : koiosTipResponse;
+        if (!latestTip) return null;
+
+        return {
+            hash: `${latestTip?.hash ?? ''}`,
+            slot: Number(latestTip?.abs_slot ?? 0),
+            height: Number(latestTip?.block_height ?? latestTip?.block_no ?? 0)
+        };
+    } catch {
+        return null;
+    }
+};
+
+const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotify = false }: { currentSlot: number; rollbackOffset: number; suppressNotify?: boolean }) => {
+    Logger.local(`Running rollback check - ${rollbackOffset}`);
+    const latestBlock = await getLatestChainTip();
+    if (!latestBlock?.height) {
+        const { lastSlot = 0 } = handlesRepo.getMetrics();
+        handlesRepo.setMetrics({
+            lastSlot: Math.max(Number(lastSlot ?? 0), Number(currentSlot ?? 0)),
+            tipBlockHash: ''
+        });
+        Logger.log({
+            message: `Unable to fetch latest block while checking rollback_${rollbackOffset}. Keeping an unknown tip hash and advancing the observed tip slot lower bound.`,
+            category: LogCategory.WARN,
+            event: 'scannerLambda.latestBlockUnavailable'
+        });
+        return;
+    }
+
     const blockHeight = latestBlock.height - rollbackOffset;
 
     // Get all blocks/txs/UTxOs from Bf/Ko
@@ -686,6 +721,7 @@ const scan = async () => {
     Logger.local(`Running scan...`);
     const metrics = handlesRepo.getMetrics();
     const scanStartedAt = Date.now();
+    const existingLastSlot = Number(metrics.lastSlot ?? 0);
     // Is scanning fast enough to do this without MAX_TIP_SLOTS? Or a much higher one?
     handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.SCANNING, lockLambdasTimestamp: Date.now() });
     try {
@@ -703,13 +739,25 @@ const scan = async () => {
             bResp = bResp.slice(0, SCANNER_MAX_BLOCKS_PER_INVOCATION);
         }
         if (!bResp.length) {
-            const latestBlockResponse = await blockfrostApiCall('blocks/latest');
-            if (!latestBlockResponse.ok) {
-                throw new Error('Unable to fetch latest block while checking scanner head');
-            }
-            const latestBlock = await latestBlockResponse.json();
-            const latestSlot = Number(latestBlock?.slot ?? 0);
             const currentSlot = Number(metrics.currentSlot ?? 0);
+            const latestBlock = await getLatestChainTip();
+            if (!latestBlock?.slot) {
+                handlesRepo.setMetrics({
+                    lastSlot: Math.max(existingLastSlot, currentSlot),
+                    tipBlockHash: ''
+                });
+                Logger.log({
+                    message: 'Unable to fetch latest block while checking scanner head. Keeping an unknown tip hash and advancing the observed tip slot lower bound.',
+                    category: LogCategory.WARN,
+                    event: 'scannerLambda.latestBlockUnavailable'
+                });
+                return;
+            }
+            const latestSlot = latestBlock.slot;
+            handlesRepo.setMetrics({
+                lastSlot: latestSlot,
+                tipBlockHash: `${latestBlock?.hash ?? ''}`
+            });
 
             if (latestSlot > currentSlot && metrics.currentBlockHash && currentSlot > 0) {
                 const rollbackOffset = latestSlot - currentSlot > ROLLBACK_20_SLOT_WINDOW ? 2160 : 20;
@@ -725,13 +773,18 @@ const scan = async () => {
             Logger.local(`No new blocks to process from ${metrics.currentBlockHash}`);
             return;
         }
-        let tipBlockHash = bResp[bResp.length - 1].hash;
-        let lastSlot = bResp[bResp.length - 1].slot;
-        const latestBlockResponse = await blockfrostApiCall('blocks/latest');
-        if (latestBlockResponse.ok) {
-            const latestBlock = await latestBlockResponse.json();
-            tipBlockHash = latestBlock?.hash ?? tipBlockHash;
-            lastSlot = Number(latestBlock?.slot ?? lastSlot);
+        let tipBlockHash = '';
+        let lastSlot = Math.max(existingLastSlot, bResp[bResp.length - 1].slot);
+        const latestBlock = await getLatestChainTip();
+        if (latestBlock?.slot) {
+            tipBlockHash = `${latestBlock?.hash ?? ''}`;
+            lastSlot = Number(latestBlock.slot ?? lastSlot);
+        } else {
+            Logger.log({
+                message: `Unable to fetch latest block while scanning from ${metrics.currentBlockHash}. Keeping an unknown tip hash and advancing the observed tip slot lower bound to ${lastSlot}.`,
+                category: LogCategory.WARN,
+                event: 'scannerLambda.latestBlockUnavailable'
+            });
         }
         for (let blockIndex = 0; blockIndex < bResp.length; blockIndex += SCANNER_BLOCK_PREFETCH_CHUNK_SIZE) {
             if (Date.now() - scanStartedAt >= SCANNER_WORK_BUDGET_MS) {

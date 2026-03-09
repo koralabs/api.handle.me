@@ -309,12 +309,17 @@ describe('Scanner lambda e2e', () => {
         expect(repo.getMetrics().lockLambdas).toBe(LockedLambdaReason.UNLOCKED);
     });
 
-    it('clears lock even when rollback provider call fails', async () => {
+    it('clears lock and falls back to Koios tip when Blockfrost latest fails', async () => {
         mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: false } as never);
         mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'tip') return [{ hash: 'koios_tip_hash', abs_slot: 140, block_height: 5000 }] as never;
+            return [] as never;
+        });
 
-        await expect(lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context)).rejects.toThrow(/Unable to fetch latest block while checking scanner head|Not good!/);
+        await expect(lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context)).resolves.toEqual({ isBase64Encoded: false, statusCode: 200, body: '' });
 
         expect(repo.getMetrics().lockLambdas).toBe(LockedLambdaReason.UNLOCKED);
+        expect(repo.getMetrics().tipBlockHash).toBe('koios_tip_hash');
     });
 });

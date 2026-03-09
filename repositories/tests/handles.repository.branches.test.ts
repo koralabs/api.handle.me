@@ -583,22 +583,6 @@ describe('HandlesRepository branch tests', () => {
         expect(repo.currentHttpStatus()).toBe(202);
     });
 
-    it('treats a stale slot head as not caught up even when stored tip metrics match', () => {
-        const store = buildStoreMock();
-        const repo = new HandlesRepository(store);
-        const staleCurrentSlot = getSlotNumberFromDate(new Date(Date.now() - (60 * 60 * 1000)));
-
-        store.getMetrics.mockReturnValue({
-            lastSlot: staleCurrentSlot + 10,
-            currentSlot: staleCurrentSlot,
-            currentBlockHash: 'tip',
-            tipBlockHash: 'tip'
-        });
-
-        expect(repo.isCaughtUp()).toBe(false);
-        expect(repo.currentHttpStatus()).toBe(202);
-    });
-
     it('falls back to default metrics and returns null for missing handle records', () => {
         const store = buildStoreMock();
         const repo = new HandlesRepository(store);

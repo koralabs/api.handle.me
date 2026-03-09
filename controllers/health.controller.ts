@@ -15,6 +15,13 @@ enum HealthStatus {
 
 const updatingLocks = new Set<LockedLambdaReason>([LockedLambdaReason.ROLLBACK_2160, LockedLambdaReason.REINDEX]);
 
+const getHealthSlotDate = (currentSlot: number) => {
+    if (process.env.NETWORK?.toLowerCase() == 'preprod') {
+        return new Date((1655683200 + currentSlot) * 1000);
+    }
+    return getDateStringFromSlot(currentSlot);
+};
+
 class HealthController {
     public async index (req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
@@ -26,7 +33,7 @@ class HealthController {
             const percentageComplete = ((currentSlotInRange / handleSlotRange) * 100).toFixed(2);
             const currentMemoryUsage = process.memoryUsage().rss;
             const indexMemorySize = Math.round(((currentMemoryUsage - firstMemoryUsage) / 1024 / 1024) * 100) / 100;
-            const slotDate = getDateStringFromSlot(currentSlot);
+            const slotDate = getHealthSlotDate(currentSlot);
     
             const stats = {
                 percentage_complete: percentageComplete ? Number(percentageComplete) : 0,

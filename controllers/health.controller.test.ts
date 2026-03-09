@@ -42,6 +42,7 @@ const buildRes = () => {
 describe('HealthController', () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        process.env.NETWORK = 'PREVIEW';
         delete process.env.ENABLE_OGMIOS_SCANNING;
     });
 
@@ -68,6 +69,33 @@ describe('HealthController', () => {
         );
         expect(res.json.mock.calls[0][0].ogmios).toBeUndefined();
         expect(next).not.toHaveBeenCalled();
+    });
+
+    it('renders the correct preprod slot_date', async () => {
+        const repoMock = {
+            getMetrics: jest.fn().mockReturnValue({
+                ...baseMetrics,
+                currentSlot: 117334474
+            }),
+            isCaughtUp: jest.fn().mockReturnValue(true)
+        };
+        MockedHandlesRepository.mockImplementation(() => repoMock);
+        process.env.ENABLE_OGMIOS_SCANNING = 'false';
+        process.env.NETWORK = 'PREPROD';
+
+        const controller = new HealthController();
+        const req = buildReq();
+        const res = buildRes();
+        await controller.index(req, res, jest.fn());
+
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                stats: expect.objectContaining({
+                    slot_date: new Date('2026-03-09T00:54:34.000Z')
+                })
+            })
+        );
     });
 
     it('returns storage_behind when repo is not caught up', async () => {

@@ -1,5 +1,5 @@
 import { Point } from '@cardano-ogmios/schema';
-import { AssetNameLabel, bech32FromHex, buildCharacters, buildDrep, buildHolderInfo, buildNumericModifiers, decodeAddress, decodeCborToJson, EMPTY, getDateStringFromSlot, getPaymentKeyHash, getRarity, HandlePaginationModel, HandleSearchModel, HandleType, Holder, HolderHandleNames, HolderPaginationModel, HttpException, IApiMetrics, IApiStore, IHandleMetadata, IndexNames, IPersonalization, IPzDatum, IPzDatumConvertedUsingSchema, ISubHandleSettings, ISubHandleTypeSettings, LockedLambdaReason, LogCategory, Logger, MINTED_OG_LIST, MintingData, NETWORK, Sort, StoredHandle, UTxOFunctions, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, bech32FromHex, buildCharacters, buildDrep, buildHolderInfo, buildNumericModifiers, decodeAddress, decodeCborToJson, EMPTY, getPaymentKeyHash, getRarity, HandlePaginationModel, HandleSearchModel, HandleType, Holder, HolderHandleNames, HolderPaginationModel, HttpException, IApiMetrics, IApiStore, IHandleMetadata, IndexNames, IPersonalization, IPzDatum, IPzDatumConvertedUsingSchema, ISubHandleSettings, ISubHandleTypeSettings, LockedLambdaReason, LogCategory, Logger, MINTED_OG_LIST, MintingData, NETWORK, Sort, StoredHandle, UTxOFunctions, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { designerSchema, handleDatumSchema, portalSchema, socialsSchema, subHandleSettingsDatumSchema } from '@koralabs/kora-labs-common/utils/cbor';
 import * as crypto from 'crypto';
 import { isDatumEndpointEnabled } from '../config';
@@ -10,8 +10,6 @@ import { decodeCborFromIPFSFile } from '../utils/ipfs';
 const blackListedIpfsCids: string[] = [];
 const isTestnet = NETWORK.toLowerCase() !== 'mainnet';
 const magicSlotsRange = 50_000; // This is arbitrary and should be adjusted if not enough or too many slots come back from queries.
-const MAX_CURRENT_SLOT_AGE_MS = 10 * 60 * 1000;
-
 process.env.INDEX_SCHEMA_VERSION ??= '3'
 process.env.UTXO_SCHEMA_VERSION ??= '1'
 
@@ -61,9 +59,7 @@ export class HandlesRepository {
 
     public isCaughtUp(): boolean {
         const { lastSlot = 1, currentSlot = 0, currentBlockHash = '0', tipBlockHash = '1' } = this.store.getMetrics();
-        const slotDate = currentSlot > 0 ? getDateStringFromSlot(currentSlot) : null;
-        const isStale = slotDate ? Date.now() - slotDate.getTime() > MAX_CURRENT_SLOT_AGE_MS : false;
-        return lastSlot - currentSlot < 240 && currentBlockHash == tipBlockHash && !isStale;
+        return lastSlot - currentSlot < 240 && currentBlockHash == tipBlockHash;
     }
     
     public getHandle(key: string): StoredHandle | null {

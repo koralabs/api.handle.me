@@ -236,17 +236,45 @@ describe('Scanner lambda unit tests', () => {
         expect(mockedHelpers.fetchKoios).toHaveBeenCalledWith('block_txs', 'POST', expect.any(String));
     });
 
-    it('releases lock when rollback processing throws', async () => {
+    it('releases lock and keeps a lower-bound tip when rollback latest lookup fails', async () => {
         const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({
+            currentSlot: 130,
+            lastSlot: 125,
+            lockLambdas: LockedLambdaReason.UNLOCKED
+        });
         mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: false } as any);
 
-        await expect(scannerModule.Internal.checkRollback({ currentSlot: 130, lastMaxRollbackCheck: Date.now() })).rejects.toThrow('Not good!');
+        await expect(scannerModule.Internal.checkRollback({ currentSlot: 130, lastMaxRollbackCheck: Date.now() })).resolves.toBeUndefined();
 
         expect(handlesRepo.setMetrics).toHaveBeenNthCalledWith(
             1,
             expect.objectContaining({ lockLambdas: LockedLambdaReason.ROLLBACK_20, lockLambdasTimestamp: expect.any(Number) })
         );
+        expect(handlesRepo.setMetrics).toHaveBeenCalledWith({
+            lastSlot: 130,
+            tipBlockHash: ''
+        });
         expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
+    });
+
+    it('uses Koios tip height when Blockfrost latest is unavailable during rollback', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({
+            currentSlot: 130,
+            lastSlot: 125,
+            lockLambdas: LockedLambdaReason.UNLOCKED
+        });
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: false } as any);
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'tip') return [{ hash: 'koios_tip_hash', abs_slot: 130, block_height: 5000 }] as never;
+            return [] as never;
+        });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+
+        await expect(scannerModule.Internal.checkRollback({ currentSlot: 130, lastMaxRollbackCheck: Date.now() })).resolves.toBeUndefined();
+
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next');
     });
 
     it('replays rollback discrepancies, removes in-range mint data, and refreshes indexes', async () => {
@@ -635,7 +663,15 @@ describe('Scanner lambda unit tests', () => {
 
     it('scan logs when there are no new blocks to process', async () => {
         const { handlesRepo, scannerModule } = setup();
-        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        handlesRepo.getMetrics.mockReturnValue({
+            currentBlockHash: 'start_hash',
+            currentSlot: 130,
+            lockLambdas: LockedLambdaReason.UNLOCKED
+        });
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({
+            ok: true,
+            json: async () => ({ hash: 'tip_hash', slot: 130, height: 5000 })
+        } as never);
         mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
 
         const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -646,8 +682,54 @@ describe('Scanner lambda unit tests', () => {
             logSpy.mockRestore();
         }
 
+        expect(handlesRepo.setMetrics).toHaveBeenCalledWith({
+            lastSlot: 130,
+            tipBlockHash: 'tip_hash'
+        });
         const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
         expect(txInfoCalls).toHaveLength(0);
+    });
+
+    it('scan keeps advancing a lower-bound tip when blocks/latest is unavailable and there are no forward blocks', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({
+            currentBlockHash: 'start_hash',
+            currentSlot: 130,
+            lastSlot: 125,
+            lockLambdas: LockedLambdaReason.UNLOCKED
+        });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: false } as never);
+
+        await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+        expect(handlesRepo.setMetrics).toHaveBeenCalledWith({
+            lastSlot: 130,
+            tipBlockHash: ''
+        });
+    });
+
+    it('scan falls back to Koios tip when Blockfrost latest is unavailable and there are no forward blocks', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({
+            currentBlockHash: 'start_hash',
+            currentSlot: 130,
+            lastSlot: 125,
+            lockLambdas: LockedLambdaReason.UNLOCKED
+        });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: false } as never);
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'tip') return [{ hash: 'koios_tip_hash', abs_slot: 130, block_height: 5000 }] as never;
+            return [] as never;
+        });
+
+        await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+        expect(handlesRepo.setMetrics).toHaveBeenCalledWith({
+            lastSlot: 130,
+            tipBlockHash: 'koios_tip_hash'
+        });
     });
 
     it('scan runs rollback_20 when stale head is near tip', async () => {
@@ -820,6 +902,34 @@ describe('Scanner lambda unit tests', () => {
                 currentSlot: 101,
                 tipBlockHash: 'real_tip_hash',
                 lastSlot: 999
+            })
+        );
+    });
+
+    it('scan advances the observed tip lower bound without trusting chunk tail as authoritative tip hash when blocks/latest fails', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({
+            currentBlockHash: 'start_hash',
+            lastSlot: 100,
+            lockLambdas: LockedLambdaReason.UNLOCKED
+        });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_chunk_tail', slot: 101, confirmations: 5 }] as never);
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: false } as never);
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'tx_1' }] as never;
+            if (path === 'tx_info') return [{ tx_hash: 'tx_1', block_hash: 'block_chunk_tail', inputs: [] }] as never;
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        await scannerModule.Internal.scan();
+
+        expect(handlesRepo.setMetrics).toHaveBeenCalledWith(
+            expect.objectContaining({
+                currentBlockHash: 'block_chunk_tail',
+                currentSlot: 101,
+                tipBlockHash: '',
+                lastSlot: 101
             })
         );
     });
