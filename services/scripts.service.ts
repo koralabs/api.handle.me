@@ -1,4 +1,4 @@
-import { bech32AddressFromHashes, decodeAddress, HandleSearchModel, ScriptDetails, ScriptType, StoredHandle } from '@koralabs/kora-labs-common';
+import { bech32AddressFromHashes, blake2b, HandleSearchModel, ScriptDetails, ScriptType, StoredHandle } from '@koralabs/kora-labs-common';
 import { Request } from 'express';
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
@@ -27,6 +27,12 @@ const SCRIPT_SOURCES: Record<ScriptType, { slug: string; repo: string }> = {
 const SCRIPT_TYPES_BY_SLUG = Object.entries(SCRIPT_SOURCES)
     .sort(([, left], [, right]) => right.slug.length - left.slug.length)
     .map(([type, source]) => [source.slug, type as ScriptType] as const);
+const SCRIPT_TYPE_BY_QUERY = Object.fromEntries(
+    Object.entries(SCRIPT_SOURCES).flatMap(([type, source]) => [
+        [type, type as ScriptType],
+        [source.slug, type as ScriptType]
+    ])
+) as Record<string, ScriptType>;
 
 const createRepo = (req: Request<any>): HandlesRepository | null => {
     const registry = req.app?.get?.('registry') as IRegistry | undefined;
@@ -77,6 +83,14 @@ const getUnoptimizedCborUrl = (type: ScriptType) => {
     return `${GITHUB_RAW_BASE_URL}/${source.repo}/master/${getNetwork()}/${source.slug}.unoptimized.cbor`;
 };
 
+export const resolveScriptTypeQuery = (type?: string): ScriptType | undefined => {
+    if (!type) {
+        return;
+    }
+
+    return SCRIPT_TYPE_BY_QUERY[type.toLowerCase()];
+};
+
 const fetchUnoptimizedCbor = async (type: ScriptType, cache: Map<ScriptType, Promise<string | undefined>>) => {
     const cached = cache.get(type);
     if (cached) {
@@ -106,9 +120,17 @@ const fetchUnoptimizedCbor = async (type: ScriptType, cache: Map<ScriptType, Pro
     return request;
 };
 
+const getValidatorHashFromScriptCbor = (scriptCbor?: string) => {
+    if (!scriptCbor || !/^[0-9a-f]+$/i.test(scriptCbor) || scriptCbor.length % 2 !== 0) {
+        return null;
+    }
+
+    return blake2b(Buffer.from(`02${scriptCbor}`, 'hex'), 28);
+};
+
 const buildScriptEntry = async (handle: StoredHandle, type: ScriptType, latest: boolean, unoptimizedCbor?: string): Promise<[string, ScriptDetails] | null> => {
     const refScriptAddress = handle.resolved_addresses?.ada;
-    const validatorHash = refScriptAddress ? decodeAddress(refScriptAddress)?.slice(2, 58) : null;
+    const validatorHash = getValidatorHashFromScriptCbor(handle.script?.cbor);
     if (!refScriptAddress || !validatorHash || !handle.script?.cbor) {
         return null;
     }
@@ -138,13 +160,13 @@ const buildScriptEntry = async (handle: StoredHandle, type: ScriptType, latest: 
     ];
 };
 
-const getCandidateHandles = (req: Request<any>, type?: string): StoredHandle[] => {
+const getCandidateHandles = (req: Request<any>, type?: ScriptType): StoredHandle[] => {
     const handleRepo = createRepo(req);
     if (!handleRepo) {
         return [];
     }
 
-    const search = type && type in SCRIPT_SOURCES ? SCRIPT_SOURCES[type as ScriptType].slug : type;
+    const search = type ? SCRIPT_SOURCES[type].slug : undefined;
 
     return handleRepo.search(
         { handlesPerPage: Number(MAX_SCRIPT_RESULTS), sort: 'asc', page: 1 } as any,
@@ -155,7 +177,7 @@ const getCandidateHandles = (req: Request<any>, type?: string): StoredHandle[] =
     ).handles as StoredHandle[];
 };
 
-export const getScriptsIndex = async (req: Request<any>, type?: string): Promise<{ [scriptAddress: string]: ScriptDetails }> => {
+export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Promise<{ [scriptAddress: string]: ScriptDetails }> => {
     const matchesByType = new Map<ScriptType, { handle: StoredHandle; ordinal: number }[]>();
 
     for (const handle of getCandidateHandles(req, type)) {

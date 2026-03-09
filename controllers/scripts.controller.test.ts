@@ -1,4 +1,4 @@
-import { bech32AddressFromHashes, decodeAddress, IndexNames, ScriptType } from '@koralabs/kora-labs-common';
+import { bech32AddressFromHashes, blake2b, IndexNames, ScriptType } from '@koralabs/kora-labs-common';
 import ScriptsController from './scripts.controller';
 
 const mockResponse = () => {
@@ -12,11 +12,11 @@ const mockResponse = () => {
 const mockRequest = (query = {}, app?: any) =>
     ({ query, app } as any);
 
-const buildScriptAddress = (refScriptAddress: string) => {
-    const validatorHash = decodeAddress(refScriptAddress)?.slice(2, 58);
-    if (!validatorHash) {
-        throw new Error(`Unable to derive validator hash from ${refScriptAddress}`);
+const buildScriptAddress = (scriptCbor: string) => {
+    if (!/^[0-9a-f]+$/i.test(scriptCbor) || scriptCbor.length % 2 !== 0) {
+        throw new Error(`Unable to derive validator hash from ${scriptCbor}`);
     }
+    const validatorHash = blake2b(Buffer.from(`02${scriptCbor}`, 'hex'), 28);
 
     return bech32AddressFromHashes(
         validatorHash,
@@ -28,7 +28,7 @@ const buildScriptAddress = (refScriptAddress: string) => {
     );
 };
 
-const buildHandle = (name: string, refScriptAddress: string, cbor = 'a247') => ({
+const buildHandle = (name: string, refScriptAddress: string, cbor = '4e4d0100') => ({
     name,
     hex: Buffer.from(name).toString('hex'),
     utxo: `${Buffer.from(name).toString('hex').slice(0, 16)}#0`,
@@ -123,9 +123,9 @@ describe('Scripts Routes Test', () => {
             // Negative control: if the controller keyed by `resolved_addresses.ada`, the object keys asserted below would not match.
             mockFetch({ pers: 'unp1', subh: 'unp3' });
             const handles = {
-                'pers1@handlecontract': buildHandle('pers1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', 'cbor1'),
-                'pers2@handlecontract': buildHandle('pers2@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', 'cbor2'),
-                'subh3@handlecontract': buildHandle('subh3@handlecontract', 'addr_test1wqufkpfr0cfg9k430terz8gl0yqv8r8gep82tv9086yv3cck0h26m', 'cbor3')
+                'pers1@handlecontract': buildHandle('pers1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0001'),
+                'pers2@handlecontract': buildHandle('pers2@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', '4e4d0002'),
+                'subh3@handlecontract': buildHandle('subh3@handlecontract', 'addr_test1wqufkpfr0cfg9k430terz8gl0yqv8r8gep82tv9086yv3cck0h26m', '4e4d0003')
             };
 
             const response = mockResponse();
@@ -136,28 +136,28 @@ describe('Scripts Routes Test', () => {
             );
 
             expect(response.json).toHaveBeenCalledWith({
-                [buildScriptAddress(handles['pers1@handlecontract'].resolved_addresses.ada)]: expect.objectContaining({
+                [buildScriptAddress(handles['pers1@handlecontract'].script.cbor)]: expect.objectContaining({
                     handle: 'pers1@handlecontract',
                     refScriptAddress: handles['pers1@handlecontract'].resolved_addresses.ada,
                     latest: false,
                     type: ScriptType.PZ_CONTRACT,
-                    cbor: 'cbor1',
+                    cbor: '4e4d0001',
                     unoptimizedCbor: 'unp1'
                 }),
-                [buildScriptAddress(handles['pers2@handlecontract'].resolved_addresses.ada)]: expect.objectContaining({
+                [buildScriptAddress(handles['pers2@handlecontract'].script.cbor)]: expect.objectContaining({
                     handle: 'pers2@handlecontract',
                     refScriptAddress: handles['pers2@handlecontract'].resolved_addresses.ada,
                     latest: true,
                     type: ScriptType.PZ_CONTRACT,
-                    cbor: 'cbor2',
+                    cbor: '4e4d0002',
                     unoptimizedCbor: 'unp1'
                 }),
-                [buildScriptAddress(handles['subh3@handlecontract'].resolved_addresses.ada)]: expect.objectContaining({
+                [buildScriptAddress(handles['subh3@handlecontract'].script.cbor)]: expect.objectContaining({
                     handle: 'subh3@handlecontract',
                     refScriptAddress: handles['subh3@handlecontract'].resolved_addresses.ada,
                     latest: true,
                     type: ScriptType.SUB_HANDLE_SETTINGS,
-                    cbor: 'cbor3',
+                    cbor: '4e4d0003',
                     unoptimizedCbor: 'unp3'
                 })
             });
@@ -169,8 +169,8 @@ describe('Scripts Routes Test', () => {
             // Negative control: lowering the highest ordinal below `pers2` would change the expected handle and key.
             mockFetch({ pers: 'unp2' });
             const handles = {
-                'pers1@handlecontract': buildHandle('pers1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', 'cbor1'),
-                'pers2@handlecontract': buildHandle('pers2@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', 'cbor2')
+                'pers1@handlecontract': buildHandle('pers1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0101'),
+                'pers2@handlecontract': buildHandle('pers2@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', '4e4d0102')
             };
 
             const response = mockResponse();
@@ -181,41 +181,67 @@ describe('Scripts Routes Test', () => {
             );
 
             expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
-                scriptAddress: buildScriptAddress(handles['pers2@handlecontract'].resolved_addresses.ada),
+                scriptAddress: buildScriptAddress(handles['pers2@handlecontract'].script.cbor),
                 handle: 'pers2@handlecontract',
                 refScriptAddress: handles['pers2@handlecontract'].resolved_addresses.ada,
                 latest: true,
                 type: ScriptType.PZ_CONTRACT,
-                cbor: 'cbor2',
+                cbor: '4e4d0102',
                 unoptimizedCbor: 'unp2'
             }));
         });
 
-        it('returns latest script for the requested type', async () => {
-            // Feature: `/scripts?latest=true&type=...` should return the highest ordinal only within that exact script type.
-            // Failure mode: substring matching could leak a different type such as `demi_mint_proxy` when `demi_mint` is requested.
-            // Negative control: if exact slug filtering were removed, this assertion could match the wrong handle.
+        it('returns latest script for the requested canonical slug type', async () => {
+            // Feature: `/scripts?latest=true&type=<slug>` should use canonical slug names by default and return the highest ordinal only within that script family.
+            // Failure mode: the endpoint could keep requiring legacy aliases or leak a different type such as `demi_mint_proxy` when `demimnt` is requested.
+            // Negative control: if slug normalization were removed, this request would return 404 instead of the asserted script.
             mockFetch({ demimnt: 'mint-unoptimized', demimntprx: 'proxy-unoptimized' });
             const handles = {
-                'demimnt1@handlecontract': buildHandle('demimnt1@handlecontract', 'addr_test1wqufkpfr0cfg9k430terz8gl0yqv8r8gep82tv9086yv3cck0h26m', 'mint1'),
-                'demimnt2@handlecontract': buildHandle('demimnt2@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', 'mint2'),
-                'demimntprx9@handlecontract': buildHandle('demimntprx9@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', 'proxy9')
+                'demimnt1@handlecontract': buildHandle('demimnt1@handlecontract', 'addr_test1wqufkpfr0cfg9k430terz8gl0yqv8r8gep82tv9086yv3cck0h26m', '4e4d0111'),
+                'demimnt2@handlecontract': buildHandle('demimnt2@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', '4e4d0112'),
+                'demimntprx9@handlecontract': buildHandle('demimntprx9@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0113')
             };
 
             const response = mockResponse();
             await new ScriptsController().index(
-                mockRequest({ latest: true, type: ScriptType.DEMI_MINT }, { get: () => mockRegistry(handles) }),
+                mockRequest({ latest: true, type: 'demimnt' }, { get: () => mockRegistry(handles) }),
                 response as any,
                 () => {}
             );
 
             expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
-                scriptAddress: buildScriptAddress(handles['demimnt2@handlecontract'].resolved_addresses.ada),
+                scriptAddress: buildScriptAddress(handles['demimnt2@handlecontract'].script.cbor),
                 handle: 'demimnt2@handlecontract',
                 type: ScriptType.DEMI_MINT,
                 latest: true,
-                cbor: 'mint2',
+                cbor: '4e4d0112',
                 unoptimizedCbor: 'mint-unoptimized'
+            }));
+        });
+
+        it('still accepts deprecated legacy type aliases during the migration', async () => {
+            // Feature: legacy `type` aliases should continue to work during the deprecation window while callers migrate to slug names.
+            // Failure mode: switching the public query contract to slugs could break existing clients immediately.
+            // Negative control: if alias normalization were removed, this request would return 404 instead of the asserted script.
+            mockFetch({ halmntprx: 'proxy-unoptimized' });
+            const handles = {
+                'halmntprx1@handlecontract': buildHandle('halmntprx1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0121')
+            };
+
+            const response = mockResponse();
+            await new ScriptsController().index(
+                mockRequest({ latest: true, type: ScriptType.HAL_MINT_PROXY }, { get: () => mockRegistry(handles) }),
+                response as any,
+                () => {}
+            );
+
+            expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+                scriptAddress: buildScriptAddress(handles['halmntprx1@handlecontract'].script.cbor),
+                handle: 'halmntprx1@handlecontract',
+                type: ScriptType.HAL_MINT_PROXY,
+                latest: true,
+                cbor: '4e4d0121',
+                unoptimizedCbor: 'proxy-unoptimized'
             }));
         });
 
@@ -241,7 +267,7 @@ describe('Scripts Routes Test', () => {
             delete process.env.NETWORK;
             mockFetch({ pers: 'unp-preview' });
             const handles = {
-                'pers1@handlecontract': buildHandle('pers1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', 'cbor1')
+                'pers1@handlecontract': buildHandle('pers1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0131')
             };
 
             const response = mockResponse();
@@ -264,12 +290,12 @@ describe('Scripts Routes Test', () => {
             // Negative control: adding an ordinal to `pers@handlecontract` or a script to `pers2@handlecontract` would increase the result count.
             mockFetch({ pers: 'unp3' });
             const handles = {
-                'pers@handlecontract': buildHandle('pers@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', 'cbor1'),
+                'pers@handlecontract': buildHandle('pers@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0141'),
                 'pers2@handlecontract': {
-                    ...buildHandle('pers2@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', 'cbor2'),
+                    ...buildHandle('pers2@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', '4e4d0142'),
                     script: undefined
                 },
-                'pers3@handlecontract': buildHandle('pers3@handlecontract', 'addr_test1wqufkpfr0cfg9k430terz8gl0yqv8r8gep82tv9086yv3cck0h26m', 'cbor3')
+                'pers3@handlecontract': buildHandle('pers3@handlecontract', 'addr_test1wqufkpfr0cfg9k430terz8gl0yqv8r8gep82tv9086yv3cck0h26m', '4e4d0143')
             };
 
             const response = mockResponse();
@@ -280,7 +306,7 @@ describe('Scripts Routes Test', () => {
             );
 
             expect(response.json).toHaveBeenCalledWith({
-                [buildScriptAddress(handles['pers3@handlecontract'].resolved_addresses.ada)]: expect.objectContaining({
+                [buildScriptAddress(handles['pers3@handlecontract'].script.cbor)]: expect.objectContaining({
                     handle: 'pers3@handlecontract',
                     unoptimizedCbor: 'unp3',
                     latest: true
@@ -294,7 +320,7 @@ describe('Scripts Routes Test', () => {
             // Negative control: returning `ok: true` with text would make `unoptimizedCbor` appear and fail this check.
             jest.spyOn(global, 'fetch').mockResolvedValue({ ok: false, text: async () => '' } as Response);
             const handles = {
-                'mkpl7@handlecontract': buildHandle('mkpl7@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', 'mkpl-cbor')
+                'mkpl7@handlecontract': buildHandle('mkpl7@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', '4e4d0151')
             };
 
             const response = mockResponse();
@@ -305,7 +331,7 @@ describe('Scripts Routes Test', () => {
             );
 
             expect(response.json).toHaveBeenCalledWith({
-                [buildScriptAddress(handles['mkpl7@handlecontract'].resolved_addresses.ada)]: expect.not.objectContaining({
+                [buildScriptAddress(handles['mkpl7@handlecontract'].script.cbor)]: expect.not.objectContaining({
                     unoptimizedCbor: expect.anything()
                 })
             });

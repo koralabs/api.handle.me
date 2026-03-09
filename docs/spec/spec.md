@@ -94,7 +94,10 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 ### Utility & Internal
 - `POST /datum` CBOR/JSON encode/decode utility
 - `GET /scripts` network script catalog (`latest`, `type` query support)
-  - script entries are resolved from canonical `<slug><ordinal>@handlecontract` subhandles and mapped back onto the public legacy `ScriptType` aliases
+  - script entries are resolved from canonical `<slug><ordinal>@handlecontract` subhandles
+  - the `type` query parameter now prefers canonical slugs such as `pers`, `mkpl`, `demimntprx`, and `halmntprx`
+  - deprecated legacy aliases such as `pz_contract`, `marketplace_contract`, `demi_mint_proxy`, and `hal_mint_proxy` are still accepted during the migration window
+  - response payload `type` values still use the legacy `ScriptType` aliases during that deprecation phase
   - response keys are validator-hash-derived script addresses, while `refScriptAddress` points to the handle-held reference script UTxO address
   - `unoptimizedCbor`, when present, is loaded from the owning contract repo at `<network>/<slug>.unoptimized.cbor`
 - `POST /mint` relay for subhandle minting service (currently rejects `handle_type=handle`)
@@ -118,8 +121,9 @@ Rules:
 
 API transition rule:
 - canonical slug naming is the long-term source of truth for new deployment handles and new repo-owned contract identifiers.
-- `/scripts` still exposes legacy script-type aliases during the migration window through `old_script_type` values such as `marketplace_contract`, `demi_mint_proxy`, and `hal_mint_proxy`.
-- handle-backed discovery maps new ordinalized `*.handlecontract` names and repo-owned `<slug>.unoptimized.cbor` artifacts back onto those legacy API type enums until the public API contract is intentionally changed.
+- `/scripts` `type=` query values now prefer canonical slugs such as `mkpl`, `demimntprx`, and `halmntprx`.
+- `/scripts` still accepts legacy query aliases such as `marketplace_contract`, `demi_mint_proxy`, and `hal_mint_proxy` during the migration window.
+- handle-backed discovery maps new ordinalized `*.handlecontract` names and repo-owned `<slug>.unoptimized.cbor` artifacts back onto the legacy response `type` enums until the public API contract is intentionally changed.
 
 ## Search and Pagination Behavior
 - Handles endpoints support:

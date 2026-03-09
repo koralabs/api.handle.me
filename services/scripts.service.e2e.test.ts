@@ -1,4 +1,4 @@
-import { bech32AddressFromHashes, decodeAddress, HandleType, ScriptType } from '@koralabs/kora-labs-common';
+import { bech32AddressFromHashes, blake2b, HandleType, ScriptType } from '@koralabs/kora-labs-common';
 import { RedisHandlesStore } from '../stores/redis';
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
@@ -10,11 +10,11 @@ const previewRefAddresses = [
     'addr_test1wqufkpfr0cfg9k430terz8gl0yqv8r8gep82tv9086yv3cck0h26m'
 ];
 
-const buildScriptAddress = (refScriptAddress: string) => {
-    const validatorHash = decodeAddress(refScriptAddress)?.slice(2, 58);
-    if (!validatorHash) {
-        throw new Error(`Unable to derive validator hash from ${refScriptAddress}`);
+const buildScriptAddress = (scriptCbor: string) => {
+    if (!/^[0-9a-f]+$/i.test(scriptCbor) || scriptCbor.length % 2 !== 0) {
+        throw new Error(`Unable to derive validator hash from ${scriptCbor}`);
     }
+    const validatorHash = blake2b(Buffer.from(`02${scriptCbor}`, 'hex'), 28);
 
     return bech32AddressFromHashes(validatorHash, 'script', '', 'key', 'addr', true);
 };
@@ -51,9 +51,9 @@ describe('scripts service e2e', () => {
         });
 
         [
-            ['pers1@handlecontract', previewRefAddresses[0], 'cbor1'],
-            ['pers2@handlecontract', previewRefAddresses[1], 'cbor2'],
-            ['demimnt3@handlecontract', previewRefAddresses[2], 'cbor3']
+            ['pers1@handlecontract', previewRefAddresses[0], '4e4d1001'],
+            ['pers2@handlecontract', previewRefAddresses[1], '4e4d1002'],
+            ['demimnt3@handlecontract', previewRefAddresses[2], '4e4d1003']
         ].forEach(([name, address, cbor]) => {
             const handle = repo.Internal.buildHandle({
                 name,
@@ -82,21 +82,21 @@ describe('scripts service e2e', () => {
         const scripts = await getScriptsIndex(req);
 
         expect(scripts).toEqual({
-            [buildScriptAddress(previewRefAddresses[0])]: expect.objectContaining({
+            [buildScriptAddress('4e4d1001')]: expect.objectContaining({
                 handle: 'pers1@handlecontract',
                 refScriptAddress: previewRefAddresses[0],
                 latest: false,
                 type: ScriptType.PZ_CONTRACT,
                 unoptimizedCbor: 'unp-pz'
             }),
-            [buildScriptAddress(previewRefAddresses[1])]: expect.objectContaining({
+            [buildScriptAddress('4e4d1002')]: expect.objectContaining({
                 handle: 'pers2@handlecontract',
                 refScriptAddress: previewRefAddresses[1],
                 latest: true,
                 type: ScriptType.PZ_CONTRACT,
                 unoptimizedCbor: 'unp-pz'
             }),
-            [buildScriptAddress(previewRefAddresses[2])]: expect.objectContaining({
+            [buildScriptAddress('4e4d1003')]: expect.objectContaining({
                 handle: 'demimnt3@handlecontract',
                 refScriptAddress: previewRefAddresses[2],
                 latest: true,

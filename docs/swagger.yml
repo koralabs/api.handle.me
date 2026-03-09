@@ -949,10 +949,10 @@ paths:
           type: boolean
       - name: type
         in: query
-        description: Filter scripts by script type. During the slug migration this still uses legacy API aliases such as `marketplace_contract`, `demi_mint_proxy`, and `hal_mint_proxy`, even when the underlying deployment handles follow the canonical slug rule `<app><[ord|mnt|ref|roy]><[mpt]>`.
+        description: Filter scripts by canonical contract slug. Preferred values are canonical slugs such as `mkpl`, `demimntprx`, and `halmntprx`. Deprecated legacy aliases such as `marketplace_contract`, `demi_mint_proxy`, and `hal_mint_proxy` are still accepted during the migration window.
         required: false
         schema:
-          $ref: "#/components/schemas/ScriptType"
+          $ref: "#/components/schemas/ScriptQueryType"
       responses:
         '200':
           description: Script metadata
@@ -1513,7 +1513,7 @@ components:
       - virtual_subhandle
     ScriptType:
       type: string
-      description: Legacy script category aliases returned by `/scripts` during the canonical slug migration. Repo-owned canonical contract names now follow `<app><[ord|mnt|ref|roy]><[mpt]>`, but this enum remains the public compatibility layer until the API contract is intentionally revised.
+      description: Legacy script category aliases still returned by `/scripts` response payloads during the canonical slug migration.
       enum:
       - pz_contract
       - sub_handle_settings
@@ -1529,6 +1529,24 @@ components:
       - hal_ref_spend_proxy
       - hal_ref_spend
       - hal_royalty_spend
+    ScriptQueryType:
+      type: string
+      description: Canonical slug names accepted by the `/scripts` `type` query parameter. Deprecated legacy aliases remain accepted for a transition period.
+      enum:
+      - pers
+      - subh
+      - mkpl
+      - demimntprx
+      - demimnt
+      - demimntmpt
+      - demiord
+      - halmntprx
+      - halmnt
+      - halmntmpt
+      - halord
+      - halrefprx
+      - halref
+      - halroy
     HexString:
       type: string
       example: "0x1a3dfb"
