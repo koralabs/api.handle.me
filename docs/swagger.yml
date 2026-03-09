@@ -1513,22 +1513,22 @@ components:
       - virtual_subhandle
     ScriptType:
       type: string
-      description: Legacy script category aliases still returned by `/scripts` response payloads during the canonical slug migration.
+      description: Canonical contract slug names returned by `/scripts` response payloads.
       enum:
-      - pz_contract
-      - sub_handle_settings
-      - marketplace_contract
-      - demi_mint_proxy
-      - demi_mint
-      - demi_minting_data
-      - demi_orders
-      - hal_mint_proxy
-      - hal_mint
-      - hal_minting_data
-      - hal_orders_spend
-      - hal_ref_spend_proxy
-      - hal_ref_spend
-      - hal_royalty_spend
+      - pers
+      - subh
+      - mkpl
+      - demimntprx
+      - demimnt
+      - demimntmpt
+      - demiord
+      - halmntprx
+      - halmnt
+      - halmntmpt
+      - halord
+      - halrefprx
+      - halref
+      - halroy
     ScriptQueryType:
       type: string
       description: Canonical slug names accepted by the `/scripts` `type` query parameter. Deprecated legacy aliases remain accepted for a transition period.

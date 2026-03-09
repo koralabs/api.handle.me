@@ -140,7 +140,7 @@ describe('Scripts Routes Test', () => {
                     handle: 'pers1@handlecontract',
                     refScriptAddress: handles['pers1@handlecontract'].resolved_addresses.ada,
                     latest: false,
-                    type: ScriptType.PZ_CONTRACT,
+                    type: 'pers',
                     cbor: '4e4d0001',
                     unoptimizedCbor: 'unp1'
                 }),
@@ -148,7 +148,7 @@ describe('Scripts Routes Test', () => {
                     handle: 'pers2@handlecontract',
                     refScriptAddress: handles['pers2@handlecontract'].resolved_addresses.ada,
                     latest: true,
-                    type: ScriptType.PZ_CONTRACT,
+                    type: 'pers',
                     cbor: '4e4d0002',
                     unoptimizedCbor: 'unp1'
                 }),
@@ -156,7 +156,7 @@ describe('Scripts Routes Test', () => {
                     handle: 'subh3@handlecontract',
                     refScriptAddress: handles['subh3@handlecontract'].resolved_addresses.ada,
                     latest: true,
-                    type: ScriptType.SUB_HANDLE_SETTINGS,
+                    type: 'subh',
                     cbor: '4e4d0003',
                     unoptimizedCbor: 'unp3'
                 })
@@ -185,7 +185,7 @@ describe('Scripts Routes Test', () => {
                 handle: 'pers2@handlecontract',
                 refScriptAddress: handles['pers2@handlecontract'].resolved_addresses.ada,
                 latest: true,
-                type: ScriptType.PZ_CONTRACT,
+                type: 'pers',
                 cbor: '4e4d0102',
                 unoptimizedCbor: 'unp2'
             }));
@@ -212,7 +212,7 @@ describe('Scripts Routes Test', () => {
             expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
                 scriptAddress: buildScriptAddress(handles['demimnt2@handlecontract'].script.cbor),
                 handle: 'demimnt2@handlecontract',
-                type: ScriptType.DEMI_MINT,
+                type: 'demimnt',
                 latest: true,
                 cbor: '4e4d0112',
                 unoptimizedCbor: 'mint-unoptimized'
@@ -238,7 +238,7 @@ describe('Scripts Routes Test', () => {
             expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
                 scriptAddress: buildScriptAddress(handles['halmntprx1@handlecontract'].script.cbor),
                 handle: 'halmntprx1@handlecontract',
-                type: ScriptType.HAL_MINT_PROXY,
+                type: 'halmntprx',
                 latest: true,
                 cbor: '4e4d0121',
                 unoptimizedCbor: 'proxy-unoptimized'

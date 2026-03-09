@@ -27,11 +27,24 @@ const SCRIPT_SOURCES: Record<ScriptType, { slug: string; repo: string }> = {
 const SCRIPT_TYPES_BY_SLUG = Object.entries(SCRIPT_SOURCES)
     .sort(([, left], [, right]) => right.slug.length - left.slug.length)
     .map(([type, source]) => [source.slug, type as ScriptType] as const);
+const LEGACY_SCRIPT_TYPE_ALIASES: Record<string, ScriptType> = {
+    pz_contract: ScriptType.PZ_CONTRACT,
+    sub_handle_settings: ScriptType.SUB_HANDLE_SETTINGS,
+    marketplace_contract: ScriptType.MARKETPLACE_CONTRACT,
+    demi_mint_proxy: ScriptType.DEMI_MINT_PROXY,
+    demi_mint: ScriptType.DEMI_MINT,
+    demi_minting_data: ScriptType.DEMI_MINTING_DATA,
+    demi_orders: ScriptType.DEMI_ORDERS,
+    hal_mint_proxy: ScriptType.HAL_MINT_PROXY,
+    hal_mint: ScriptType.HAL_MINT,
+    hal_minting_data: ScriptType.HAL_MINTING_DATA,
+    hal_orders_spend: ScriptType.HAL_ORDERS_SPEND,
+    hal_ref_spend_proxy: ScriptType.HAL_REF_SPEND_PROXY,
+    hal_ref_spend: ScriptType.HAL_REF_SPEND,
+    hal_royalty_spend: ScriptType.HAL_ROYALTY_SPEND
+};
 const SCRIPT_TYPE_BY_QUERY = Object.fromEntries(
-    Object.entries(SCRIPT_SOURCES).flatMap(([type, source]) => [
-        [type, type as ScriptType],
-        [source.slug, type as ScriptType]
-    ])
+    Object.entries(SCRIPT_SOURCES).flatMap(([type, source]) => [[source.slug, type as ScriptType]])
 ) as Record<string, ScriptType>;
 
 const createRepo = (req: Request<any>): HandlesRepository | null => {
@@ -88,7 +101,7 @@ export const resolveScriptTypeQuery = (type?: string): ScriptType | undefined =>
         return;
     }
 
-    return SCRIPT_TYPE_BY_QUERY[type.toLowerCase()];
+    return SCRIPT_TYPE_BY_QUERY[type.toLowerCase()] ?? LEGACY_SCRIPT_TYPE_ALIASES[type.toLowerCase()];
 };
 
 const fetchUnoptimizedCbor = async (type: ScriptType, cache: Map<ScriptType, Promise<string | undefined>>) => {
@@ -119,6 +132,8 @@ const fetchUnoptimizedCbor = async (type: ScriptType, cache: Map<ScriptType, Pro
     cache.set(type, request);
     return request;
 };
+
+export const getScriptSlug = (type: ScriptType) => SCRIPT_SOURCES[type]?.slug ?? type;
 
 const getValidatorHashFromScriptCbor = (scriptCbor?: string) => {
     if (!scriptCbor || !/^[0-9a-f]+$/i.test(scriptCbor) || scriptCbor.length % 2 !== 0) {

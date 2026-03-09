@@ -1,4 +1,4 @@
-import { bech32AddressFromHashes, blake2b, HandleType, ScriptType } from '@koralabs/kora-labs-common';
+import { bech32AddressFromHashes, blake2b, HandleType } from '@koralabs/kora-labs-common';
 import { RedisHandlesStore } from '../stores/redis';
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
@@ -86,21 +86,21 @@ describe('scripts service e2e', () => {
                 handle: 'pers1@handlecontract',
                 refScriptAddress: previewRefAddresses[0],
                 latest: false,
-                type: ScriptType.PZ_CONTRACT,
+                type: 'pers',
                 unoptimizedCbor: 'unp-pz'
             }),
             [buildScriptAddress('4e4d1002')]: expect.objectContaining({
                 handle: 'pers2@handlecontract',
                 refScriptAddress: previewRefAddresses[1],
                 latest: true,
-                type: ScriptType.PZ_CONTRACT,
+                type: 'pers',
                 unoptimizedCbor: 'unp-pz'
             }),
             [buildScriptAddress('4e4d1003')]: expect.objectContaining({
                 handle: 'demimnt3@handlecontract',
                 refScriptAddress: previewRefAddresses[2],
                 latest: true,
-                type: ScriptType.DEMI_MINT,
+                type: 'demimnt',
                 unoptimizedCbor: 'unp-demi'
             })
         });
