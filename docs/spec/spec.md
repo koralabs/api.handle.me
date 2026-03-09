@@ -99,7 +99,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
   - deprecated legacy aliases such as `pz_contract`, `marketplace_contract`, `demi_mint_proxy`, and `hal_mint_proxy` are still accepted during the migration window
   - response payload `type` values still use the legacy `ScriptType` aliases during that deprecation phase
   - response keys are validator-hash-derived script addresses, while `refScriptAddress` points to the handle-held reference script UTxO address
-  - `unoptimizedCbor`, when present, is loaded from the owning contract repo at `<network>/<slug>.unoptimized.cbor`
+  - `unoptimizedCbor`, when present, is loaded from the owning contract repo at `deploy/<network>/<slug>.unoptimized.cbor`
 - `POST /mint` relay for subhandle minting service (currently rejects `handle_type=handle`)
 
 ## Contract Slug Naming
@@ -123,7 +123,7 @@ API transition rule:
 - canonical slug naming is the long-term source of truth for new deployment handles and new repo-owned contract identifiers.
 - `/scripts` `type=` query values now prefer canonical slugs such as `mkpl`, `demimntprx`, and `halmntprx`.
 - `/scripts` still accepts legacy query aliases such as `marketplace_contract`, `demi_mint_proxy`, and `hal_mint_proxy` during the migration window.
-- handle-backed discovery maps new ordinalized `*.handlecontract` names and repo-owned `<slug>.unoptimized.cbor` artifacts back onto the legacy response `type` enums until the public API contract is intentionally changed.
+- handle-backed discovery maps new ordinalized `*.handlecontract` names and repo-owned `deploy/<network>/<slug>.unoptimized.cbor` artifacts back onto the legacy response `type` enums until the public API contract is intentionally changed.
 
 ## Search and Pagination Behavior
 - Handles endpoints support:

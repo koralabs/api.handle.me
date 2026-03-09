@@ -265,7 +265,7 @@ describe('Scripts Routes Test', () => {
             // Failure mode: address derivation could flip to mainnet prefixes when env is absent.
             // Negative control: setting `NETWORK=mainnet` would change the expected bech32 prefix and fail this check.
             delete process.env.NETWORK;
-            mockFetch({ pers: 'unp-preview' });
+            const fetchMock = mockFetch({ pers: 'unp-preview' });
             const handles = {
                 'pers1@handlecontract': buildHandle('pers1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0131')
             };
@@ -282,6 +282,9 @@ describe('Scripts Routes Test', () => {
                 handle: 'pers1@handlecontract',
                 unoptimizedCbor: 'unp-preview'
             }));
+            expect(fetchMock).toHaveBeenCalledWith(
+                'https://raw.githubusercontent.com/koralabs/handles-personalization/master/deploy/preview/pers.unoptimized.cbor'
+            );
         });
 
         it('ignores handles without required ordinals or inline scripts', async () => {

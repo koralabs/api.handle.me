@@ -80,7 +80,7 @@ const getUnoptimizedCborUrl = (type: ScriptType) => {
         return null;
     }
 
-    return `${GITHUB_RAW_BASE_URL}/${source.repo}/master/${getNetwork()}/${source.slug}.unoptimized.cbor`;
+    return `${GITHUB_RAW_BASE_URL}/${source.repo}/master/deploy/${getNetwork()}/${source.slug}.unoptimized.cbor`;
 };
 
 export const resolveScriptTypeQuery = (type?: string): ScriptType | undefined => {
