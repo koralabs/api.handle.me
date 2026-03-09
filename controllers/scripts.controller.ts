@@ -15,37 +15,37 @@ const HAL_HANDLE_MATCHERS: {
     {
         type: ScriptType.HAL_MINT_PROXY,
         legacyHandles: ['hal_mnt_prxy@handle_contract'],
-        futurePattern: /^hal[-_]?mint[-_]?proxy(\d+)@handlecontract$/i
+        futurePattern: /^halmntprx(\d+)@handlecontract$/i
     },
     {
         type: ScriptType.HAL_MINTING_DATA,
         legacyHandles: ['hal_mnt_data@handle_contract'],
-        futurePattern: /^hal[-_]?minting[-_]?data(\d+)@handlecontract$/i
+        futurePattern: /^halmntmpt(\d+)@handlecontract$/i
     },
     {
         type: ScriptType.HAL_ORDERS_SPEND,
         legacyHandles: ['hal_ord_spnd@handle_contract'],
-        futurePattern: /^hal[-_]?orders[-_]?spend(\d+)@handlecontract$/i
+        futurePattern: /^halord(\d+)@handlecontract$/i
     },
     {
         type: ScriptType.HAL_REF_SPEND_PROXY,
         legacyHandles: ['hal_rf_sd_px@handle_contract'],
-        futurePattern: /^hal[-_]?ref[-_]?spend[-_]?proxy(\d+)@handlecontract$/i
+        futurePattern: /^halrefprx(\d+)@handlecontract$/i
     },
     {
         type: ScriptType.HAL_REF_SPEND,
         legacyHandles: ['hal_ref_spnd@handle_contract'],
-        futurePattern: /^hal[-_]?ref[-_]?spend(\d+)@handlecontract$/i
+        futurePattern: /^halref(\d+)@handlecontract$/i
     },
     {
         type: ScriptType.HAL_ROYALTY_SPEND,
         legacyHandles: ['hal_roy_spnd@handle_contract'],
-        futurePattern: /^hal[-_]?royalty[-_]?spend(\d+)@handlecontract$/i
+        futurePattern: /^halroy(\d+)@handlecontract$/i
     },
     {
         type: ScriptType.HAL_MINT,
         legacyHandles: ['hal_mnt@handle_contract'],
-        futurePattern: /^hal[-_]?mint(\d+)@handlecontract$/i
+        futurePattern: /^halmnt(\d+)@handlecontract$/i
     }
 ];
 

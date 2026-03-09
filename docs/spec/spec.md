@@ -117,6 +117,7 @@ API transition rule:
 - canonical slug naming is the long-term source of truth for new deployment handles and new repo-owned contract identifiers.
 - `/scripts` still exposes legacy script-type aliases during the migration window through `old_script_type` values such as `marketplace_contract`, `demi_mint_proxy`, and `hal_mint_proxy`.
 - handle-backed discovery in the controller should map new ordinalized `*.handlecontract` names back onto those legacy API type enums until the public API contract is intentionally changed.
+- HAL canonical deployment handles follow the same rule, for example `halmntprx2@handlecontract` and `halref1@handlecontract`.
 
 ## Search and Pagination Behavior
 - Handles endpoints support:
