@@ -14,6 +14,7 @@
       "forever:list": "ps -ef | grep \"node express.js\" | grep -v grep || true"
     },
     "dependencies": {
+      "@aiken-lang/merkle-patricia-forestry": "^1.3.1",
       "swagger-ui-express": "^4.5.0",
       "@valkey/valkey-glide": "^2.0.1"
     }

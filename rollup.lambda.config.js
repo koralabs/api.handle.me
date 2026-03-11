@@ -25,5 +25,15 @@ export default (async () => ({
         dir: 'dist',
         format: 'es'
     },
-    external: [ 'aws-sdk', 'forever', 'swagger-ui-express', '@valkey/valkey-glide' ]
+    external: [
+        'aws-sdk',
+        'forever',
+        'swagger-ui-express',
+        '@valkey/valkey-glide',
+        '@aiken-lang/merkle-patricia-forestry',
+        'level',
+        'classic-level',
+        'browser-level',
+        'node-gyp-build'
+    ]
 }))();

@@ -6,7 +6,8 @@ import zlib from 'zlib';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { RedisHandlesStore } from '../stores/redis';
 import { extractApiIndexMember, getApiIndexScanPattern } from '../stores/redis/keys';
-import { buildSnapshotVerification, VerifiedHandleFileContent } from '../utils/snapshotVerification';
+import { buildSnapshotVerification } from '../utils/snapshotVerification';
+import { VerifiedHandleFileContent } from '../utils/verifiedSnapshot';
 process.env.ENABLE_OGMIOS_SCANNING = 'false';
 
 declare global {

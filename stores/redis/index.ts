@@ -6,7 +6,7 @@ import { inflate } from 'zlib';
 import { DISABLE_HANDLES_SNAPSHOT, NODE_ENV } from '../../config';
 import { handleEraBoundaries, MAX_SETS_PER_PIPE, META_INDEXES, ORDERED_SLOTS } from '../../config/constants';
 import { getHandleNameFromAssetName } from '../../services/ogmios/utils';
-import { isChainVerifiedSnapshot, VerifiedHandleFileContent } from '../../utils/snapshotVerification';
+import { isChainVerifiedSnapshot, VerifiedHandleFileContent } from '../../utils/verifiedSnapshot';
 import { getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey, getApiNamespaceScanPattern } from './keys';
 
 // const glideClient = await GlideClient.createClient({

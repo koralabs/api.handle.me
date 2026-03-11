@@ -1,5 +1,6 @@
 import { LogCategory, Logger } from '@koralabs/kora-labs-common';
-import { buildHandleSetMptRootHash, buildSnapshotVerification, getChainMintingDataRootHash, isChainVerifiedSnapshot } from './snapshotVerification';
+import { buildHandleSetMptRootHash, buildSnapshotVerification, getChainMintingDataRootHash } from './snapshotVerification';
+import { isChainVerifiedSnapshot } from './verifiedSnapshot';
 
 describe('snapshotVerification', () => {
     const originalFetch = global.fetch;

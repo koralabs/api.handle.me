@@ -1,7 +1,8 @@
 import { Trie } from '@aiken-lang/merkle-patricia-forestry';
 import { decodeCborToJson } from '@koralabs/kora-labs-common/utils/cbor';
-import { HANDLE_POLICIES, IHandleFileContent, LogCategory, Logger, Network, NETWORK } from '@koralabs/kora-labs-common';
+import { HANDLE_POLICIES, LogCategory, Logger, Network, NETWORK } from '@koralabs/kora-labs-common';
 import { blockfrostApiCall } from './helpers';
+import { SnapshotVerification } from './verifiedSnapshot';
 
 interface BlockfrostAssetTransaction {
     tx_hash: string;
@@ -22,18 +23,6 @@ interface BlockfrostTxUtxosResponse {
 interface BlockfrostDatumCborResponse {
     cbor: string;
 }
-
-export interface SnapshotVerification {
-    verifiedAgainstChain: true;
-    snapshotMptRootHash: string;
-    chainMptRootHash: string;
-    network: string;
-    verifiedAtUtc: string;
-}
-
-export type VerifiedHandleFileContent = IHandleFileContent & {
-    verification?: SnapshotVerification;
-};
 
 const MINTING_DATA_HANDLE_NAME = 'handle_root@handle_settings';
 const EMPTY_MPT_ROOT_HASH = Buffer.alloc(32).toString('hex');
@@ -141,10 +130,4 @@ export const buildSnapshotVerification = async (handleNames: string[]): Promise<
         network: NETWORK.toLowerCase() || 'preview',
         verifiedAtUtc: new Date().toISOString()
     };
-};
-
-export const isChainVerifiedSnapshot = (snapshot: VerifiedHandleFileContent) => {
-    return snapshot.verification?.verifiedAgainstChain === true
-        && snapshot.verification.snapshotMptRootHash === snapshot.verification.chainMptRootHash
-        && snapshot.verification.network === (NETWORK.toLowerCase() || 'preview');
 };
