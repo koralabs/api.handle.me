@@ -15,6 +15,7 @@ const baseMetrics = {
     currentSlot: 60,
     firstMemoryUsage: 1000,
     currentBlockHash: 'block_hash',
+    tipBlockHash: 'tip_hash',
     memorySize: 50,
     utxoSchemaVersion: 1,
     indexSchemaVersion: 1,
@@ -64,7 +65,13 @@ describe('HealthController', () => {
         expect(res.json).toHaveBeenCalledWith(
             expect.objectContaining({
                 status: 'current',
-                stats: expect.objectContaining({ handle_count: 3, holder_count: 2 })
+                stats: expect.objectContaining({
+                    handle_count: 3,
+                    holder_count: 2,
+                    last_slot: 110,
+                    tip_block_hash: 'tip_hash',
+                    lock_lambdas: LockedLambdaReason.UNLOCKED
+                })
             })
         );
         expect(res.json.mock.calls[0][0].ogmios).toBeUndefined();
