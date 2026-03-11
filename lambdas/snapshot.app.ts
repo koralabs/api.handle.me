@@ -26,8 +26,10 @@ console.sameLine = function (message) {
 const LOCK_REASON_SNAPSHOT = 'SNAPSHOT' as LockedLambdaReason;
 const LOCKED_LAMBDA_RETRY_DELAY_MS = 15_000;
 const LOCKED_LAMBDA_MAX_RETRIES = 4;
+const SNAPSHOT_STALE_NOTIFY_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 const delayMs = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const getSnapshotUrl = (network: string, utxoSchemaVersion: number) => `http://api.handle.me.s3-website-us-west-2.amazonaws.com/${network}/utxo-snapshot/${utxoSchemaVersion}/handles_utxos.gz`;
 
 const waitForUnlockedLambdas = async (handlesRepo: HandlesRepository) => {
     let metrics = handlesRepo.getMetrics();
@@ -43,14 +45,32 @@ const waitForUnlockedLambdas = async (handlesRepo: HandlesRepository) => {
     return metrics;
 };
 
+const maybeNotifyStalePublishedSnapshot = async (network: string, utxoSchemaVersion: number, error: unknown) => {
+    try {
+        const url = getSnapshotUrl(network, utxoSchemaVersion);
+        const response = await fetch(url);
+        if (response.status !== 200) return;
+
+        const lastModified = response.headers?.get?.('last-modified');
+        const lastModifiedAt = lastModified ? Date.parse(lastModified) : Number.NaN;
+        if (Number.isNaN(lastModifiedAt) || (Date.now() - lastModifiedAt) <= SNAPSHOT_STALE_NOTIFY_WINDOW_MS) return;
+
+        Logger.log({
+            message: `Snapshot generation is failing and published snapshot is older than 48 hours. url=${url} lastModified=${new Date(lastModifiedAt).toISOString()} error=${error instanceof Error ? error.message : error}`,
+            category: LogCategory.NOTIFY,
+            event: 'snapshot.handler.snapshotStaleAfterFailure'
+        });
+    } catch {}
+};
+
 const getRedisItems = async () => {
     const utxos: Map<string, UTxOWithTxInfo | null> = new Map();
     const mints: Map<string, MintingData[] | null> = new Map();
+    let handleNames: string[] = [];
 
     let lastSlot = 0; // Lets hardcode this to 20 blocks ago (from Bf) To avoid recording a rollbak to the snapshot
     let lastHash = '';
     let utxoSchemaVersion = 0;
-    let handleCount = 0;
 
     try {
         const redisHandleStore = new RedisHandlesStore();
@@ -63,7 +83,7 @@ const getRedisItems = async () => {
         lastSlot = Number(metrics.currentSlot);
         lastHash = `${metrics.currentBlockHash}`;
         utxoSchemaVersion = Number(metrics.utxoSchemaVersion);
-        handleCount = Number(metrics.handleCount);
+        handleNames = (redisHandleStore.getKeysFromIndex(IndexNames.HANDLE) as string[]).map((handleName) => `${handleName}`);
 
         do {
             const [nextCursor, keys] = redisHandleStore.redisClientCall('scan', cursor, { match: getApiIndexScanPattern(IndexNames.UTXO), count: 1000 }) as [string, string[]];
@@ -136,21 +156,21 @@ const getRedisItems = async () => {
     return {
         utxos,
         mints,
+        handleNames,
         lastSlot,
         lastHash,
-        utxoSchemaVersion,
-        handleCount
+        utxoSchemaVersion
     };
 };
 
 export const processSnapshot = async (_network: string) => {
     const results = await getRedisItems();
 
-    const fileJson: VerifiedHandleFileContent & { snapshotHandleCount: number } = {
+    const fileJson: VerifiedHandleFileContent & { handleNames: string[] } = {
         slot: results.lastSlot,
         hash: results.lastHash,
         utxoSchemaVersion: results.utxoSchemaVersion,
-        snapshotHandleCount: results.handleCount,
+        handleNames: results.handleNames,
         utxos: Array.from(results.utxos)
             .map(([_, v]) => v)
             .filter((v): v is UTxOWithTxInfo => v !== null),
@@ -180,38 +200,43 @@ export const handler = async (event: any) => {
     handlesRepo.setMetrics({ lockLambdas: LOCK_REASON_SNAPSHOT, lockLambdasTimestamp: Date.now() });
     try {
         const network = `${process.env.NETWORK ?? 'preview'}`.toLowerCase();
-        const { snapshotHandleCount, ...fileJson } = await processSnapshot(network);
-        const verifiedFileJson: VerifiedHandleFileContent = {
-            ...fileJson,
-            verification: await buildSnapshotVerification(snapshotHandleCount)
-        };
+        const { handleNames, ...fileJson } = await processSnapshot(network);
+        try {
+            const verifiedFileJson: VerifiedHandleFileContent = {
+                ...fileJson,
+                verification: await buildSnapshotVerification(handleNames)
+            };
 
-        const { utxoSchemaVersion = 1 } = verifiedFileJson;
-        const fileName = `${network}/utxo-snapshot/${utxoSchemaVersion}/handles_utxos.gz`;
+            const { utxoSchemaVersion = 1 } = verifiedFileJson;
+            const fileName = `${network}/utxo-snapshot/${utxoSchemaVersion}/handles_utxos.gz`;
 
-        const zippedSnapshots = [
-            {
-                Key: fileName,
-                Body: zlib.deflateSync(JSON.stringify(verifiedFileJson))
-            }
-        ];
+            const zippedSnapshots = [
+                {
+                    Key: fileName,
+                    Body: zlib.deflateSync(JSON.stringify(verifiedFileJson))
+                }
+            ];
 
-        const s3Result = await Promise.all(
-            zippedSnapshots.map(({ Key, Body }) => {
-                const params = {
-                    Bucket: 'api.handle.me',
-                    Key,
-                    Body
-                };
-                return new S3Client({ region: 'us-west-2' }).send(new PutObjectCommand(params));
-            })
-        );
+            const s3Result = await Promise.all(
+                zippedSnapshots.map(({ Key, Body }) => {
+                    const params = {
+                        Bucket: 'api.handle.me',
+                        Key,
+                        Body
+                    };
+                    return new S3Client({ region: 'us-west-2' }).send(new PutObjectCommand(params));
+                })
+            );
 
-        Logger.local(`s3Result ${JSON.stringify(s3Result)}`);
+            Logger.local(`s3Result ${JSON.stringify(s3Result)}`);
 
-        return {
-            statusCode: 200,
-            body: ''
+            return {
+                statusCode: 200,
+                body: ''
+            };
+        } catch (error) {
+            await maybeNotifyStalePublishedSnapshot(network, fileJson.utxoSchemaVersion ?? 1, error);
+            throw error;
         };
     } finally {
         handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
@@ -220,10 +245,10 @@ export const handler = async (event: any) => {
 
 if (process.argv[2] === 'local') {
     await (async () => {
-        const { snapshotHandleCount, ...fileData } = await processSnapshot(process.env.NETWORK ?? 'preview');
+        const { handleNames, ...fileData } = await processSnapshot(process.env.NETWORK ?? 'preview');
         const fileJson = JSON.stringify({
             ...fileData,
-            verification: await buildSnapshotVerification(snapshotHandleCount)
+            verification: await buildSnapshotVerification(handleNames)
         });
         fs.writeFileSync(`tmp/handles_utxos.json`, fileJson);
         fs.writeFileSync(`tmp/handles_utxos.gz`, zlib.deflateSync(fileJson));

@@ -272,8 +272,8 @@ describe('RedisHandlesStore critical path tests', () => {
             utxoSchemaVersion: 1,
             verification: {
                 verifiedAgainstChain: true,
-                snapshotHandleCount: 1,
-                chainHandleCount: 1,
+                snapshotMptRootHash: 'ab'.repeat(32),
+                chainMptRootHash: 'ab'.repeat(32),
                 network,
                 verifiedAtUtc: '2026-03-11T00:00:00.000Z'
             }

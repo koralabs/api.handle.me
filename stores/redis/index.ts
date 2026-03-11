@@ -17,7 +17,6 @@ import { getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetri
 // glideClient.zremRangeByScore('', {value: 0, isInclusive: true})
 
 const redisTimings: Record<string, number> = {};
-
 export class RedisHandlesStore implements IApiStore {
     private static _worker: any;
     private static _id = 0;

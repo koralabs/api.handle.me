@@ -1,6 +1,7 @@
-import { IndexNames, LockedLambdaReason, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { IndexNames, LockedLambdaReason, LogCategory, Logger, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { RedisHandlesStore } from '../stores/redis';
+import { buildHandleSetMptRootHash } from '../utils/snapshotVerification';
 import { inflateSync } from 'zlib';
 
 const lambda = require('./snapshot');
@@ -66,7 +67,7 @@ describe('Snapshot lambda e2e', () => {
         repo.destroy();
     });
 
-    beforeEach(() => {
+    beforeEach(async () => {
         repo.rollBackToGenesis();
         repo.addUTxOsWithMintDataAndUpdateIndexes([buildMintedUTxO()]);
         repo.setMetrics({
@@ -75,30 +76,30 @@ describe('Snapshot lambda e2e', () => {
             utxoSchemaVersion: 7,
             lockLambdas: LockedLambdaReason.UNLOCKED
         });
+        const rootHash = await buildHandleSetMptRootHash(['papagoose']);
         global.fetch = jest.fn()
             .mockResolvedValueOnce({
                 ok: true,
                 status: 200,
                 statusText: 'OK',
-                json: async () => [{ asset: `${policy}${handleHex}`, quantity: '1' }]
+                json: async () => [{ tx_hash: 'minting-data-tx' }]
             })
             .mockResolvedValueOnce({
                 ok: true,
                 status: 200,
                 statusText: 'OK',
-                json: async () => []
-            })
-            .mockResolvedValueOnce({
-                ok: true,
-                status: 200,
-                statusText: 'OK',
-                json: async () => []
-            })
-            .mockResolvedValueOnce({
-                ok: true,
-                status: 200,
-                statusText: 'OK',
-                json: async () => []
+                json: async () => ({
+                    outputs: [
+                        {
+                            output_index: 0,
+                            amount: [
+                                { unit: 'lovelace', quantity: '1500000' },
+                                { unit: `${policy}${Buffer.from('handle_root@handle_settings').toString('hex')}`, quantity: '1' }
+                            ],
+                            inline_datum: `d8799f5820${rootHash}ff`
+                        }
+                    ]
+                })
             }) as any;
         jest.clearAllMocks();
     });
@@ -110,6 +111,31 @@ describe('Snapshot lambda e2e', () => {
     it('creates and uploads a snapshot for the configured network only', async () => {
         const sendSpy = jest.spyOn(mockedS3Instance, 'send');
         const network = `${process.env.NETWORK ?? 'mainnet'}`.toLowerCase();
+        const rootHash = await buildHandleSetMptRootHash(['papagoose']);
+        global.fetch = jest.fn()
+            .mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                statusText: 'OK',
+                json: async () => [{ tx_hash: 'minting-data-tx' }]
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                statusText: 'OK',
+                json: async () => ({
+                    outputs: [
+                        {
+                            output_index: 0,
+                            amount: [
+                                { unit: 'lovelace', quantity: '1500000' },
+                                { unit: `${policy}${Buffer.from('handle_root@handle_settings').toString('hex')}`, quantity: '1' }
+                            ],
+                            inline_datum: `d8799f5820${rootHash}ff`
+                        }
+                    ]
+                })
+            }) as any;
 
         const result = await lambda.handler({});
 
@@ -126,8 +152,8 @@ describe('Snapshot lambda e2e', () => {
         const uploadedSnapshot = JSON.parse(inflateSync(uploadedBody).toString('utf8'));
         expect(uploadedSnapshot.verification).toEqual(expect.objectContaining({
             verifiedAgainstChain: true,
-            snapshotHandleCount: 1,
-            chainHandleCount: 1,
+            snapshotMptRootHash: rootHash,
+            chainMptRootHash: rootHash,
             network
         }));
 
@@ -137,22 +163,46 @@ describe('Snapshot lambda e2e', () => {
         expect(repo.getMetrics().lockLambdas).toBe(LockedLambdaReason.UNLOCKED);
     });
 
-    it('rejects snapshot upload when the chain count does not match the index count', async () => {
+    it('logs notify when snapshot verification keeps failing and the published snapshot is older than 48 hours', async () => {
+        const loggerSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
         global.fetch = jest.fn()
             .mockResolvedValueOnce({
                 ok: true,
                 status: 200,
                 statusText: 'OK',
-                json: async () => []
+                json: async () => [{ tx_hash: 'minting-data-tx' }]
             })
             .mockResolvedValueOnce({
                 ok: true,
                 status: 200,
                 statusText: 'OK',
-                json: async () => []
+                json: async () => ({
+                    outputs: [
+                        {
+                            output_index: 0,
+                            amount: [
+                                { unit: 'lovelace', quantity: '1500000' },
+                                { unit: `${policy}${Buffer.from('handle_root@handle_settings').toString('hex')}`, quantity: '1' }
+                            ],
+                            inline_datum: `d8799f5820${'00'.repeat(32)}ff`
+                        }
+                    ]
+                })
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                statusText: 'OK',
+                headers: {
+                    get: (name: string) => name.toLowerCase() === 'last-modified' ? 'Sun, 08 Mar 2026 00:00:00 GMT' : null
+                }
             }) as any;
 
-        await expect(lambda.handler({})).rejects.toThrow('Snapshot handle count mismatch');
+        await expect(lambda.handler({})).rejects.toThrow('Snapshot MPT root mismatch');
+        expect(loggerSpy).toHaveBeenCalledWith(expect.objectContaining({
+            category: LogCategory.NOTIFY,
+            event: 'snapshot.handler.snapshotStaleAfterFailure'
+        }));
         expect(mockedS3Instance.send).not.toHaveBeenCalled();
         expect(repo.getMetrics().lockLambdas).toBe(LockedLambdaReason.UNLOCKED);
     });
