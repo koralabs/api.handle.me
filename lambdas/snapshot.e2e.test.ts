@@ -1,6 +1,7 @@
 import { IndexNames, LockedLambdaReason, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { RedisHandlesStore } from '../stores/redis';
+import { inflateSync } from 'zlib';
 
 const lambda = require('./snapshot');
 
@@ -50,6 +51,7 @@ const buildMintedUTxO = (): UTxOWithTxInfo => ({
 });
 
 describe('Snapshot lambda e2e', () => {
+    const originalFetch = global.fetch;
     const store = new RedisHandlesStore();
     const repo = new HandlesRepository(store);
     let mockedS3Instance: any;
@@ -73,7 +75,36 @@ describe('Snapshot lambda e2e', () => {
             utxoSchemaVersion: 7,
             lockLambdas: LockedLambdaReason.UNLOCKED
         });
+        global.fetch = jest.fn()
+            .mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                statusText: 'OK',
+                json: async () => [{ asset: `${policy}${handleHex}`, quantity: '1' }]
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                statusText: 'OK',
+                json: async () => []
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                statusText: 'OK',
+                json: async () => []
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                statusText: 'OK',
+                json: async () => []
+            }) as any;
         jest.clearAllMocks();
+    });
+
+    afterEach(() => {
+        global.fetch = originalFetch;
     });
 
     it('creates and uploads a snapshot for the configured network only', async () => {
@@ -91,10 +122,38 @@ describe('Snapshot lambda e2e', () => {
                 Body: expect.any(Object)
             })
         );
+        const uploadedBody = (sendSpy.mock.calls[0]?.[0] as { Body: Buffer }).Body;
+        const uploadedSnapshot = JSON.parse(inflateSync(uploadedBody).toString('utf8'));
+        expect(uploadedSnapshot.verification).toEqual(expect.objectContaining({
+            verifiedAgainstChain: true,
+            snapshotHandleCount: 1,
+            chainHandleCount: 1,
+            network
+        }));
 
         const storedUtxo = repo.getUTxO('snapshot_tx#0');
         expect(storedUtxo).not.toBeNull();
         expect(store.getValuesFromIndexedSet(IndexNames.MINT, 'papagoose')?.size).toBe(1);
+        expect(repo.getMetrics().lockLambdas).toBe(LockedLambdaReason.UNLOCKED);
+    });
+
+    it('rejects snapshot upload when the chain count does not match the index count', async () => {
+        global.fetch = jest.fn()
+            .mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                statusText: 'OK',
+                json: async () => []
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                statusText: 'OK',
+                json: async () => []
+            }) as any;
+
+        await expect(lambda.handler({})).rejects.toThrow('Snapshot handle count mismatch');
+        expect(mockedS3Instance.send).not.toHaveBeenCalled();
         expect(repo.getMetrics().lockLambdas).toBe(LockedLambdaReason.UNLOCKED);
     });
 

@@ -7,7 +7,6 @@ class ScriptsController {
         try {
             const { latest = false, type = null } = req.query;
             const requestedType = typeof type === 'string' ? resolveScriptTypeQuery(type) : undefined;
-            const requestedTypeSlug = getScriptSlug(requestedType ?? ScriptType.PZ_CONTRACT);
 
             const indexedScripts = await getScriptsIndex(req, requestedType);
             const allScripts = type
@@ -17,9 +16,19 @@ class ScriptsController {
                 : Object.entries(indexedScripts);
 
             if (latest) {
-                const latestScript = allScripts.find(
-                    ([_, value]) => value.latest && value.type === requestedTypeSlug
-                );
+                if (!type) {
+                    res.json(
+                        allScripts.reduce<{ [scriptAddress: string]: ScriptDetails }>((acc, [key, value]) => {
+                            if (value.latest) {
+                                acc[key] = value;
+                            }
+                            return acc;
+                        }, {})
+                    );
+                    return;
+                }
+
+                const latestScript = allScripts.find(([_, value]) => value.latest);
 
                 if (!latestScript) {
                     res.status(404).send({ message: 'Latest script not found' });

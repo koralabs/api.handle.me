@@ -163,14 +163,16 @@ describe('Scripts Routes Test', () => {
             });
         });
 
-        it('returns latest pz_contract script when only latest is requested', async () => {
-            // Feature: `/scripts?latest=true` should preserve the current default of returning the latest `pz_contract`.
-            // Failure mode: removing the static file could change the implicit default type or pick the wrong ordinal.
-            // Negative control: lowering the highest ordinal below `pers2` would change the expected handle and key.
-            mockFetch({ pers: 'unp2' });
+        it('returns the latest script for each family when only latest is requested', async () => {
+            // Feature: `/scripts?latest=true` should return the latest entry for every discovered script family.
+            // Failure mode: callers would only see one legacy default script instead of the full current latest set.
+            // Negative control: lowering `subh3` below `subh2` would change the expected `subh` result key below.
+            mockFetch({ pers: 'unp2', subh: 'subh-unp3' });
             const handles = {
                 'pers1@handlecontract': buildHandle('pers1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0101'),
-                'pers2@handlecontract': buildHandle('pers2@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', '4e4d0102')
+                'pers2@handlecontract': buildHandle('pers2@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', '4e4d0102'),
+                'subh2@handlecontract': buildHandle('subh2@handlecontract', 'addr_test1wqufkpfr0cfg9k430terz8gl0yqv8r8gep82tv9086yv3cck0h26m', '4e4d0103'),
+                'subh3@handlecontract': buildHandle('subh3@handlecontract', 'addr_test1wqufkpfr0cfg9k430terz8gl0yqv8r8gep82tv9086yv3cck0h26m', '4e4d0104')
             };
 
             const response = mockResponse();
@@ -180,15 +182,24 @@ describe('Scripts Routes Test', () => {
                 () => {}
             );
 
-            expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
-                scriptAddress: buildScriptAddress(handles['pers2@handlecontract'].script.cbor),
-                handle: 'pers2@handlecontract',
-                refScriptAddress: handles['pers2@handlecontract'].resolved_addresses.ada,
-                latest: true,
-                type: 'pers',
-                cbor: '4e4d0102',
-                unoptimizedCbor: 'unp2'
-            }));
+            expect(response.json).toHaveBeenCalledWith({
+                [buildScriptAddress(handles['pers2@handlecontract'].script.cbor)]: expect.objectContaining({
+                    handle: 'pers2@handlecontract',
+                    refScriptAddress: handles['pers2@handlecontract'].resolved_addresses.ada,
+                    latest: true,
+                    type: 'pers',
+                    cbor: '4e4d0102',
+                    unoptimizedCbor: 'unp2'
+                }),
+                [buildScriptAddress(handles['subh3@handlecontract'].script.cbor)]: expect.objectContaining({
+                    handle: 'subh3@handlecontract',
+                    refScriptAddress: handles['subh3@handlecontract'].resolved_addresses.ada,
+                    latest: true,
+                    type: 'subh',
+                    cbor: '4e4d0104',
+                    unoptimizedCbor: 'subh-unp3'
+                })
+            });
         });
 
         it('returns latest script for the requested canonical slug type', async () => {
@@ -277,11 +288,12 @@ describe('Scripts Routes Test', () => {
                 () => {}
             );
 
-            expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
-                scriptAddress: expect.stringMatching(/^addr_test1/),
-                handle: 'pers1@handlecontract',
-                unoptimizedCbor: 'unp-preview'
-            }));
+            expect(response.json).toHaveBeenCalledWith({
+                [buildScriptAddress(handles['pers1@handlecontract'].script.cbor)]: expect.objectContaining({
+                    handle: 'pers1@handlecontract',
+                    unoptimizedCbor: 'unp-preview'
+                })
+            });
             expect(fetchMock).toHaveBeenCalledWith(
                 'https://raw.githubusercontent.com/koralabs/handles-personalization/master/deploy/preview/pers.unoptimized.cbor'
             );

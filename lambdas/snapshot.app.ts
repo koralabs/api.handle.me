@@ -1,11 +1,12 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { IHandleFileContent, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import fs from 'fs';
 import stdOut from 'node:readline';
 import zlib from 'zlib';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { RedisHandlesStore } from '../stores/redis';
 import { extractApiIndexMember, getApiIndexScanPattern } from '../stores/redis/keys';
+import { buildSnapshotVerification, VerifiedHandleFileContent } from '../utils/snapshotVerification';
 process.env.ENABLE_OGMIOS_SCANNING = 'false';
 
 declare global {
@@ -49,6 +50,7 @@ const getRedisItems = async () => {
     let lastSlot = 0; // Lets hardcode this to 20 blocks ago (from Bf) To avoid recording a rollbak to the snapshot
     let lastHash = '';
     let utxoSchemaVersion = 0;
+    let handleCount = 0;
 
     try {
         const redisHandleStore = new RedisHandlesStore();
@@ -61,6 +63,7 @@ const getRedisItems = async () => {
         lastSlot = Number(metrics.currentSlot);
         lastHash = `${metrics.currentBlockHash}`;
         utxoSchemaVersion = Number(metrics.utxoSchemaVersion);
+        handleCount = Number(metrics.handleCount);
 
         do {
             const [nextCursor, keys] = redisHandleStore.redisClientCall('scan', cursor, { match: getApiIndexScanPattern(IndexNames.UTXO), count: 1000 }) as [string, string[]];
@@ -135,17 +138,19 @@ const getRedisItems = async () => {
         mints,
         lastSlot,
         lastHash,
-        utxoSchemaVersion
+        utxoSchemaVersion,
+        handleCount
     };
 };
 
-export const processSnapshot = async (network: string) => {
+export const processSnapshot = async (_network: string) => {
     const results = await getRedisItems();
 
-    const fileJson: IHandleFileContent = {
+    const fileJson: VerifiedHandleFileContent & { snapshotHandleCount: number } = {
         slot: results.lastSlot,
         hash: results.lastHash,
         utxoSchemaVersion: results.utxoSchemaVersion,
+        snapshotHandleCount: results.handleCount,
         utxos: Array.from(results.utxos)
             .map(([_, v]) => v)
             .filter((v): v is UTxOWithTxInfo => v !== null),
@@ -175,15 +180,19 @@ export const handler = async (event: any) => {
     handlesRepo.setMetrics({ lockLambdas: LOCK_REASON_SNAPSHOT, lockLambdasTimestamp: Date.now() });
     try {
         const network = `${process.env.NETWORK ?? 'preview'}`.toLowerCase();
-        const fileJson = await processSnapshot(network);
+        const { snapshotHandleCount, ...fileJson } = await processSnapshot(network);
+        const verifiedFileJson: VerifiedHandleFileContent = {
+            ...fileJson,
+            verification: await buildSnapshotVerification(snapshotHandleCount)
+        };
 
-        const { utxoSchemaVersion = 1 } = fileJson;
+        const { utxoSchemaVersion = 1 } = verifiedFileJson;
         const fileName = `${network}/utxo-snapshot/${utxoSchemaVersion}/handles_utxos.gz`;
 
         const zippedSnapshots = [
             {
                 Key: fileName,
-                Body: zlib.deflateSync(JSON.stringify(fileJson))
+                Body: zlib.deflateSync(JSON.stringify(verifiedFileJson))
             }
         ];
 
@@ -211,8 +220,11 @@ export const handler = async (event: any) => {
 
 if (process.argv[2] === 'local') {
     await (async () => {
-        const fileData = await processSnapshot(process.env.NETWORK ?? 'preview');
-        const fileJson = JSON.stringify(fileData);
+        const { snapshotHandleCount, ...fileData } = await processSnapshot(process.env.NETWORK ?? 'preview');
+        const fileJson = JSON.stringify({
+            ...fileData,
+            verification: await buildSnapshotVerification(snapshotHandleCount)
+        });
         fs.writeFileSync(`tmp/handles_utxos.json`, fileJson);
         fs.writeFileSync(`tmp/handles_utxos.gz`, zlib.deflateSync(fileJson));
     })();

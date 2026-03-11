@@ -6,6 +6,8 @@
 
 Our Decentralized API uses Ogmios to scan a cardano-node for Handles related transactions. The information is stored in a custom, in-memory index for quick reads. We take a snapshot of the index once a day. This snapshot is loaded each time the container starts to decrease load times.
 
+Snapshot uploads are now chain-verified before they are written to S3, and startup will ignore any snapshot that does not carry that verification metadata.
+
 &nbsp;
 
 # Documentation
@@ -104,6 +106,8 @@ All of the options below can be passed into the container using `-e ENV_VAR=valu
 > `DISABLE_NODE_SNAPSHOT=true` If no existing Cardano DB is found at `NODE_DB` (default `/db`), the container downloads a Mithril snapshot by default to reduce spin-up time. Use this option to skip the snapshot download and start cardano-node from origin. Existing DB data is reused if present. **🚩WARNING:** starting from origin can take a few days.
 
 > `DISABLE_HANDLES_SNAPSHOT=true` By default, the container will try and download a Handles snapshot from S3 to reduce spin-up time. Use this option to skip the snapshot download and start the Ogmios Handles scan from origin. **🚩WARNING:** this can take a few hours.
+
+> `BLOCKFROST_API_KEY=<key>` Required for chain-verified snapshot creation. Snapshot uploads are refused without it, and startup ignores snapshots that were not chain-verified when generated.
 
 > `CONFIG_FILES_BASE_URL='https://book.world.dev.cardano.org/environments'` A URL where the config, topology, and genesis files can be found. It should have the same folder structure as the default. 
 

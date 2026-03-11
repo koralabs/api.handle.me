@@ -20,6 +20,7 @@ jest.mock('worker_threads', () => {
 describe('RedisHandlesStore critical path tests', () => {
     const originalFetch = global.fetch;
     const originalOrderedSlots = [...ORDERED_SLOTS];
+    const network = `${process.env.NETWORK ?? 'mainnet'}`.toLowerCase();
     const rootKey = (suffix: string) => getApiCacheKey(suffix);
 
     afterEach(() => {
@@ -268,7 +269,14 @@ describe('RedisHandlesStore critical path tests', () => {
             mintingData: {
                 alpha: [{ created_slot: 11, metadata: {}, txHash: 'txhash' }]
             },
-            utxoSchemaVersion: 1
+            utxoSchemaVersion: 1,
+            verification: {
+                verifiedAgainstChain: true,
+                snapshotHandleCount: 1,
+                chainHandleCount: 1,
+                network,
+                verifiedAtUtc: '2026-03-11T00:00:00.000Z'
+            }
         };
         const compressed = deflateSync(Buffer.from(JSON.stringify(snapshot)));
         const ab = compressed.buffer.slice(compressed.byteOffset, compressed.byteOffset + compressed.byteLength);
@@ -295,6 +303,48 @@ describe('RedisHandlesStore critical path tests', () => {
                 utxoSchemaVersion: 1
             })
         );
+        expect(redisSpy).toHaveBeenCalledWith('scan', '0', { match: getApiNamespaceScanPattern(), count: 1000 });
+        expect(redisSpy).not.toHaveBeenCalledWith('flushdb');
+    });
+
+    it('falls back to default starting metrics when snapshot is not chain-verified', async () => {
+        const store = new RedisHandlesStore();
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'scan') return ['0', []];
+            return undefined;
+        });
+        jest.spyOn(store, 'getUTxOSchemaVersion').mockReturnValue(1);
+        const setMetricsSpy = jest.spyOn(store, 'setMetrics').mockImplementation(jest.fn());
+        const compressed = deflateSync(Buffer.from(JSON.stringify({
+            utxos: [],
+            slot: 22,
+            hash: 'snapshot_hash',
+            mintingData: {},
+            utxoSchemaVersion: 1
+        })));
+        const ab = compressed.buffer.slice(compressed.byteOffset, compressed.byteOffset + compressed.byteLength);
+
+        global.fetch = jest.fn().mockResolvedValue({
+            status: 200,
+            arrayBuffer: async () => ab
+        }) as any;
+        const addUtxo = jest.fn();
+        const updateHandleIndexes = jest.fn();
+
+        const result = await store.tryPopulateFromS3UTxOs({
+            [UTxOFunctionName.ADD_UTXO]: addUtxo,
+            [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: updateHandleIndexes
+        } as any);
+
+        expect(result).toEqual(expect.objectContaining({ id: expect.any(String), slot: expect.any(Number) }));
+        expect(addUtxo).not.toHaveBeenCalled();
+        expect(updateHandleIndexes).not.toHaveBeenCalled();
+        expect(setMetricsSpy).toHaveBeenCalledWith(expect.objectContaining({
+            currentBlockHash: result.id,
+            currentSlot: result.slot,
+            utxoSchemaVersion: 1
+        }));
         expect(redisSpy).toHaveBeenCalledWith('scan', '0', { match: getApiNamespaceScanPattern(), count: 1000 });
         expect(redisSpy).not.toHaveBeenCalledWith('flushdb');
     });
