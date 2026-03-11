@@ -51,9 +51,31 @@ for key_type, count in pairs(by_type) do
 end
 return result
 `;
+const SERVER_DELETE_LUA = `
+local deleted = 0
+local missing = 0
+local by_type = {}
+for i = 1, #ARGV do
+  local key = ARGV[i]
+  local key_type = redis.call('TYPE', key)['ok']
+  if key_type == 'none' then
+    missing = missing + 1
+  else
+    redis.call('DEL', key)
+    deleted = deleted + 1
+    by_type[key_type] = (by_type[key_type] or 0) + 1
+  end
+end
+local result = { tostring(deleted), tostring(missing) }
+for key_type, count in pairs(by_type) do
+  table.insert(result, key_type)
+  table.insert(result, tostring(count))
+end
+return result
+`;
 
 type ValkeyCopyEvent = {
-    action?: 'copy_namespace' | 'rename_namespace';
+    action?: 'copy_namespace' | 'rename_namespace' | 'delete_namespace';
     sourceHost?: string;
     sourcePort?: number | string;
     sourcePassword?: string;
@@ -235,6 +257,21 @@ const renameKeysServerSide = async (target: Redis, pairs: Array<{ sourceKey: str
     return summary;
 };
 
+const deleteKeysServerSide = async (target: Redis, keys: string[]) => {
+    const result = await target.eval(SERVER_DELETE_LUA, 0, ...keys) as string[];
+    const summary = {
+        deleted: Number(result[0] || 0),
+        missing: Number(result[1] || 0),
+        byType: {} as Record<string, number>
+    };
+
+    for (let index = 2; index < result.length; index += 2) {
+        summary.byType[result[index]] = Number(result[index + 1] || 0);
+    }
+
+    return summary;
+};
+
 const buildNamespacePairs = async (
     source: Redis,
     network: string,
@@ -395,6 +432,52 @@ const renameNamespace = async (event: ValkeyCopyEvent) => {
     }
 };
 
+const deleteNamespace = async (event: ValkeyCopyEvent) => {
+    const network = `${event.network || ''}`.toLowerCase();
+    if (!network) throw new Error('network is required for action=delete_namespace');
+
+    const sourcePrefix = event.sourcePrefix ?? '{root}';
+    const scanCount = toInt(event.scanCount, 1000);
+    const dryRun = toBoolean(event.dryRun, false);
+    const sourceMode = normalizeSourceMode(event.sourceMode, true);
+    const target = createClient(getRedisConfig(event, 'target'));
+    await target.connect();
+
+    try {
+        const sourceKeys = await collectSourceKeys(target, network, sourcePrefix, scanCount, sourceMode);
+        const summary = {
+            action: 'delete_namespace',
+            network,
+            targetHost: target.options.host,
+            sourceKeys: sourceKeys.length,
+            sourceMode,
+            deleted: 0,
+            missing: 0,
+            dryRun,
+            sample: sourceKeys.slice(0, 10),
+            byType: {} as Record<string, number>
+        };
+
+        if (dryRun) {
+            summary.deleted = sourceKeys.length;
+        } else {
+            for (let index = 0; index < sourceKeys.length; index += SERVER_COPY_BATCH_SIZE) {
+                const batch = sourceKeys.slice(index, index + SERVER_COPY_BATCH_SIZE);
+                const result = await deleteKeysServerSide(target, batch);
+                summary.deleted += result.deleted;
+                summary.missing += result.missing;
+                for (const [type, count] of Object.entries(result.byType)) {
+                    summary.byType[type] = (summary.byType[type] ?? 0) + count;
+                }
+            }
+        }
+
+        console.log(JSON.stringify(summary, jsonReplacer));
+    } finally {
+        target.disconnect();
+    }
+};
+
 export const handler = async (event: ValkeyCopyEvent = {}) => {
     try {
         if (event.action == 'copy_namespace') {
@@ -403,6 +486,10 @@ export const handler = async (event: ValkeyCopyEvent = {}) => {
         }
         if (event.action == 'rename_namespace') {
             await renameNamespace(event);
+            return;
+        }
+        if (event.action == 'delete_namespace') {
+            await deleteNamespace(event);
             return;
         }
         await inspectMetrics(event);
