@@ -62,9 +62,10 @@ class HealthController {
                 // We don't try to connect to ogmios when scanning is disabled
                 ogmios = await fetchHealth();
                 const ogmiosTipSlot = Number(ogmios?.lastKnownTip?.slot ?? 0);
-                const ogmiosTipHash = ogmios?.lastKnownTip?.id ?? '';
-                const storageMatchesOgmiosTip = ogmiosTipSlot > 0 && (ogmiosTipSlot - currentSlot) < 240 && currentBlockHash === ogmiosTipHash;
-                if (status === HealthStatus.CURRENT && !storageMatchesOgmiosTip) {
+                const ogmiosTipHash = ogmios?.lastKnownTip?.hash ?? ogmios?.lastKnownTip?.id ?? '';
+                const hasComparableOgmiosTip = ogmiosTipSlot > 0 && !!ogmiosTipHash;
+                const storageMatchesOgmiosTip = hasComparableOgmiosTip && (ogmiosTipSlot - currentSlot) < 240 && currentBlockHash === ogmiosTipHash;
+                if (status === HealthStatus.CURRENT && hasComparableOgmiosTip && !storageMatchesOgmiosTip) {
                     status = HealthStatus.STORAGE_BEHIND;
                 }
                 if ((ogmios?.networkSynchronization ?? 0) < 1) {

@@ -103,7 +103,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - `POST /mint` relay for subhandle minting service (currently rejects `handle_type=handle`)
 
 ## Contract Slug Naming
-`api.handle.me` follows the shared contract slug naming rule defined in `kora-bot/docs/spec/contract-deployment-pipeline.md`.
+`api.handle.me` follows the shared contract slug naming rule defined in `adahandle-deployments/docs/contract-deployment-pipeline.md`.
 
 Canonical slug shape:
 
