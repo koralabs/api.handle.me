@@ -107,7 +107,7 @@ All of the options below can be passed into the container using `-e ENV_VAR=valu
 
 > `DISABLE_HANDLES_SNAPSHOT=true` By default, the container will try and download a Handles snapshot from S3 to reduce spin-up time. Use this option to skip the snapshot download and start the Ogmios Handles scan from origin. **🚩WARNING:** this can take a few hours.
 
-> `BLOCKFROST_API_KEY=<key>` Required for chain-verified snapshot creation. Snapshot uploads are refused without it, and startup ignores snapshots that were not chain-verified when generated.
+> `BLOCKFROST_API_KEY=<key>` Optional for general provider helpers. Snapshot verification now reads the indexed `handle_root@handle_settings` datum directly, and startup ignores snapshots that were not chain-verified when generated.
 
 > `CONFIG_FILES_BASE_URL='https://book.world.dev.cardano.org/environments'` A URL where the config, topology, and genesis files can be found. It should have the same folder structure as the default. 
 

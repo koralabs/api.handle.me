@@ -241,12 +241,16 @@ export class RedisHandlesStore implements IApiStore {
      * @returns 
      */
     public async getStartingPoint(utxoFunctions: UTxOFunctions, failed = false): Promise<{ slot: number; id: string } | null> {
+        const snapshotsDisabled = NODE_ENV === 'local' || DISABLE_HANDLES_SNAPSHOT == 'true';
         // This should run locally so we're not worried about a long running process
         if (!failed) {
             const { indexSchemaVersion, utxoSchemaVersion, currentSlot, currentBlockHash } = this.getMetrics();
 
             const currentSchemaVersion = this.getUTxOSchemaVersion();
             if (currentSchemaVersion > (utxoSchemaVersion ?? 0) || !currentBlockHash || !currentSlot) {
+                if (snapshotsDisabled) {
+                    return null;
+                }
                 // start at Handle genesis
                 const { id, slot } = await this.tryPopulateFromS3UTxOs(utxoFunctions);
                 return { id, slot };
@@ -260,7 +264,7 @@ export class RedisHandlesStore implements IApiStore {
 
             return { id: currentBlockHash, slot: currentSlot };
         } else {
-            if (NODE_ENV === 'local' || DISABLE_HANDLES_SNAPSHOT == 'true') {
+            if (snapshotsDisabled) {
                 return null;
             }
 

@@ -46,6 +46,6 @@
 
 ## Snapshot and Schema Behavior
 - Snapshot population can bootstrap UTxOs and minting data from S3 snapshot artifacts.
-- Snapshot artifacts are only considered valid when they carry chain-verification metadata from generation time; unverified artifacts are ignored at bootstrap.
+- Snapshot artifacts are only considered valid when they carry chain-verification metadata from generation time; verification compares the indexed handle set to the indexed `handle_root@handle_settings` datum root hash, and unverified artifacts are ignored at bootstrap.
 - `indexSchemaVersion` and `utxoSchemaVersion` metrics control reindex/bootstrap decisions at startup.
 - Reindex repopulates all non-UTxO/non-MINT indexes from stored UTxOs.

@@ -529,6 +529,35 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(startingPoint).toBeNull();
     });
 
+    it('getStartingPoint returns null on initial bootstrap when snapshots are disabled', async () => {
+        let startingPoint: { id: string; slot: number } | null = { id: 'unexpected', slot: -1 };
+        let snapshotCalls = 0;
+
+        await jest.isolateModulesAsync(async () => {
+            jest.doMock('../../config', () => ({
+                ...jest.requireActual('../../config'),
+                NODE_ENV: 'test',
+                DISABLE_HANDLES_SNAPSHOT: 'true'
+            }));
+            const { RedisHandlesStore: IsolatedStore } = await import('./index');
+            const isolatedStore = new IsolatedStore();
+            jest.spyOn(isolatedStore, 'getMetrics').mockReturnValue({
+                utxoSchemaVersion: 0,
+                currentSlot: 0,
+                currentBlockHash: ''
+            } as any);
+            jest.spyOn(isolatedStore, 'tryPopulateFromS3UTxOs').mockImplementation(async () => {
+                snapshotCalls += 1;
+                return { id: 'snapshot_hash', slot: 25 };
+            });
+            startingPoint = await isolatedStore.getStartingPoint({} as any, false);
+            jest.dontMock('../../config');
+        });
+
+        expect(startingPoint).toBeNull();
+        expect(snapshotCalls).toBe(0);
+    });
+
     it('parses ordered-slot indexes and ordered-slot lookups', () => {
         const store = new RedisHandlesStore();
         ORDERED_SLOTS.push(IndexNames.SLOT);

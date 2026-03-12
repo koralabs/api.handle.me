@@ -144,6 +144,40 @@ describe('HealthController', () => {
         );
     });
 
+    it('returns storage_behind when stored tip does not match live ogmios tip', async () => {
+        const repoMock = {
+            getMetrics: jest.fn().mockReturnValue({
+                ...baseMetrics,
+                currentSlot: 100,
+                lastSlot: 100,
+                currentBlockHash: 'stale_hash',
+                tipBlockHash: 'stale_hash'
+            }),
+            isCaughtUp: jest.fn().mockReturnValue(true)
+        };
+        MockedHandlesRepository.mockImplementation(() => repoMock);
+        mockedFetchHealth.mockResolvedValue({
+            networkSynchronization: 1,
+            connectionStatus: 'connected',
+            lastKnownTip: { slot: 2000, id: 'real_tip_hash' }
+        });
+
+        const controller = new HealthController();
+        const req = buildReq();
+        const res = buildRes();
+        await controller.index(req, res, jest.fn());
+
+        expect(res.status).toHaveBeenCalledWith(202);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                status: 'storage_behind',
+                ogmios: expect.objectContaining({
+                    lastKnownTip: expect.objectContaining({ id: 'real_tip_hash', slot: 2000 })
+                })
+            })
+        );
+    });
+
     it('returns waiting_on_cardano_node and logs warning when node is disconnected', async () => {
         const repoMock = {
             getMetrics: jest.fn().mockReturnValue(baseMetrics),

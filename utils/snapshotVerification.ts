@@ -1,94 +1,35 @@
 import { Trie } from '@aiken-lang/merkle-patricia-forestry';
 import { decodeCborToJson } from '@koralabs/kora-labs-common/utils/cbor';
-import { HANDLE_POLICIES, LogCategory, Logger, Network, NETWORK } from '@koralabs/kora-labs-common';
-import { blockfrostApiCall } from './helpers';
+import { IndexNames, LogCategory, Logger, NETWORK } from '@koralabs/kora-labs-common';
+import { RedisHandlesStore } from '../stores/redis';
 import { SnapshotVerification } from './verifiedSnapshot';
-
-interface BlockfrostAssetTransaction {
-    tx_hash: string;
-}
-
-interface BlockfrostTxUtxosResponse {
-    outputs: {
-        output_index: number;
-        amount: {
-            unit: string;
-            quantity: string;
-        }[];
-        inline_datum?: string | null;
-        data_hash?: string | null;
-    }[];
-}
-
-interface BlockfrostDatumCborResponse {
-    cbor: string;
-}
 
 const MINTING_DATA_HANDLE_NAME = 'handle_root@handle_settings';
 const EMPTY_MPT_ROOT_HASH = Buffer.alloc(32).toString('hex');
 
-const getLegacyHandlePolicyId = () => {
-    const network = (NETWORK.toLowerCase() || 'preview') as Network;
-    const [legacyPolicyId] = Object.entries(HANDLE_POLICIES[network]).find(([, details]) => !details.isDeMi) ?? [];
-
-    if (!legacyPolicyId) {
-        throw new Error(`Legacy handle policy not configured for ${network}`);
+const getAdditionalTrieHandles = () => {
+    const network = NETWORK.toLowerCase();
+    if (network === 'mainnet') {
+        return ['watchman@ngmerchs'];
     }
-
-    return legacyPolicyId;
+    if (network === 'preview') {
+        return ['dynamo2@ai'];
+    }
+    return [];
 };
 
-const getMintingDataAssetId = () => `${getLegacyHandlePolicyId()}${Buffer.from(MINTING_DATA_HANDLE_NAME, 'utf8').toString('hex')}`;
-
 const fetchCurrentMintingDataDatumCbor = async () => {
-    const assetId = getMintingDataAssetId();
-    const assetTransactionsResponse = await blockfrostApiCall(`assets/${assetId}/transactions?order=desc&count=1`);
-    if (!assetTransactionsResponse.ok) {
-        throw new Error(`Blockfrost assets/${assetId}/transactions failed with ${assetTransactionsResponse.status} ${assetTransactionsResponse.statusText}`);
+    const redisHandleStore = new RedisHandlesStore();
+    await redisHandleStore.initialize();
+    const handle = redisHandleStore.getHashFromIndex(IndexNames.HANDLE, MINTING_DATA_HANDLE_NAME) as { datum?: string } | undefined;
+    const datumCbor = `${handle?.datum ?? ''}`.trim();
+    if (!datumCbor) {
+        throw new Error(`Minting data datum not found for handle ${MINTING_DATA_HANDLE_NAME}`);
     }
-
-    const [latestTransaction] = (await assetTransactionsResponse.json()) as BlockfrostAssetTransaction[];
-    if (!latestTransaction?.tx_hash) {
-        throw new Error(`Minting data UTxO not found for asset ${assetId}`);
-    }
-
-    const txUtxosResponse = await blockfrostApiCall(`txs/${latestTransaction.tx_hash}/utxos`);
-    if (!txUtxosResponse.ok) {
-        throw new Error(`Blockfrost txs/${latestTransaction.tx_hash}/utxos failed with ${txUtxosResponse.status} ${txUtxosResponse.statusText}`);
-    }
-
-    const txUtxos = (await txUtxosResponse.json()) as BlockfrostTxUtxosResponse;
-    const output = txUtxos.outputs.find((candidate) => candidate.amount.some((amount) => amount.unit === assetId && amount.quantity !== '0'));
-    if (!output) {
-        throw new Error(`Minting data UTxO not found in transaction ${latestTransaction.tx_hash}`);
-    }
-
-    if (output.inline_datum?.trim()) {
-        return output.inline_datum;
-    }
-
-    if (!output.data_hash) {
-        throw new Error(`Minting data datum not found in transaction ${latestTransaction.tx_hash}`);
-    }
-
-    const datumResponse = await blockfrostApiCall(`scripts/datum/${output.data_hash}/cbor`);
-    if (!datumResponse.ok) {
-        throw new Error(`Blockfrost scripts/datum/${output.data_hash}/cbor failed with ${datumResponse.status} ${datumResponse.statusText}`);
-    }
-
-    const datum = (await datumResponse.json()) as BlockfrostDatumCborResponse;
-    if (!datum.cbor?.trim()) {
-        throw new Error(`Minting data datum cbor missing for ${output.data_hash}`);
-    }
-
-    return datum.cbor;
+    return datumCbor;
 };
 
 export const getChainMintingDataRootHash = async () => {
-    if (!process.env.BLOCKFROST_API_KEY?.trim()) {
-        throw new Error('BLOCKFROST_API_KEY is required for chain-verified snapshot generation');
-    }
-
     const datumCbor = await fetchCurrentMintingDataDatumCbor();
     const decoded = decodeCborToJson({ cborString: datumCbor, schema: {} }) as { constructor_0?: [string] };
     const mptRootHash = `${decoded.constructor_0?.[0] ?? ''}`.replace(/^0x/i, '').toLowerCase();
@@ -101,7 +42,7 @@ export const getChainMintingDataRootHash = async () => {
 };
 
 export const buildHandleSetMptRootHash = async (handleNames: string[]) => {
-    const normalizedHandleNames = [...new Set(handleNames.map((handle) => `${handle}`.trim()).filter(Boolean))].sort();
+    const normalizedHandleNames = [...new Set([...handleNames, ...getAdditionalTrieHandles()].map((handle) => `${handle}`.trim()).filter(Boolean))].sort();
     const trie = new Trie();
     for (const handleName of normalizedHandleNames) {
         await trie.insert(handleName, '');

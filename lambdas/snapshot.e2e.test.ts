@@ -8,6 +8,7 @@ const lambda = require('./snapshot');
 
 const policy = 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a';
 const handleHex = '000de14070617061676f6f7365';
+const mintingDataHandleName = 'handle_root@handle_settings';
 
 jest.mock('@aws-sdk/client-s3', () => {
     const mockedS3Instance = {
@@ -70,37 +71,18 @@ describe('Snapshot lambda e2e', () => {
     beforeEach(async () => {
         repo.rollBackToGenesis();
         repo.addUTxOsWithMintDataAndUpdateIndexes([buildMintedUTxO()]);
+        const rootHash = await buildHandleSetMptRootHash(['papagoose', mintingDataHandleName]);
+        store.setHashOnIndex(IndexNames.HANDLE, mintingDataHandleName, {
+            name: mintingDataHandleName,
+            datum: `d8799f5820${rootHash}ff`,
+            has_datum: true
+        } as any);
         repo.setMetrics({
             currentSlot: 105,
             currentBlockHash: 'snapshot_block',
             utxoSchemaVersion: 7,
             lockLambdas: LockedLambdaReason.UNLOCKED
         });
-        const rootHash = await buildHandleSetMptRootHash(['papagoose']);
-        global.fetch = jest.fn()
-            .mockResolvedValueOnce({
-                ok: true,
-                status: 200,
-                statusText: 'OK',
-                json: async () => [{ tx_hash: 'minting-data-tx' }]
-            })
-            .mockResolvedValueOnce({
-                ok: true,
-                status: 200,
-                statusText: 'OK',
-                json: async () => ({
-                    outputs: [
-                        {
-                            output_index: 0,
-                            amount: [
-                                { unit: 'lovelace', quantity: '1500000' },
-                                { unit: `${policy}${Buffer.from('handle_root@handle_settings').toString('hex')}`, quantity: '1' }
-                            ],
-                            inline_datum: `d8799f5820${rootHash}ff`
-                        }
-                    ]
-                })
-            }) as any;
         jest.clearAllMocks();
     });
 
@@ -111,31 +93,7 @@ describe('Snapshot lambda e2e', () => {
     it('creates and uploads a snapshot for the configured network only', async () => {
         const sendSpy = jest.spyOn(mockedS3Instance, 'send');
         const network = `${process.env.NETWORK ?? 'mainnet'}`.toLowerCase();
-        const rootHash = await buildHandleSetMptRootHash(['papagoose']);
-        global.fetch = jest.fn()
-            .mockResolvedValueOnce({
-                ok: true,
-                status: 200,
-                statusText: 'OK',
-                json: async () => [{ tx_hash: 'minting-data-tx' }]
-            })
-            .mockResolvedValueOnce({
-                ok: true,
-                status: 200,
-                statusText: 'OK',
-                json: async () => ({
-                    outputs: [
-                        {
-                            output_index: 0,
-                            amount: [
-                                { unit: 'lovelace', quantity: '1500000' },
-                                { unit: `${policy}${Buffer.from('handle_root@handle_settings').toString('hex')}`, quantity: '1' }
-                            ],
-                            inline_datum: `d8799f5820${rootHash}ff`
-                        }
-                    ]
-                })
-            }) as any;
+        const rootHash = await buildHandleSetMptRootHash(['papagoose', mintingDataHandleName]);
 
         const result = await lambda.handler({});
 
@@ -165,30 +123,12 @@ describe('Snapshot lambda e2e', () => {
 
     it('logs notify when snapshot verification keeps failing and the published snapshot is older than 48 hours', async () => {
         const loggerSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
+        store.setHashOnIndex(IndexNames.HANDLE, mintingDataHandleName, {
+            name: mintingDataHandleName,
+            datum: `d8799f5820${'00'.repeat(32)}ff`,
+            has_datum: true
+        } as any);
         global.fetch = jest.fn()
-            .mockResolvedValueOnce({
-                ok: true,
-                status: 200,
-                statusText: 'OK',
-                json: async () => [{ tx_hash: 'minting-data-tx' }]
-            })
-            .mockResolvedValueOnce({
-                ok: true,
-                status: 200,
-                statusText: 'OK',
-                json: async () => ({
-                    outputs: [
-                        {
-                            output_index: 0,
-                            amount: [
-                                { unit: 'lovelace', quantity: '1500000' },
-                                { unit: `${policy}${Buffer.from('handle_root@handle_settings').toString('hex')}`, quantity: '1' }
-                            ],
-                            inline_datum: `d8799f5820${'00'.repeat(32)}ff`
-                        }
-                    ]
-                })
-            })
             .mockResolvedValueOnce({
                 ok: true,
                 status: 200,
