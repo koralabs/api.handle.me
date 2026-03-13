@@ -230,6 +230,39 @@ describe('Scripts Routes Test', () => {
             }));
         });
 
+        it('falls back to the live legacy pz handle script when a canonical pers handle lacks inline script', async () => {
+            // Feature: `/scripts` should keep canonical `persN@handlecontract` ordering while borrowing the still-live legacy personalization script attachment during the migration gap.
+            // Failure mode: `latest=true&type=pers` would return 404 even though the matching legacy `pz_contract_*` handle still holds the script UTxO.
+            // Negative control: removing `pz_contract_1` or its script below would make this request fail instead of returning `pers2@handlecontract`.
+            mockFetch({ pers: 'pers-unoptimized' });
+            const handles = {
+                'pers1@handlecontract': buildHandle('pers1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0201'),
+                'pers2@handlecontract': {
+                    ...buildHandle('pers2@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', '4e4d0202'),
+                    script: undefined
+                },
+                'pz_contract_1': buildHandle('pz_contract_1', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', '4e4d0299')
+            };
+
+            const response = mockResponse();
+            await new ScriptsController().index(
+                mockRequest({ latest: true, type: 'pers' }, { get: () => mockRegistry(handles) }),
+                response as any,
+                () => {}
+            );
+
+            expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+                scriptAddress: buildScriptAddress(handles['pz_contract_1'].script.cbor),
+                handle: 'pers2@handlecontract',
+                refScriptAddress: handles['pz_contract_1'].resolved_addresses.ada,
+                refScriptUtxo: handles['pz_contract_1'].utxo,
+                latest: true,
+                type: 'pers',
+                cbor: '4e4d0299',
+                unoptimizedCbor: 'pers-unoptimized'
+            }));
+        });
+
         it('still accepts deprecated legacy type aliases during the migration', async () => {
             // Feature: legacy `type` aliases should continue to work during the deprecation window while callers migrate to slug names.
             // Failure mode: switching the public query contract to slugs could break existing clients immediately.

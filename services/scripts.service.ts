@@ -143,10 +143,36 @@ const getValidatorHashFromScriptCbor = (scriptCbor?: string) => {
     return blake2b(Buffer.from(`02${scriptCbor}`, 'hex'), 28);
 };
 
-const buildScriptEntry = async (handle: StoredHandle, type: ScriptType, latest: boolean, unoptimizedCbor?: string): Promise<[string, ScriptDetails] | null> => {
-    const refScriptAddress = handle.resolved_addresses?.ada;
-    const validatorHash = getValidatorHashFromScriptCbor(handle.script?.cbor);
-    if (!refScriptAddress || !validatorHash || !handle.script?.cbor) {
+const getLegacyPzHandleNames = (ordinal: number) => {
+    if (ordinal <= 1) {
+        return ['pz_contract'];
+    }
+
+    const suffix = `${ordinal - 1}`;
+    const paddedSuffix = suffix.padStart(2, '0');
+    return [...new Set([`pz_contract_${suffix}`, `pz_contract_${paddedSuffix}`])];
+};
+
+const getFallbackScriptSourceHandle = (handleRepo: HandlesRepository, type: ScriptType, ordinal: number) => {
+    if (type !== ScriptType.PZ_CONTRACT) {
+        return;
+    }
+
+    return getLegacyPzHandleNames(ordinal)
+        .map((handleName) => handleRepo.getHandle(handleName))
+        .find((handle): handle is StoredHandle => !!handle?.script?.cbor);
+};
+
+const buildScriptEntry = async (
+    handle: StoredHandle,
+    type: ScriptType,
+    latest: boolean,
+    unoptimizedCbor: string | undefined,
+    scriptSourceHandle: StoredHandle = handle
+): Promise<[string, ScriptDetails] | null> => {
+    const refScriptAddress = scriptSourceHandle.resolved_addresses?.ada;
+    const validatorHash = getValidatorHashFromScriptCbor(scriptSourceHandle.script?.cbor);
+    if (!refScriptAddress || !validatorHash || !scriptSourceHandle.script?.cbor) {
         return null;
     }
 
@@ -165,8 +191,8 @@ const buildScriptEntry = async (handle: StoredHandle, type: ScriptType, latest: 
             handle: handle.name,
             handleHex: handle.hex,
             refScriptAddress,
-            refScriptUtxo: handle.utxo,
-            cbor: handle.script.cbor,
+            refScriptUtxo: scriptSourceHandle.utxo,
+            cbor: scriptSourceHandle.script.cbor,
             unoptimizedCbor,
             validatorHash,
             latest,
@@ -193,6 +219,11 @@ const getCandidateHandles = (req: Request<any>, type?: ScriptType): StoredHandle
 };
 
 export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Promise<{ [scriptAddress: string]: ScriptDetails }> => {
+    const handleRepo = createRepo(req);
+    if (!handleRepo) {
+        return {};
+    }
+
     const matchesByType = new Map<ScriptType, { handle: StoredHandle; ordinal: number }[]>();
 
     for (const handle of getCandidateHandles(req, type)) {
@@ -213,7 +244,8 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
         const latestOrdinal = Math.max(...matches.map(({ ordinal }) => ordinal));
         const unoptimizedCbor = await fetchUnoptimizedCbor(scriptType, unoptimizedCborCache);
         for (const { handle, ordinal } of matches) {
-            const scriptEntry = await buildScriptEntry(handle, scriptType, ordinal === latestOrdinal, unoptimizedCbor);
+            const scriptSourceHandle = handle.script?.cbor ? handle : getFallbackScriptSourceHandle(handleRepo, scriptType, ordinal) ?? handle;
+            const scriptEntry = await buildScriptEntry(handle, scriptType, ordinal === latestOrdinal, unoptimizedCbor, scriptSourceHandle);
             if (scriptEntry) {
                 scripts[scriptEntry[0]] = scriptEntry[1];
             }
