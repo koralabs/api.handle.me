@@ -230,10 +230,10 @@ describe('Scripts Routes Test', () => {
             }));
         });
 
-        it('falls back to the live legacy pz handle script when a canonical pers handle lacks inline script', async () => {
-            // Feature: `/scripts` should keep canonical `persN@handlecontract` ordering while borrowing the still-live legacy personalization script attachment during the migration gap.
-            // Failure mode: `latest=true&type=pers` would return 404 even though the matching legacy `pz_contract_*` handle still holds the script UTxO.
-            // Negative control: removing `pz_contract_1` or its script below would make this request fail instead of returning `pers2@handlecontract`.
+        it('does not fall back to legacy pz handles when a canonical pers handle lacks inline script', async () => {
+            // Feature: `/scripts` should only return canonical `persN@handlecontract` script data now that the on-chain fix is live.
+            // Failure mode: legacy `pz_contract_*` script attachments could leak into `/scripts` and mask a missing canonical script.
+            // Negative control: if the legacy fallback remained, this request would return `pers2@handlecontract` instead of 404.
             mockFetch({ pers: 'pers-unoptimized' });
             const handles = {
                 'pers1@handlecontract': buildHandle('pers1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0201'),
@@ -251,16 +251,8 @@ describe('Scripts Routes Test', () => {
                 () => {}
             );
 
-            expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
-                scriptAddress: buildScriptAddress(handles['pz_contract_1'].script.cbor),
-                handle: 'pers2@handlecontract',
-                refScriptAddress: handles['pz_contract_1'].resolved_addresses.ada,
-                refScriptUtxo: handles['pz_contract_1'].utxo,
-                latest: true,
-                type: 'pers',
-                cbor: '4e4d0299',
-                unoptimizedCbor: 'pers-unoptimized'
-            }));
+            expect(response.status).toHaveBeenCalledWith(404);
+            expect(response.send).toHaveBeenCalledWith({ message: 'Latest script not found' });
         });
 
         it('still accepts deprecated legacy type aliases during the migration', async () => {

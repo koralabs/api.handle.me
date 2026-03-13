@@ -28,6 +28,7 @@ const LOCK_REASON_SNAPSHOT = 'SNAPSHOT' as LockedLambdaReason;
 const LOCKED_LAMBDA_RETRY_DELAY_MS = 15_000;
 const LOCKED_LAMBDA_MAX_RETRIES = 4;
 const SNAPSHOT_STALE_NOTIFY_WINDOW_MS = 48 * 60 * 60 * 1000;
+const SNAPSHOT_SCAN_COUNT = 10_000;
 
 const delayMs = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const getSnapshotUrl = (network: string, utxoSchemaVersion: number) => `http://api.handle.me.s3-website-us-west-2.amazonaws.com/${network}/utxo-snapshot/${utxoSchemaVersion}/handles_utxos.gz`;
@@ -87,7 +88,7 @@ const getRedisItems = async () => {
         handleNames = (redisHandleStore.getKeysFromIndex(IndexNames.HANDLE) as string[]).map((handleName) => `${handleName}`);
 
         do {
-            const [nextCursor, keys] = redisHandleStore.redisClientCall('scan', cursor, { match: getApiIndexScanPattern(IndexNames.UTXO), count: 1000 }) as [string, string[]];
+            const [nextCursor, keys] = redisHandleStore.redisClientCall('scan', cursor, { match: getApiIndexScanPattern(IndexNames.UTXO), count: SNAPSHOT_SCAN_COUNT }) as [string, string[]];
             cursor = nextCursor;
 
             if (keys && keys.length > 0) {
@@ -114,7 +115,7 @@ const getRedisItems = async () => {
         } while (cursor !== '0');
 
         do {
-            const [nextCursor, keys] = redisHandleStore.redisClientCall('scan', cursor, { match: getApiIndexScanPattern(IndexNames.MINT), count: 1000 }) as [string, string[]];
+            const [nextCursor, keys] = redisHandleStore.redisClientCall('scan', cursor, { match: getApiIndexScanPattern(IndexNames.MINT), count: SNAPSHOT_SCAN_COUNT }) as [string, string[]];
             cursor = nextCursor;
 
             if (keys && keys.length > 0) {

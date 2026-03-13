@@ -1558,23 +1558,23 @@ describe('Scanner lambda unit tests', () => {
         expect(handlesRepo.setMetrics).toHaveBeenCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
     });
 
-    it('does not clear a snapshot lock before it is 10 minutes old', async () => {
+    it('does not recover snapshot lock before 10 minutes', async () => {
         // Feature: snapshot locks should only be treated as stale after the same 10-minute window named in the alert message.
         // Failure mode: a shorter timeout would unlock an in-progress snapshot and emit a misleading stale-lock notification.
         // Negative control: increasing the age below to 11 minutes would make the stale-lock recovery assertion valid instead.
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({
             lockLambdas: 'SNAPSHOT' as LockedLambdaReason,
-            lockLambdasTimestamp: Date.now() - (9 * 60 * 1000),
+            lockLambdasTimestamp: Date.now() - 9 * 60 * 1000,
             currentSlot: 100,
             currentBlockHash: 'start_hash',
             indexSchemaVersion: 1
         });
 
-        await scannerModule.lambdaHandler({} as any, {} as any);
+        await expect(scannerModule.lambdaHandler({} as any, {} as any)).resolves.toBeUndefined();
 
         expect(handlesRepo.setMetrics).not.toHaveBeenCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
-        expect(mockedHelpers.blockfrostApiCall).not.toHaveBeenCalled();
+        expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
     });
 
     it('refreshes UTxOs before scan when stored UTxO schema version is behind', async () => {
