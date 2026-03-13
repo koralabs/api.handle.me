@@ -41,7 +41,7 @@ const staleLockTimeouts: Partial<Record<LockedLambdaReason, number>> = {
     [LockedLambdaReason.ROLLBACK_20]: 5 * 60 * 1000,
     [LockedLambdaReason.ROLLBACK_2160]: 10 * 60 * 1000,
     [LockedLambdaReason.REINDEX]: 10 * 60 * 1000,
-    [LOCK_REASON_SNAPSHOT]: 6 * 60 * 1000
+    [LOCK_REASON_SNAPSHOT]: 10 * 60 * 1000
 };
 
 const ensureInitialized = async () => {

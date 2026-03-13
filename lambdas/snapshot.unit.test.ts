@@ -1,5 +1,5 @@
 import { IndexNames } from '@koralabs/kora-labs-common';
-import { getApiIndexKey } from '../stores/redis/keys';
+import { getApiIndexKey, getApiIndexScanPattern } from '../stores/redis/keys';
 
 const mockAwsSdk = () => {
     jest.doMock('@aws-sdk/client-s3', () => ({
@@ -38,6 +38,12 @@ describe('snapshot unit branches', () => {
         let scanCall = 0;
         let pipelineCall = 0;
         const writeSpy = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
+        const redisClientCall = jest.fn().mockImplementation(() => {
+            scanCall += 1;
+            if (scanCall === 1) return ['0', Array.from({ length: 10001 }, (_, i) => getApiIndexKey(IndexNames.UTXO, i))];
+            if (scanCall === 2) return ['0', Array.from({ length: 10001 }, (_, i) => getApiIndexKey(IndexNames.MINT, i))];
+            return ['0', []];
+        });
 
         const snapshot = await loadSnapshotModule(() => ({
             initialize: jest.fn().mockResolvedValue(undefined),
@@ -46,12 +52,7 @@ describe('snapshot unit branches', () => {
                 currentBlockHash: 'head',
                 utxoSchemaVersion: 2
             }),
-            redisClientCall: jest.fn().mockImplementation(() => {
-                scanCall += 1;
-                if (scanCall === 1) return ['0', Array.from({ length: 10001 }, (_, i) => getApiIndexKey(IndexNames.UTXO, i))];
-                if (scanCall === 2) return ['0', Array.from({ length: 10001 }, (_, i) => getApiIndexKey(IndexNames.MINT, i))];
-                return ['0', []];
-            }),
+            redisClientCall,
             pipeline: jest.fn().mockImplementation((commands: CallableFunction) => {
                 commands();
                 pipelineCall += 1;
@@ -71,6 +72,8 @@ describe('snapshot unit branches', () => {
         expect(result.hash).toBe('head');
         expect(result.utxos).toHaveLength(1);
         expect(writeSpy).toHaveBeenCalled();
+        expect(redisClientCall).toHaveBeenCalledWith('scan', '0', { match: getApiIndexScanPattern(IndexNames.UTXO), count: 10000 });
+        expect(redisClientCall).toHaveBeenCalledWith('scan', '0', { match: getApiIndexScanPattern(IndexNames.MINT), count: 10000 });
     });
 
     it('logs and returns empty snapshot content when redis enumeration fails', async () => {
