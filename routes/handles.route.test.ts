@@ -1,4 +1,4 @@
-import { ERROR_TEXT, HandleType, HttpException } from '@koralabs/kora-labs-common';
+import { ERROR_TEXT, HandleType, HttpException, ScriptType } from '@koralabs/kora-labs-common';
 import * as cbor from '@koralabs/kora-labs-common/utils/cbor';
 import request from 'supertest';
 import App from '../app';
@@ -847,7 +847,7 @@ describe('Testing Handles Routes', () => {
         });
 
         it('should attach configured script when handle has no inline script', async () => {
-            jest.spyOn(scriptsService, 'getScriptByRefAddress').mockResolvedValue({
+            const getScriptByRefAddressSpy = jest.spyOn(scriptsService, 'getScriptByRefAddress').mockResolvedValue({
                 handle: 'pz_script_01',
                 handleHex: 'hex',
                 validatorHash: 'abc',
@@ -864,6 +864,7 @@ describe('Testing Handles Routes', () => {
                 type: 'pz_contract',
                 cbor: 'deadbeef'
             });
+            expect(getScriptByRefAddressSpy).toHaveBeenCalledWith(expect.anything(), 'addr1_script_lookup', ScriptType.PZ_CONTRACT);
         });
 
         it('should return script not found', async () => {
@@ -888,7 +889,7 @@ describe('Testing Handles Routes', () => {
         });
 
         it('should attach configured script when reference token utxo has no script', async () => {
-            jest.spyOn(scriptsService, 'getScriptByRefAddress').mockResolvedValue({
+            const getScriptByRefAddressSpy = jest.spyOn(scriptsService, 'getScriptByRefAddress').mockResolvedValue({
                 handle: 'pz_script_01',
                 handleHex: 'hex',
                 validatorHash: 'abc',
@@ -912,6 +913,7 @@ describe('Testing Handles Routes', () => {
                     cbor: 'deadbeef'
                 }
             });
+            expect(getScriptByRefAddressSpy).toHaveBeenCalledWith(expect.anything(), 'addr1_script_lookup', ScriptType.PZ_CONTRACT);
         });
 
         it('should return empty object when reference token cannot be found', async () => {

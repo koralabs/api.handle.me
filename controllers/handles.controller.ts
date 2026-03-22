@@ -21,28 +21,28 @@ import { MAX_PAGINATED_RESULTS, MAX_TEXT_PLAIN_PAGINATED_RESULTS } from '../conf
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandleViewModel } from '../models/view/handle.view.model';
 import { HandlesRepository } from '../repositories/handlesRepository';
-import { getScriptByRefAddress } from '../services/scripts.service';
+import { getScriptByRefAddress, resolvePreferredScriptTypeForHandleName } from '../services/scripts.service';
 
 type HandleSearchQueryParams = IGetAllQueryParams & { root_handle?: string };
 
 class HandlesController {
-    private static async getScriptByAddress(req: Request<any>, address?: string): Promise<UTxO['script'] | undefined> {
+    private static async getScriptByAddress(req: Request<any>, address?: string, handleName?: string): Promise<UTxO['script'] | undefined> {
         if (!address) {
             return;
         }
 
-        const script = await getScriptByRefAddress(req, address);
+        const script = await getScriptByRefAddress(req, address, resolvePreferredScriptTypeForHandleName(handleName));
         if (script?.cbor && script?.type) {
             return script as unknown as UTxO['script'];
         }
     }
 
-    private static async attachReferenceTokenScript(req: Request<any>, utxo: UTxO): Promise<UTxO> {
+    private static async attachReferenceTokenScript(req: Request<any>, utxo: UTxO, handleName?: string): Promise<UTxO> {
         if (utxo.script) {
             return utxo;
         }
 
-        utxo.script = await HandlesController.getScriptByAddress(req, utxo.address);
+        utxo.script = await HandlesController.getScriptByAddress(req, utxo.address, handleName);
 
         return utxo;
     }
@@ -232,7 +232,7 @@ class HandlesController {
             const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
             const refUtxo = handleRepo.getUTxO(handleData.handle?.reference_utxo)
             if (refUtxo) {
-                const reference_token = await HandlesController.attachReferenceTokenScript(req, new UTxO(refUtxo));
+                const reference_token = await HandlesController.attachReferenceTokenScript(req, new UTxO(refUtxo), handleData.handle.name);
                 return { reference_token, code: handleData.code };
             }
         }
@@ -341,7 +341,9 @@ class HandlesController {
                 return;
             }
 
-            const script = handleData.handle.script ?? await HandlesController.getScriptByAddress(req, handleData.handle.resolved_addresses?.ada);
+            const script =
+                handleData.handle.script ??
+                await HandlesController.getScriptByAddress(req, handleData.handle.resolved_addresses?.ada, handleData.handle.name);
             if (!script) {
                 res.status(404).send({ message: 'Script not found' });
                 return;

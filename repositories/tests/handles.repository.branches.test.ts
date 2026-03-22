@@ -1714,4 +1714,45 @@ describe('HandlesRepository branch tests', () => {
         const result = repo.buildPersonalizationData(handle, 'd87980');
         expect(result.nftAttributes).toEqual(expect.objectContaining({ name }));
     });
+
+    it('restores the owner utxo when a stale nft subhandle shell later sees the 222 owner token', () => {
+        const repo = new HandlesRepository(buildStoreMock());
+        const saveSpy = jest.spyOn(repo, 'save').mockImplementation(jest.fn());
+        const name = 'tiny@root';
+        const ownerTokenHex = `${AssetNameLabel.LBL_222}${Buffer.from(name).toString('hex')}`;
+        const brokenHandle = repo.Internal.buildHandle({
+            name,
+            hex: ownerTokenHex,
+            policy,
+            resolved_addresses: { ada: '' },
+            updated_slot_number: 90,
+            created_slot_number: 1
+        } as any);
+        brokenHandle.reference_utxo = 'tx_90#0';
+        brokenHandle.utxo = '';
+
+        jest.spyOn(ogmiosUtils, 'getHandleNameFromAssetName').mockReturnValue({
+            name,
+            ownerTokenHex,
+            isCip67: true,
+            assetLabel: AssetNameLabel.LBL_222
+        });
+
+        repo.updateHandleIndexes(
+            buildUtxo(ownerTokenHex, 10),
+            new Map([[name, [{ created_slot: 1, metadata: {}, txHash: 'tx' } as any]]]) as any,
+            new Map([[name, brokenHandle]]),
+            new Map()
+        );
+
+        expect(saveSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                name,
+                utxo: 'tx_10#0',
+                lovelace: 1,
+                resolved_addresses: { ada: address }
+            }),
+            brokenHandle
+        );
+    });
 });

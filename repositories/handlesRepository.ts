@@ -921,7 +921,7 @@ export class HandlesRepository {
                         if (utxo.slot < handle.updated_slot_number && isMintTx) {
                             handle.created_slot_number = Math.min(handle.created_slot_number, utxo.slot, existingHandle?.created_slot_number ?? Number.POSITIVE_INFINITY);
                         }
-                        if (utxo.slot >= handle.updated_slot_number) {
+                        if (utxo.slot >= handle.updated_slot_number || !handle.utxo) {
                             // check if existing handle has a utxo. If it does, we may have a double mint
                             if (isMintTx && existingHandle?.utxo && existingHandle?.utxo != utxo.id) {
                                 handle.amount = (handle.amount ?? 1) + 1;

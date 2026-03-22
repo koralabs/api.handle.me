@@ -27,6 +27,7 @@ const SCRIPT_SOURCES: Record<ScriptType, { slug: string; repo: string }> = {
 const SCRIPT_TYPES_BY_SLUG = Object.entries(SCRIPT_SOURCES)
     .sort(([, left], [, right]) => right.slug.length - left.slug.length)
     .map(([type, source]) => [source.slug, type as ScriptType] as const);
+const SCRIPT_TYPE_VALUES = Object.values(ScriptType).sort((left, right) => right.length - left.length);
 const LEGACY_SCRIPT_TYPE_ALIASES: Record<string, ScriptType> = {
     pz_contract: ScriptType.PZ_CONTRACT,
     sub_handle_settings: ScriptType.SUB_HANDLE_SETTINGS,
@@ -102,6 +103,29 @@ export const resolveScriptTypeQuery = (type?: string): ScriptType | undefined =>
     }
 
     return SCRIPT_TYPE_BY_QUERY[type.toLowerCase()] ?? LEGACY_SCRIPT_TYPE_ALIASES[type.toLowerCase()];
+};
+
+export const resolvePreferredScriptTypeForHandleName = (handleName?: string): ScriptType => {
+    const normalizedHandleName = `${handleName ?? ''}`.toLowerCase();
+    if (/^pz_contract_\d+$/i.test(normalizedHandleName)) {
+        return ScriptType.PZ_CONTRACT;
+    }
+
+    if (normalizedHandleName.endsWith(HANDLE_SUFFIX)) {
+        const slugWithOrdinal = normalizedHandleName.slice(0, -HANDLE_SUFFIX.length);
+        const scriptType = SCRIPT_TYPE_VALUES.find((prefix) => {
+            if (!slugWithOrdinal.startsWith(prefix)) {
+                return false;
+            }
+
+            return /^\d+$/.test(slugWithOrdinal.slice(prefix.length));
+        });
+        if (scriptType) {
+            return scriptType;
+        }
+    }
+
+    return ScriptType.PZ_CONTRACT;
 };
 
 const fetchUnoptimizedCbor = async (type: ScriptType, cache: Map<ScriptType, Promise<string | undefined>>) => {
@@ -233,10 +257,15 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
     return scripts;
 };
 
-export const getScriptByRefAddress = async (req: Request<any>, refScriptAddress?: string): Promise<ScriptDetails | undefined> => {
+export const getScriptByRefAddress = async (
+    req: Request<any>,
+    refScriptAddress?: string,
+    type?: ScriptType
+): Promise<ScriptDetails | undefined> => {
     if (!refScriptAddress) {
         return;
     }
 
-    return Object.values(await getScriptsIndex(req)).find((script) => script.refScriptAddress === refScriptAddress);
+    const matches = Object.values(await getScriptsIndex(req, type)).filter((script) => script.refScriptAddress === refScriptAddress);
+    return matches.find((script) => script.latest) ?? matches[0];
 };
