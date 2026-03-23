@@ -747,7 +747,7 @@ describe('Scanner lambda unit tests', () => {
 
         await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
 
-        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/stale_hash/next', 181);
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/stale_hash/next', 721);
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(2, 'blocks/4980/next');
         const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
         expect(txInfoCalls).toHaveLength(0);
@@ -808,7 +808,7 @@ describe('Scanner lambda unit tests', () => {
 
         await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
 
-        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/stale_hash/next', 181);
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/stale_hash/next', 721);
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(2, 'blocks/2840/next');
         const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
         expect(txInfoCalls).toHaveLength(0);
@@ -1668,7 +1668,7 @@ describe('Scanner lambda unit tests', () => {
         const result = await scannerModule.lambdaHandler({} as any, {} as any);
 
         expect(result).toEqual({ isBase64Encoded: false, statusCode: 200, body: '' });
-        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/start_hash/next', 181);
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/start_hash/next', 721);
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(2, 'blocks/4980/next');
     });
 
