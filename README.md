@@ -17,6 +17,13 @@ Snapshot uploads are now chain-verified before they are written to S3, and start
 - Runtime entrypoints: `docs/spec/runtime-entrypoints.md`
 - OpenAPI contract: `docs/swagger.yml`
 
+## Deployment Ownership
+
+- This repo contains the application source, local runtime scripts, and Lambda entrypoints for `api.handle.me`.
+- Deployment orchestration is handled by the sibling repo `../adahandle-deployments`.
+- Per the local ecosystem docs, `api.handle.me` deploys directly from `adahandle-deployments`, including the complementary Docker Hub deployment `handles-public-api`.
+- Changes in this repo may still require corresponding updates in `adahandle-deployments` before they are actually shipped.
+
 &nbsp;
 
 # Getting Started

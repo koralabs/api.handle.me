@@ -69,6 +69,7 @@ Reading Handle state directly from chain providers for every request is expensiv
 - API side may use async operations
 - Store-first serving model returns `202` while still catching up
 - Deployment targets include local Docker/Node and AWS Lambda + ALB
+- Deployment orchestration is owned by the sibling repo `../adahandle-deployments`, not by this application repo
 
 ## Risks and Pain Points (Ecosystem-driven)
 - Resolution complexity: multiple handle “types” and standard evolutions (CIP labels, policy transitions) create integration risk.

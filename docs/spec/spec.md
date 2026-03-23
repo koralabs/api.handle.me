@@ -175,6 +175,7 @@ API transition rule:
   - `lambdas/scanner.ts`
   - `lambdas/snapshot.ts`
   - `lambdas/valkeyutility.ts` (operational helper source)
+- Deployment orchestration for `api.handle.me` is handled from the sibling repo `../adahandle-deployments`, not from this repo.
 - See `docs/spec/runtime-entrypoints.md` for exact mode behavior and packaging notes.
 
 ## Scanner and Rollback

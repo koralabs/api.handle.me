@@ -8,6 +8,12 @@ This repo ships the same API/indexing system in three operational shapes:
 
 This document maps the code entrypoints, what they start, and which environment variables affect them.
 
+## Deployment Ownership
+- This repo is not the deployment control plane for `api.handle.me`.
+- The ecosystem-level deployment source of truth lives in the sibling repo `../adahandle-deployments`.
+- `api.handle.me` deploys from `adahandle-deployments`, including the complementary Docker Hub deployment `handles-public-api`.
+- Treat the files in this repo as runtime/build inputs; shipping changes may require coordinated updates in `adahandle-deployments`.
+
 ## Local Development
 
 ### API Process
