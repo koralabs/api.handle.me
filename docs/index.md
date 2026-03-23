@@ -10,6 +10,7 @@
 - [Spec Index](./spec/index.md)
 - [API/Scanner Spec](./spec/spec.md)
 - [Index and Data Model](./spec/index-model.md)
+- [Runtime Entrypoints](./spec/runtime-entrypoints.md)
 - [@handlecontract Script Discovery](./spec/handlecontract-script-discovery.md)
 - [OpenAPI Swagger](./swagger.yml)
 

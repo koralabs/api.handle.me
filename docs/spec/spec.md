@@ -22,9 +22,10 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 ## Runtime Architecture
 - `app.ts` bootstraps Express, dynamic middleware/routes/IoC loading, and Swagger UI.
 - Routes/controllers provide read APIs over `HandlesRepository`.
-- `HandlesRepository` reads/writes indexed state in `RedisHandlesStore`.
+- `HandlesRepository` reads/writes indexed state in `RedisHandlesStore` (Valkey-backed).
 - Detailed index model and invariants are captured in `docs/spec/index-model.md`.
 - API responses are compressed with Express `compression` middleware when clients send supported `Accept-Encoding` headers (for example `br` or `gzip`).
+- Runtime entrypoint details for local Node, container, and Lambda modes are captured in `docs/spec/runtime-entrypoints.md`.
 - Scanning mode:
   - Default: Ogmios WebSocket scanner (`services/ogmios/ogmios.service.ts`)
   - Optional local fallback in dev/test: scanner lambda loop (`USE_LAMBDA_SCANNER=true`)
@@ -32,11 +33,17 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 
 ## Data Freshness Contract
 - API returns `200` when store is caught up.
-- API returns `202` when store is behind chain tip.
+- API returns `202` when store is behind chain tip or the service is in an updating state.
 - `/health` may return:
   - `200` when current
-  - `202` when storage or ogmios is behind
+  - `202` when storage is behind, Ogmios is behind, or scanner maintenance is actively updating state
   - `503` when cardano-node connectivity is unavailable
+- `/health` status values currently include:
+  - `current`
+  - `storage_behind`
+  - `ogmios_behind`
+  - `updating`
+  - `waiting_on_cardano_node`
 
 ## Feature-to-Endpoint Mapping
 - Handle resolution and ownership views:
@@ -55,9 +62,14 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
   - `POST /mint` relay for SubHandle minting workflows (not a general mint endpoint)
 - Network scripts and datum utilities:
   - `GET /scripts`
-  - `POST /datum` (feature-flagged via `ENABLE_DATUM_ENDPOINT`)
+  - `POST /datum`
+  - `GET /policies`
+  - deprecated `GET /handles/:handle/datum` remains feature-gated by `ENABLE_DATUM_ENDPOINT`
+- MCP surface:
+  - `POST /mcp`
+  - `GET /mcp` transport-status response (`405` while SSE transport is disabled)
 - Operations:
-  - `GET /health`, `GET /stats`, `GET /deployment`, `GET /` (redirects to `/swagger`)
+  - `GET /health`, `GET /stats`, `GET /deployment`, `GET /`, `GET /swagger`, `GET /swagger/swagger.yml`
 
 ## Route Inventory
 
@@ -66,6 +78,8 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - `GET /health` sync status + stats (+ `ogmios` when Ogmios scanning is enabled)
 - `GET /stats` total handles/holders
 - `GET /deployment` `deployment_info.json`
+- `GET /swagger` Swagger UI
+- `GET /swagger/swagger.yml` raw OpenAPI document
 
 ### Handles
 - `GET /handles` filter/search/paginate handle catalog
@@ -93,6 +107,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 
 ### Utility & Internal
 - `POST /datum` CBOR/JSON encode/decode utility
+- `GET /policies` normalized handle policy settings derived from `handle_policies`
 - `GET /scripts` network script catalog (`latest`, `type` query support)
   - script entries are resolved from canonical `<slug><ordinal>@handlecontract` subhandles
   - the `type` query parameter now prefers canonical slugs such as `pers`, `mkpl`, `demimntprx`, and `halmntprx`
@@ -100,6 +115,15 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
   - response payload `type` values use the canonical slugs such as `pers`, `mkpl`, `demimnt`, and `halmntprx`
   - response keys are validator-hash-derived script addresses, while `refScriptAddress` points to the handle-held reference script UTxO address
   - `unoptimizedCbor`, when present, is loaded from the owning contract repo at `deploy/<network>/<slug>.unoptimized.cbor`
+- `POST /mcp` Model Context Protocol JSON-RPC endpoint with read-only tools:
+  - `get_handle`
+  - `get_handle_utxo`
+  - `search_handles`
+  - `get_holder`
+  - `list_holders`
+  - `get_policies`
+  - `get_stats`
+- `GET /mcp` returns `405` with an SSE-disabled message; streamable HTTP GET transport is not enabled
 - `POST /mint` relay for subhandle minting service (currently rejects `handle_type=handle`)
 
 ## Contract Slug Naming
@@ -142,6 +166,17 @@ API transition rule:
 - Requests with an `api-key` header present in `WHITELISTED_API_KEYS` bypass the limiter.
 - This is not authentication; the API does not require an `api-key` for access by default.
 
+## Runtime Entrypoints
+- Local API bootstrap: `express.ts` -> `express.app.ts` -> `app.ts`
+- Local chain bootstrap: `shell/start_local.sh` (`npm run ogmios`)
+- Container bootstrap: `shell/entrypoint.sh`
+- Lambda entrypoints:
+  - `lambdas/api.ts`
+  - `lambdas/scanner.ts`
+  - `lambdas/snapshot.ts`
+  - `lambdas/valkeyutility.ts` (operational helper source)
+- See `docs/spec/runtime-entrypoints.md` for exact mode behavior and packaging notes.
+
 ## Scanner and Rollback
 - Ogmios scanner processes each block transaction synchronously, updating UTxOs and indexes in order.
 - Before any per-UTxO handle updates, scanners normalize and preload minting data for the full block/scan batch so Handle (`222`) and Virtual SubHandle (`000`) mint records are available regardless of tx/output ordering.
@@ -177,6 +212,8 @@ See `site.env` for the operator-facing glossary. Commonly used ones include:
 - `ENABLE_DATUM_ENDPOINT`
 - `RATE_LIMITER_ENABLED`, `WHITELISTED_API_KEYS`
 - `IPFS_GATEWAY`, `IPFS_GATEWAY_BACKUP`, `PINATA_GATEWAY_TOKEN`
+- `OGMIOS_PORT`, `CARDANO_NODE_PORT`, `CARDANO_DB_PATH`
+- `OGMIOS_VER`, `CARDANO_NODE_VER`
 
 ## Swagger Coverage Requirements
 - `docs/swagger.yml` must document all active and deprecated externally callable routes.

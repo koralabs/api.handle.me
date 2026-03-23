@@ -12,13 +12,14 @@ External context and milestones live in `docs/product/ecosystem.md`.
 Reading Handle state directly from chain providers for every request is expensive and slow. Clients need:
 - Fast lookups by handle, holder, and filters
 - Stable pagination options for large data sets
-- Access to UTxO/script/datum data for integration workflows
+- Access to UTxO/script/datum/policy data for integration workflows
 - Health and sync-state visibility
 
 ## Goals
 - Serve Handle reads from an indexed store with predictable latency
 - Keep API responses available while scanner catches up (HTTP `202` behavior)
 - Support both wallet-facing lookups and builder-focused utilities (`/datum`, `/scripts`)
+- Support MCP-based read access for tool-using clients
 - Support local development and production Lambda deployment patterns
 
 ## Non-Goals
@@ -48,8 +49,11 @@ Reading Handle state directly from chain providers for every request is expensiv
   - `/root-handles` for root handle inventory and filtering
 - Utility endpoints:
   - `/scripts` for network script catalog and “latest per type”
-  - `/datum` CBOR/JSON encode/decode utility (feature-flagged)
+  - `/datum` CBOR/JSON encode/decode utility
+  - `/policies` for normalized handle policy settings
   - `/deployment` for deployment metadata
+- MCP endpoint:
+  - `/mcp` provides a read-only Model Context Protocol JSON-RPC surface for handles, holders, policies, and stats.
 - Mint relay:
   - `/mint` provides a controlled relay used for SubHandle minting flows (this API is not a generalized minting service).
 
@@ -58,6 +62,7 @@ Reading Handle state directly from chain providers for every request is expensiv
   - `200` when indexed store is caught up
   - `202` when scanner is still catching up (results are best-effort but may be incomplete)
 - `/health` exposes enough fields for integrators to gate UX by sync state (`current`, `storage_behind`, `ogmios_behind`, `waiting_on_cardano_node`).
+- `/health` may also report `updating` while destructive scanner maintenance work is in progress.
 
 ## Constraints
 - Scanner/index updates are synchronous by design (ordering matters)

@@ -4,7 +4,7 @@
   <img src="./docs/handles-api.jpeg" />
 </p>
 
-Our Decentralized API uses Ogmios to scan a cardano-node for Handles related transactions. The information is stored in a custom, in-memory index for quick reads. We take a snapshot of the index once a day. This snapshot is loaded each time the container starts to decrease load times.
+This API uses Ogmios to scan Cardano chain data for Handle-related transactions and stores the indexed state in Valkey for fast reads. Snapshot artifacts are generated from that index and can be loaded at startup to reduce catch-up time.
 
 Snapshot uploads are now chain-verified before they are written to S3, and startup will ignore any snapshot that does not carry that verification metadata.
 
@@ -14,27 +14,58 @@ Snapshot uploads are now chain-verified before they are written to S3, and start
 - Index: `docs/index.md`
 - Product docs: `docs/product/index.md`
 - Technical spec: `docs/spec/index.md`
+- Runtime entrypoints: `docs/spec/runtime-entrypoints.md`
 - OpenAPI contract: `docs/swagger.yml`
 
 &nbsp;
 
 # Getting Started
 
+## Local Development
+
+### Start local chain services
+```sh
+npm install
+npm run ogmios
+```
+
+- `npm run ogmios` runs `shell/start_local.sh`.
+- It sources `.env`, downloads network config into `./tmp`, installs or reuses local `cardano-node` and Ogmios binaries, and starts/reuses local chain services for the configured `NETWORK`.
+- The app expects Valkey locally. For normal local development this means the default Valkey port `6379`.
+
+### Start the API
+```sh
+npm run api
+```
+
+- This starts the Express API from `express.ts` and will initialize Ogmios scanning unless `ENABLE_OGMIOS_SCANNING=false`.
+- Read-only local mode is also available:
+```sh
+npm run readonly
+```
+
+### Local runtime notes
+- `USE_LAMBDA_SCANNER=true` only applies in local `development` or `test` mode when in-process Ogmios scanning is disabled. In that mode the app invokes the scanner Lambda entrypoint on a 60-second loop.
+- Local e2e and critical tests use a separate Valkey instance on `127.0.0.1:6380` so they do not wipe a live local scan on `6379`.
+
+&nbsp;
+
 ### Prerequisites
 - Install Docker - https://docs.docker.com/get-docker/
 
+## Container Runtime
 
-### Run the following:
+### Run the following
 ```sh
 docker pull koralabs/handles-api
 docker run -p 3141:3141 -v db:/db -v handles:/app/handles koralabs/handles-api
 ```
-- The `-v db:/db` and the `-v handles:/handles` in the command above can be omitted, but we recommeded it so the `cardano-node` db and handle scan progress is saved to the host when the container goes down.
+- The `-v db:/db` and `-v handles:/app/handles` mounts can be omitted, but keeping them preserves the cardano-node DB and other on-disk app state across restarts.
 - You can also map a volume to the node socket with `-v <path_to_socket_folder>:/ipc`. This lets you use the cardano-node with other apps outside the container.
 
 &nbsp;
 
-### If you already have a cardano-node running, you can use the ogmios-only version: 
+### If you already have a cardano-node running, you can use the ogmios-only version
 ```sh
 docker pull koralabs/handles-api
 docker run -p 3141:3141 -v <path_to_node.socket_folder>:/ipc -v handles:/app/handles -e MODE=ogmios koralabs/handles-api:latest
@@ -48,7 +79,8 @@ docker run -p 3141:3141 -v <path_to_node.socket_folder>:/ipc -v handles:/app/han
 - Open a browser to [http://localhost:3141/swagger](http://localhost:3141/swagger)
 - You can also see the current API status at [http://localhost:3141/health](http://localhost:3141/health)
 - Active Handle policy settings are available at [http://localhost:3141/policies](http://localhost:3141/policies) as normalized JSON (`first_minting_slot`, `last_minting_slot`, `sunset_slot` per hex policy ID without `0x` prefix)
-- **🚩WARNING:** All endpoints will return a <span style="color:red">202</span> when it is running but the scan hasn't reached the tip of the chain yet. It is not recommended to use the results until a <span style="color:green">200</span> status is returned.
+- Health statuses currently include `current`, `storage_behind`, `ogmios_behind`, `updating`, and `waiting_on_cardano_node`.
+- Most read endpoints return `202` while the indexed store is still catching up. Treat that data as best-effort until the API returns `200`.
 
 ## MCP Endpoint
 - `POST /mcp` exposes a Model Context Protocol (MCP) JSON-RPC endpoint.
@@ -57,6 +89,16 @@ docker run -p 3141:3141 -v <path_to_node.socket_folder>:/ipc -v handles:/app/han
 - `search_handles` supports `slot_number` pagination and holder filtering via `holder_address`.
 - `search_handles` requires `page` and `slot_number` to be mutually exclusive.
 - `GET /mcp` currently returns `405` (SSE streaming transport is not enabled).
+
+&nbsp;
+
+## Lambda Runtime
+- API Lambda entrypoint: `lambdas/api.ts`
+- Scanner Lambda entrypoint: `lambdas/scanner.ts`
+- Snapshot Lambda entrypoint: `lambdas/snapshot.ts`
+- Operational Valkey utility source: `lambdas/valkeyutility.ts`
+- The standard Lambda Rollup build bundles `api.ts`, `scanner.ts`, and `snapshot.ts`.
+- Scanner Lambda function URLs support a whitelisted reindex shortcut through `/reindex` or `/scanner/reindex`.
 
 &nbsp;
 
@@ -111,11 +153,13 @@ All of the options below can be passed into the container using `-e ENV_VAR=valu
 
 > `CONFIG_FILES_BASE_URL='https://book.world.dev.cardano.org/environments'` A URL where the config, topology, and genesis files can be found. It should have the same folder structure as the default. 
 
+See `site.env` for the full operator-facing env glossary, including local-only variables such as `OGMIOS_PORT`, `CARDANO_NODE_PORT`, `CARDANO_DB_PATH`, `OGMIOS_VER`, `CARDANO_NODE_VER`, and the `API_SCANNER_FUNCTION_URL_*` variables used by `shell/reindex-scanner.sh`.
+
 &nbsp;
 
 ## NOTES
 
-Depending on your internet connectino, it can take a 45 minutes to a few hours to download the cardano-node snapshot and begin an Ogmios scan.
+Depending on your internet connection, it can take 45 minutes to a few hours to download the cardano-node snapshot and begin an Ogmios scan.
 
 A minimum of 24GB of RAM is required when running the container - 32GB recommended. If running in Ogmios-only mode, 4GB minimum is required, 8GB recommended.
 

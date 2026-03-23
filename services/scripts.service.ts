@@ -1,5 +1,6 @@
 import { bech32AddressFromHashes, blake2b, HandleSearchModel, ScriptDetails, ScriptType, StoredHandle } from '@koralabs/kora-labs-common';
 import { Request } from 'express';
+import { parse as parseYaml } from 'yaml';
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
 
@@ -8,8 +9,8 @@ const MAX_SCRIPT_RESULTS = '50000';
 const HANDLE_SUFFIX = `@${SCRIPT_ROOT_HANDLE}`;
 const DEFAULT_NETWORK = 'preview';
 const GITHUB_RAW_BASE_URL = 'https://raw.githubusercontent.com/koralabs';
-const SCRIPT_SOURCES: Record<ScriptType, { slug: string; repo: string }> = {
-    [ScriptType.PZ_CONTRACT]: { slug: 'pers', repo: 'handles-personalization' },
+const SCRIPT_SOURCES: Record<ScriptType, { slug: string; repo: string; deploymentStatePath?: string }> = {
+    [ScriptType.PZ_CONTRACT]: { slug: 'pers', repo: 'handles-personalization', deploymentStatePath: 'deploy/${network}/personalization.yaml' },
     [ScriptType.SUB_HANDLE_SETTINGS]: { slug: 'subh', repo: 'handles-subhandle-settings' },
     [ScriptType.MARKETPLACE_CONTRACT]: { slug: 'mkpl', repo: 'handles-marketplace-contracts' },
     [ScriptType.DEMI_MINT_PROXY]: { slug: 'demimntprx', repo: 'decentralized-minting' },
@@ -97,6 +98,15 @@ const getUnoptimizedCborUrl = (type: ScriptType) => {
     return `${GITHUB_RAW_BASE_URL}/${source.repo}/master/deploy/${getNetwork()}/${source.slug}.unoptimized.cbor`;
 };
 
+const getDeploymentStateUrl = (type: ScriptType) => {
+    const source = SCRIPT_SOURCES[type];
+    if (!source?.deploymentStatePath) {
+        return null;
+    }
+
+    return `${GITHUB_RAW_BASE_URL}/${source.repo}/master/${source.deploymentStatePath.replace('${network}', getNetwork())}`;
+};
+
 export const resolveScriptTypeQuery = (type?: string): ScriptType | undefined => {
     if (!type) {
         return;
@@ -148,6 +158,45 @@ const fetchUnoptimizedCbor = async (type: ScriptType, cache: Map<ScriptType, Pro
 
             const unoptimizedCbor = (await response.text()).trim();
             return unoptimizedCbor || undefined;
+        } catch {
+            return;
+        }
+    })();
+
+    cache.set(type, request);
+    return request;
+};
+
+const fetchAssignedScriptHandles = async (type: ScriptType, cache: Map<ScriptType, Promise<string[] | undefined>>) => {
+    const cached = cache.get(type);
+    if (cached) {
+        return cached;
+    }
+
+    const url = getDeploymentStateUrl(type);
+    const request = (async () => {
+        if (!url) {
+            return;
+        }
+
+        try {
+            const response = await fetch(url);
+            if (!response.ok) {
+                return;
+            }
+
+            const payload = parseYaml(await response.text()) as {
+                assigned_handles?: { scripts?: unknown };
+            } | null;
+            const handles = payload?.assigned_handles?.scripts;
+            if (!Array.isArray(handles)) {
+                return;
+            }
+
+            const normalizedHandles = handles
+                .map((handle) => `${handle}`.trim())
+                .filter((handle) => handle.length > 0);
+            return normalizedHandles.length > 0 ? normalizedHandles : undefined;
         } catch {
             return;
         }
@@ -223,7 +272,8 @@ const getCandidateHandles = (req: Request<any>, type?: ScriptType): StoredHandle
 };
 
 export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Promise<{ [scriptAddress: string]: ScriptDetails }> => {
-    if (!createRepo(req)) {
+    const handleRepo = createRepo(req);
+    if (!handleRepo) {
         return {};
     }
 
@@ -242,14 +292,38 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
 
     const scripts: { [scriptAddress: string]: ScriptDetails } = {};
     const unoptimizedCborCache = new Map<ScriptType, Promise<string | undefined>>();
+    const assignedScriptHandlesCache = new Map<ScriptType, Promise<string[] | undefined>>();
 
     for (const [scriptType, matches] of matchesByType.entries()) {
         const latestOrdinal = Math.max(...matches.map(({ ordinal }) => ordinal));
         const unoptimizedCbor = await fetchUnoptimizedCbor(scriptType, unoptimizedCborCache);
+        const assignedScriptHandles = await fetchAssignedScriptHandles(scriptType, assignedScriptHandlesCache);
+        const activeAssignedHandleName = assignedScriptHandles
+            ?.map((handleName) => handleRepo.getHandle(handleName))
+            .find((handle): handle is StoredHandle => !!handle?.script?.cbor)
+            ?.name
+            ?.toLowerCase();
         for (const { handle, ordinal } of matches) {
-            const scriptEntry = await buildScriptEntry(handle, scriptType, ordinal === latestOrdinal, unoptimizedCbor);
+            const scriptEntry = await buildScriptEntry(
+                handle,
+                scriptType,
+                activeAssignedHandleName
+                    ? handle.name.toLowerCase() === activeAssignedHandleName
+                    : ordinal === latestOrdinal,
+                unoptimizedCbor
+            );
             if (scriptEntry) {
                 scripts[scriptEntry[0]] = scriptEntry[1];
+            }
+        }
+
+        if (activeAssignedHandleName && !matches.some(({ handle }) => handle.name.toLowerCase() === activeAssignedHandleName)) {
+            const activeAssignedHandle = handleRepo.getHandle(activeAssignedHandleName);
+            if (activeAssignedHandle?.script?.cbor) {
+                const scriptEntry = await buildScriptEntry(activeAssignedHandle, scriptType, true, unoptimizedCbor);
+                if (scriptEntry) {
+                    scripts[scriptEntry[0]] = scriptEntry[1];
+                }
             }
         }
     }
