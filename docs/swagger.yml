@@ -82,6 +82,132 @@ paths:
             application/json:
               schema:
                 type: object
+  "/tx/evaluate":
+    post:
+      tags:
+      - utils
+      summary: Evaluate a transaction against the current ledger state
+      description: |
+        Evaluates a serialized transaction through the API's Ogmios-backed transaction submission client.
+        Additional UTxOs may be supplied when the transaction depends on chained outputs that are not yet on-chain.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - txCbor
+              properties:
+                txCbor:
+                  type: string
+                  description: Hex CBOR serialized transaction.
+                additionalUtxos:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                    - txHash
+                    - outputIndex
+                    - address
+                    - amount
+                    properties:
+                      txHash:
+                        type: string
+                      outputIndex:
+                        type: integer
+                      address:
+                        type: string
+                      amount:
+                        type: array
+                        items:
+                          type: object
+                          required:
+                          - unit
+                          - quantity
+                          properties:
+                            unit:
+                              type: string
+                            quantity:
+                              type: string
+                      datumHash:
+                        type: string
+                      datum:
+                        type: string
+                      script:
+                        type: object
+                        required:
+                        - cbor
+                        - language
+                        properties:
+                          cbor:
+                            type: string
+                          language:
+                            type: string
+                            enum:
+                            - plutus:v1
+                            - plutus:v2
+                            - plutus:v3
+      responses:
+        '200':
+          description: Transaction evaluated successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required:
+                  - tag
+                  - index
+                  - budget
+                  properties:
+                    tag:
+                      type: string
+                    index:
+                      type: integer
+                    budget:
+                      type: object
+                      required:
+                      - mem
+                      - steps
+                      properties:
+                        mem:
+                          type: integer
+                        steps:
+                          type: integer
+        '400':
+          description: Transaction failed evaluation or the request was invalid
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required:
+                  - message
+                  - raw
+                  properties:
+                    message:
+                      type: string
+                    raw:
+                      type: object
+        '503':
+          description: Ogmios was unavailable for evaluation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required:
+                  - message
+                  - raw
+                  properties:
+                    message:
+                      type: string
+                    raw:
+                      type: object
   "/handles":
     get:
       tags:
