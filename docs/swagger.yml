@@ -962,6 +962,102 @@ paths:
                 type: object
         '404':
           description: Latest script not found
+  "/tx/evaluate":
+    post:
+      tags:
+      - utils
+      summary: Evaluate a transaction through Ogmios
+      description: |
+        Evaluates a transaction against the connected Ogmios/node runtime and returns Mesh-compatible redeemer budgets.
+        Non-200 responses return contract-response arrays suitable for builder error handling.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - txCbor
+              properties:
+                txCbor:
+                  type: string
+                  description: Transaction CBOR hex string to evaluate.
+                additionalUtxos:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                    - txHash
+                    - outputIndex
+                    - address
+                    - amount
+                    properties:
+                      txHash:
+                        type: string
+                      outputIndex:
+                        type: integer
+                      address:
+                        type: string
+                      amount:
+                        type: array
+                        items:
+                          type: object
+                          required:
+                          - unit
+                          - quantity
+                          properties:
+                            unit:
+                              type: string
+                            quantity:
+                              type: string
+      responses:
+        '200':
+          description: Mesh-compatible redeemer budgets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required:
+                  - tag
+                  - index
+                  - budget
+                  properties:
+                    tag:
+                      type: string
+                    index:
+                      type: integer
+                    budget:
+                      type: object
+                      required:
+                      - mem
+                      - steps
+                      properties:
+                        mem:
+                          type: integer
+                        steps:
+                          type: integer
+        '400':
+          description: Contract response array describing why evaluation failed
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required:
+                  - message
+                  - raw
+                  properties:
+                    tag:
+                      type: string
+                    index:
+                      type: integer
+                    message:
+                      type: string
+                    raw:
+                      type: object
   "/deployment":
     get:
       tags:

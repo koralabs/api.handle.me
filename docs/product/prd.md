@@ -19,6 +19,7 @@ Reading Handle state directly from chain providers for every request is expensiv
 - Serve Handle reads from an indexed store with predictable latency
 - Keep API responses available while scanner catches up (HTTP `202` behavior)
 - Support both wallet-facing lookups and builder-focused utilities (`/datum`, `/scripts`)
+  - Include Ogmios-backed tx evaluation for builder flows (`/tx/evaluate`)
 - Support local development and production Lambda deployment patterns
 
 ## Non-Goals
@@ -48,6 +49,7 @@ Reading Handle state directly from chain providers for every request is expensiv
   - `/root-handles` for root handle inventory and filtering
 - Utility endpoints:
   - `/scripts` for network script catalog and “latest per type”
+  - `/tx/evaluate` for Ogmios-backed transaction evaluation with Mesh-compatible budget output
   - `/datum` CBOR/JSON encode/decode utility (feature-flagged)
   - `/deployment` for deployment metadata
 - Mint relay:

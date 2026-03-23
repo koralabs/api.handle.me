@@ -55,6 +55,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
   - `POST /mint` relay for SubHandle minting workflows (not a general mint endpoint)
 - Network scripts and datum utilities:
   - `GET /scripts`
+  - `POST /tx/evaluate`
   - `POST /datum` (feature-flagged via `ENABLE_DATUM_ENDPOINT`)
 - Operations:
   - `GET /health`, `GET /stats`, `GET /deployment`, `GET /` (redirects to `/swagger`)
@@ -93,6 +94,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 
 ### Utility & Internal
 - `POST /datum` CBOR/JSON encode/decode utility
+- `POST /tx/evaluate` Ogmios-backed transaction evaluation that returns Mesh-compatible redeemer budgets and contract-response errors for builder flows
 - `GET /scripts` network script catalog (`latest`, `type` query support)
   - script entries are resolved from canonical `<slug><ordinal>@handlecontract` subhandles
   - the `type` query parameter now prefers canonical slugs such as `pers`, `mkpl`, `demimntprx`, and `halmntprx`
