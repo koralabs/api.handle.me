@@ -1296,6 +1296,12 @@ describe('Scanner lambda unit tests', () => {
         expect(pacingCalls.some((delay) => delay >= 160)).toBe(true);
         const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
         expect(txInfoCalls.length).toBeGreaterThanOrEqual(4);
+        expect(txInfoCalls.every(([, , body]) => {
+            const parsedBody = JSON.parse(`${body ?? '{}'}`);
+            return (parsedBody._tx_hashes ?? []).length <= 35
+                && parsedBody._scripts === false
+                && parsedBody._bytecode === false;
+        })).toBe(true);
     });
 
     it('batches block_txs with the smaller soft body limit', async () => {

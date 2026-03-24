@@ -1,5 +1,5 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { awaitForEach, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import fs from 'fs';
 import stdOut from 'node:readline';
 import zlib from 'zlib';
@@ -35,14 +35,11 @@ const getSnapshotUrl = (network: string, utxoSchemaVersion: number) => `http://a
 
 const waitForUnlockedLambdas = async (handlesRepo: HandlesRepository) => {
     let metrics = handlesRepo.getMetrics();
-    let retries = 0;
-
-    while (metrics.lockLambdas) {
-        if (retries >= LOCKED_LAMBDA_MAX_RETRIES) return metrics;
-        retries++;
+    await awaitForEach(Array.from({ length: LOCKED_LAMBDA_MAX_RETRIES }), async () => {
+        if (!metrics.lockLambdas) return;
         await delayMs(LOCKED_LAMBDA_RETRY_DELAY_MS);
         metrics = handlesRepo.getMetrics();
-    }
+    });
 
     return metrics;
 };

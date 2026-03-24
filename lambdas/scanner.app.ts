@@ -1,4 +1,4 @@
-import { AssetNameLabel, buildHolderInfo, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, NETWORK, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, awaitForEach, buildHolderInfo, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, NETWORK, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { WHITELISTED_API_KEYS } from '../config';
 import { BlockfrostBlock, KoiosAssetUTxO, KoiosTxInfo } from '../interfaces/provider.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
@@ -18,6 +18,9 @@ const SCANNER_LEASE_HEARTBEAT_MS = 20_000;
 const KOIOS_RETRY_DELAYS_MS = [500, 1_500, 4_000];
 const KOIOS_TX_INFO_SOFT_BODY_LIMIT = 3_000;
 const KOIOS_BLOCK_TXS_SOFT_BODY_LIMIT = 3_000;
+// CloudWatch failures on 2026-02-16 showed tx_info batches failing at 66-71 hashes.
+const KOIOS_TX_INFO_MAX_HASHES_PER_BATCH = 35;
+const scannerKoiosTxInfoSettings = { ...defaultKoiosSettings, _scripts: false, _bytecode: false };
 const KOIOS_TX_INFO_MAX_RPS = 6;
 const KOIOS_TX_INFO_MIN_INTERVAL_MS = Math.ceil(1000 / KOIOS_TX_INFO_MAX_RPS);
 const KOIOS_TX_INFO_MAX_RETRIES = KOIOS_RETRY_DELAYS_MS.length;
@@ -102,43 +105,43 @@ const isLockStale = (reason: LockedLambdaReason, lockTimestamp?: number): boolea
 const getKoiosBatches = (
     list: string[],
     keyName: string,
-    { maxBodyLength, payload = {} as Record<string, unknown> }: { maxBodyLength: number; payload?: Record<string, unknown> }
+    {
+        maxBodyLength,
+        maxItemsPerBatch = Infinity,
+        payload = {} as Record<string, unknown>
+    }: {
+        maxBodyLength: number;
+        maxItemsPerBatch?: number;
+        payload?: Record<string, unknown>;
+    }
 ) => {
     const batchedList: string[][] = [];
-    let batchesIndex = 0;
-    let listArray: string[] = [];
-    while (batchesIndex < list.length) {
-        listArray.push(list[batchesIndex]);
-        if (JSON.stringify({ [keyName]: listArray, ...payload }).length >= maxBodyLength) {
-            // Max possible ",[policy,handle]" length is 96
-            batchedList.push(listArray);
-            listArray = [];
+    let batch: string[] = [];
+
+    for (const item of list) {
+        const nextBatch = [...batch, item];
+        const exceedsBodyLimit = JSON.stringify({ [keyName]: nextBatch, ...payload }).length > maxBodyLength;
+        const exceedsItemLimit = nextBatch.length > maxItemsPerBatch;
+
+        if (batch.length && (exceedsBodyLimit || exceedsItemLimit)) {
+            batchedList.push(batch);
+            batch = [item];
+            continue;
         }
-        batchesIndex++;
-        // last check if last handle
-        if (batchesIndex == list.length && listArray.length) {
-            batchedList.push(listArray);
-        }
+
+        batch = nextBatch;
     }
+
+    if (batch.length) {
+        batchedList.push(batch);
+    }
+
     return batchedList;
 };
 
 const delayMs = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-const runSequentialBatches = async <T>(
-    batches: T[],
-    intervalMilliseconds: number,
-    callback: (batch: T) => Promise<void>
-) => {
-    for (let index = 0; index < batches.length; index++) {
-        await callback(batches[index]);
-        if (intervalMilliseconds > 0 && index < batches.length - 1) {
-            await delayMs(intervalMilliseconds);
-        }
-    }
-};
-
-const getTxInfoBody = (hashBatch: string[]) => JSON.stringify({ _tx_hashes: hashBatch, ...defaultKoiosSettings });
+const getTxInfoBody = (hashBatch: string[]) => JSON.stringify({ _tx_hashes: hashBatch, ...scannerKoiosTxInfoSettings });
 
 const getBlockTxsBody = (hashBatch: string[]) => JSON.stringify({ _block_hashes: hashBatch });
 
@@ -279,12 +282,16 @@ const fetchTxInfoBatchWithRetryAndSplit = async (hashBatch: string[], attempt = 
 const getBatchedTxInfo = async (txHashes: string[]) => {
     const batchedTxHashes = getKoiosBatches(txHashes, '_tx_hashes', {
         maxBodyLength: KOIOS_TX_INFO_SOFT_BODY_LIMIT,
-        payload: defaultKoiosSettings
+        maxItemsPerBatch: KOIOS_TX_INFO_MAX_HASHES_PER_BATCH,
+        payload: scannerKoiosTxInfoSettings
     });
     const txs: KoiosTxInfo[] = [];
-    await runSequentialBatches(batchedTxHashes, KOIOS_TX_INFO_MIN_INTERVAL_MS, async (hashBatch) => {
+    await awaitForEach(batchedTxHashes, async (hashBatch, index) => {
         const txInfo = await fetchTxInfoBatchWithRetryAndSplit(hashBatch);
         txs.push(...(txInfo ?? []));
+        if (KOIOS_TX_INFO_MIN_INTERVAL_MS > 0 && index < batchedTxHashes.length - 1) {
+            await delayMs(KOIOS_TX_INFO_MIN_INTERVAL_MS);
+        }
     });
     return txs;
 };
@@ -358,8 +365,11 @@ const getBatchedTxHashes = async (blockHashes: string[]) => {
         maxBodyLength: KOIOS_BLOCK_TXS_SOFT_BODY_LIMIT
     });
     const txHashes: string[] = [];
-    await runSequentialBatches(batchedBlockHashes, KOIOS_BLOCK_TXS_MIN_INTERVAL_MS, async (hashBatch) => {
+    await awaitForEach(batchedBlockHashes, async (hashBatch, index) => {
         txHashes.push(...await fetchBlockTxHashBatchWithRetry(hashBatch));
+        if (KOIOS_BLOCK_TXS_MIN_INTERVAL_MS > 0 && index < batchedBlockHashes.length - 1) {
+            await delayMs(KOIOS_BLOCK_TXS_MIN_INTERVAL_MS);
+        }
     });
     return txHashes;
 };
@@ -496,7 +506,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
 
     const handleTxHashes: string[] = [];
     // This is a separate set of UTxOs representing the current Handle values (potentially different from above UTxOs)
-    await runSequentialBatches(batchedHandles, KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS, async (handleNames) => {
+    await awaitForEach(batchedHandles, async (handleNames, index) => {
         const koiosUtxos = await fetchAssetUtxoBatchWithRetry(handleNames);
         if (koiosUtxos !== null) {
             // go through each asset and grab the data we need to test, tx_hash, tx_index, address
@@ -507,6 +517,9 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
             // Handle not found in provider, we need to remove it from our store.
             // this can happen if a mint was rolled back and didn't return
             // Mostly possible with DEMI and Manually added Handles because handle.me uses Blockfrost
+        }
+        if (KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS > 0 && index < batchedHandles.length - 1) {
+            await delayMs(KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS);
         }
     });
 
