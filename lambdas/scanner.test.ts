@@ -120,6 +120,7 @@ const setup = ({ whitelistedApiKeys = 'allowed-key' }: { whitelistedApiKeys?: st
 
     const handlesRepo = {
         initialize: jest.fn().mockResolvedValue(undefined),
+        addMintDataFromUTxOs: jest.fn().mockImplementation((utxos: any[]) => utxos),
         addUTxO: jest.fn(),
         addUTxOsWithMintData: jest.fn(),
         addUTxOsWithMintDataAndUpdateIndexes: jest.fn(),
@@ -330,6 +331,7 @@ describe('Scanner lambda unit tests', () => {
         expect(store.removeValueFromIndexedSet).toHaveBeenCalledWith(IndexNames.MINT, 'handle-a', mintToRemove);
         expect(handlesRepo.removeUTxOs).toHaveBeenCalledWith(['u1']);
         expect(handlesRepo.addUTxOsWithMintData).toHaveBeenCalledWith([expect.objectContaining({ id: 'replay_block#0' })]);
+        expect(handlesRepo.addMintDataFromUTxOs).toHaveBeenCalledWith([expect.objectContaining({ id: 'replay_tx_info#0' })]);
         expect(handlesRepo.updateHandleIndexes).toHaveBeenCalledWith(expect.objectContaining({ id: 'replay_tx_info#0' }), expect.any(Map), expect.any(Map));
     });
 
@@ -360,12 +362,17 @@ describe('Scanner lambda unit tests', () => {
             [new Set([mintToKeepForReplay])]
         );
 
-        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'provider_tx_1' }] as never;
             if (path === 'asset_utxos') return [{ tx_hash: 'tx_info_1' }] as never;
-            if (path === 'tx_info') return [{ source: 'from-tx-info' }] as never;
+            if (path === 'tx_info' && body?.includes('provider_tx_1')) return [{ source: 'provider-tx-info' }] as never;
+            if (path === 'tx_info' && body?.includes('tx_info_1')) return [{ source: 'from-tx-info' }] as never;
             return [] as never;
         });
         mockedHelpers.buildUTxOsFromKoiosTxs.mockImplementation((txs: any[]) => {
+            if (txs?.[0]?.source === 'provider-tx-info') {
+                return [buildUtxo({ id: 'replay_block#0', slot: 201, blockHash: 'provider_a', assetName: 'asset-a' })] as never;
+            }
             if (txs?.[0]?.source === 'from-tx-info') {
                 const replayUtxo = buildUtxo({ id: 'replay_tx_info#0', slot: 202, blockHash: 'provider_a', assetName: 'asset-a' });
                 replayUtxo.handles = [[policy, ['asset-a', 'asset-z']]];
@@ -654,6 +661,7 @@ describe('Scanner lambda unit tests', () => {
 
         await scannerModule.Internal.checkRollback({ currentSlot: 300, lastMaxRollbackCheck: Date.now() });
 
+        expect(handlesRepo.addMintDataFromUTxOs).toHaveBeenCalledWith([expect.objectContaining({ id: 'replay_latest#0' })]);
         expect(handlesRepo.updateHandleIndexes).toHaveBeenCalledTimes(1);
         const [, mintValueIndex] = handlesRepo.updateHandleIndexes.mock.calls[0];
         expect(mintValueIndex.get('handle-a')).toEqual([
@@ -1633,9 +1641,33 @@ describe('Scanner lambda unit tests', () => {
         expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
     });
 
-    it('lambdaHandler runs recovery reindex when a recovery flag is present', async () => {
+    it('lambdaHandler rebuilds UTxOs from snapshot when rollback recovery flag is present', async () => {
         const { handlesRepo, scannerModule, store } = setup();
         store.redisClientCall('set', getApiScannerRecoveryKey(), 'rollback');
+        handlesRepo.getMetrics.mockReturnValue({
+            lockLambdas: LockedLambdaReason.UNLOCKED,
+            indexSchemaVersion: 1,
+            currentBlockHash: 'start_hash',
+            currentSlot: 100
+        });
+
+        await expect(scannerModule.lambdaHandler({} as any, {} as any)).resolves.toBeUndefined();
+
+        expect(handlesRepo.getStartingPoint).toHaveBeenCalledWith(
+            expect.objectContaining({
+                [UTxOFunctionName.ADD_UTXO]: expect.any(Function),
+                [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: expect.any(Function)
+            }),
+            true
+        );
+        expect(store.repopulateIndexesFromUTxOs).not.toHaveBeenCalled();
+        expect(store.redisClientCall('get', getApiScannerRecoveryKey())).toBeUndefined();
+        expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
+    });
+
+    it('lambdaHandler runs index reindex when reindex recovery flag is present', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        store.redisClientCall('set', getApiScannerRecoveryKey(), 'reindex');
         handlesRepo.getMetrics.mockReturnValue({
             lockLambdas: LockedLambdaReason.UNLOCKED,
             indexSchemaVersion: 1,
@@ -1705,20 +1737,19 @@ describe('Scanner lambda unit tests', () => {
             headers: { 'api-key': 'allowed-b' }
         } as any;
 
-        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
         let result: any;
 
         try {
             result = await scannerModule.lambdaHandler(functionUrlEvent, {} as any);
         } finally {
             expect(
-                warnSpy.mock.calls.some(([entry]) =>
+                errorSpy.mock.calls.some(([entry]) =>
                     `${entry}`.includes('"event": "scannerLambda.reindexShortcut"')
-                    && `${entry}`.includes('WARN')
-                    && !`${entry}`.includes('NOTIFY')
+                    && `${entry}`.includes('NOTIFY')
                 )
             ).toBe(true);
-            warnSpy.mockRestore();
+            errorSpy.mockRestore();
         }
 
         expect(result).toEqual(
@@ -1749,7 +1780,7 @@ describe('Scanner lambda unit tests', () => {
         expect(handlesRepo.initialize).toHaveBeenCalledTimes(1);
     });
 
-    it('logs recovery flag reindex as WARN instead of NOTIFY', async () => {
+    it('logs rollback recovery flag rebuild as NOTIFY', async () => {
         const { handlesRepo, scannerModule, store } = setup();
         store.getIndexSchemaVersion.mockReturnValue(1);
         handlesRepo.getMetrics.mockReturnValue({
@@ -1760,21 +1791,28 @@ describe('Scanner lambda unit tests', () => {
         });
         store.redisClientCall('set', getApiScannerRecoveryKey(), 'rollback');
 
-        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
         try {
             await expect(scannerModule.lambdaHandler({} as any, {} as any)).resolves.toBeUndefined();
             expect(
-                warnSpy.mock.calls.some(([entry]) =>
+                errorSpy.mock.calls.some(([entry]) =>
                     `${entry}`.includes('"event": "scannerLambda.recoveryFlag"')
-                    && `${entry}`.includes('WARN')
-                    && !`${entry}`.includes('NOTIFY')
+                    && `${entry}`.includes('NOTIFY')
+                    && `${entry}`.includes('Rebuilding UTxO state from snapshot before scan.')
                 )
             ).toBe(true);
         } finally {
-            warnSpy.mockRestore();
+            errorSpy.mockRestore();
         }
 
-        expect(store.repopulateIndexesFromUTxOs).toHaveBeenCalledTimes(1);
+        expect(handlesRepo.getStartingPoint).toHaveBeenCalledWith(
+            expect.objectContaining({
+                [UTxOFunctionName.ADD_UTXO]: expect.any(Function),
+                [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: expect.any(Function)
+            }),
+            true
+        );
+        expect(store.repopulateIndexesFromUTxOs).not.toHaveBeenCalled();
         expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
     });
 

@@ -87,6 +87,11 @@ const clearRecoveryFlag = (): void => {
     store.redisClientCall('del', [SCANNER_RECOVERY_KEY]);
 };
 
+const getUTxOIndexHandlers = () => ({
+    [UTxOFunctionName.ADD_UTXO]: handlesRepo.addUTxO.bind(handlesRepo),
+    [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: handlesRepo.updateHandleIndexes.bind(handlesRepo)
+});
+
 const isLockStale = (reason: LockedLambdaReason, lockTimestamp?: number): boolean => {
     if (!lockTimestamp) return false;
     const timeout = staleLockTimeouts[reason];
@@ -506,11 +511,14 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
     });
 
     const latestUTxOsForAffectedHandles = await getBatchedUTxOs(handleTxHashes);
+    const rollbackHandleSet = new Set(handles);
+    const relevantLatestUTxOsForAffectedHandles = latestUTxOsForAffectedHandles
+        .map((utxo) => filterUTxOToHandleNames(utxo, rollbackHandleSet))
+        .filter((utxo): utxo is UTxOWithTxInfo => !!utxo);
 
     // find the intersection of providerUTxOs and latestUTxOsForAffectedHandles to get the latest UTxOs for the affected handles
-    const latestIds = latestUTxOsForAffectedHandles.filter((u) => u.slot >= firstBlock.slot && u.slot <= currentSlot).map((u) => u.id);
+    const latestIds = relevantLatestUTxOsForAffectedHandles.filter((u) => u.slot >= firstBlock.slot && u.slot <= currentSlot).map((u) => u.id);
     const latestProviderUTxOsForAffectedHandles = providerUTxOs.filter(p => latestIds.includes(p.id));
-
     // then find the differences between that and the utxos from our store to find any discrepancies
     const [latestProviderIds, apiIds] = [new Set(latestProviderUTxOsForAffectedHandles.map((u) => u.id)), new Set(utxos.map((u) => u.id))];
     const differences = [...latestProviderIds.symmetricDifference(apiIds)].map((id) => {
@@ -586,6 +594,8 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
 
             const storedHandlesMap = new Map<string, StoredHandle>(storedHandles.map((h) => [h.name, h]));
 
+            handlesRepo.addMintDataFromUTxOs(relevantLatestUTxOsForAffectedHandles);
+
             const retrievedMintingData = store.pipeline(() => {
                 handles.forEach((handleName) => {
                     handlesRepo.getHandleMintingData(handleName);
@@ -601,12 +611,9 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
                 );
             });
 
-            const rollbackHandleSet = new Set(handles);
             store.pipeline(() => {
-                for (const utxo of latestUTxOsForAffectedHandles) {
-                    const filteredUTxO = filterUTxOToHandleNames(utxo, rollbackHandleSet);
-                    if (!filteredUTxO) continue;
-                    handlesRepo.updateHandleIndexes(filteredUTxO, mintValueIndex, storedHandlesMap);
+                for (const utxo of relevantLatestUTxOsForAffectedHandles) {
+                    handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap);
                 }
             });
 
@@ -645,7 +652,7 @@ const checkRollback = async () => {
     } catch (error: any) {
         if (isRetriableKoiosError(error)) {
             Logger.log({
-                message: `Retriable Koios rollback failure (will retry next invocation): ${error?.message ?? error}`,
+                message: `Retriable rollback reconciliation failure (will retry next invocation): ${error?.message ?? error}`,
                 category: LogCategory.INFO,
                 event: 'scannerLambda.rollbackRetriable'
             });
@@ -665,11 +672,21 @@ const processReindex = async () => {
     Logger.log({ message: `Repopulating indexes from UTxOs to schema version ${store.getIndexSchemaVersion()}`, category: LogCategory.INFO, event: 'getStartingPoint.repopulateIndexesFromUTxOs' });
     try {
         // This function already chunks at a rate of about 20K every 10 seconds. 300K handles should take about 5 minutes
-        store.repopulateIndexesFromUTxOs({
-            [UTxOFunctionName.ADD_UTXO]: handlesRepo.addUTxO.bind(handlesRepo),
-            [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: handlesRepo.updateHandleIndexes.bind(handlesRepo)
-        });
+        store.repopulateIndexesFromUTxOs(getUTxOIndexHandlers());
         handlesRepo.setMetrics({ indexSchemaVersion: store.getIndexSchemaVersion() });
+        clearRecoveryFlag();
+    } finally {
+        handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
+    }
+};
+
+const processRollbackRecovery = async () => {
+    handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.REINDEX, lockLambdasTimestamp: Date.now() });
+    try {
+        const restoredPoint = await handlesRepo.getStartingPoint(getUTxOIndexHandlers(), true);
+        if (!restoredPoint) {
+            throw new Error('Rollback recovery could not rebuild UTxO state from snapshot');
+        }
         clearRecoveryFlag();
     } finally {
         handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
@@ -686,10 +703,7 @@ const ensureUTxOsReady = async () => {
         category: LogCategory.WARN,
         event: 'scannerLambda.repopulateUTxOs'
     });
-    await handlesRepo.getStartingPoint({
-        [UTxOFunctionName.ADD_UTXO]: handlesRepo.addUTxO.bind(handlesRepo),
-        [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: handlesRepo.updateHandleIndexes.bind(handlesRepo)
-    });
+    await handlesRepo.getStartingPoint(getUTxOIndexHandlers());
 }
 
 const clearStaleLockIfNeeded = (metrics: ReturnType<HandlesRepository['getMetrics']>) => {
@@ -904,7 +918,7 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
 
             Logger.log({
                 message: 'Running scanner reindex shortcut from function URL request',
-                category: LogCategory.WARN,
+                category: LogCategory.NOTIFY,
                 event: 'scannerLambda.reindexShortcut'
             });
             await processReindex();
@@ -919,7 +933,17 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
 
         const recoveryFlag = getRecoveryFlag();
         if (recoveryFlag) {
-            Logger.log({ message: `Recovery flag '${recoveryFlag}' detected. Running index repair before scan.`, category: LogCategory.WARN, event: 'scannerLambda.recoveryFlag' });
+            Logger.log({
+                message: recoveryFlag === RECOVERY_REASON_ROLLBACK
+                    ? `Recovery flag '${recoveryFlag}' detected. Rebuilding UTxO state from snapshot before scan.`
+                    : `Recovery flag '${recoveryFlag}' detected. Running index repair before scan.`,
+                category: LogCategory.NOTIFY,
+                event: 'scannerLambda.recoveryFlag'
+            });
+            if (recoveryFlag === RECOVERY_REASON_ROLLBACK) {
+                await processRollbackRecovery();
+                return;
+            }
             await processReindex();
             return;
         }
