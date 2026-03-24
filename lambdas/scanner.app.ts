@@ -904,7 +904,7 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
 
             Logger.log({
                 message: 'Running scanner reindex shortcut from function URL request',
-                category: LogCategory.NOTIFY,
+                category: LogCategory.WARN,
                 event: 'scannerLambda.reindexShortcut'
             });
             await processReindex();
@@ -919,7 +919,7 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
 
         const recoveryFlag = getRecoveryFlag();
         if (recoveryFlag) {
-            Logger.log({ message: `Recovery flag '${recoveryFlag}' detected. Running index repair before scan.`, category: LogCategory.NOTIFY, event: 'scannerLambda.recoveryFlag' });
+            Logger.log({ message: `Recovery flag '${recoveryFlag}' detected. Running index repair before scan.`, category: LogCategory.WARN, event: 'scannerLambda.recoveryFlag' });
             await processReindex();
             return;
         }

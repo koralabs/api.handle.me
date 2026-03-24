@@ -1705,7 +1705,21 @@ describe('Scanner lambda unit tests', () => {
             headers: { 'api-key': 'allowed-b' }
         } as any;
 
-        const result = await scannerModule.lambdaHandler(functionUrlEvent, {} as any);
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        let result: any;
+
+        try {
+            result = await scannerModule.lambdaHandler(functionUrlEvent, {} as any);
+        } finally {
+            expect(
+                warnSpy.mock.calls.some(([entry]) =>
+                    `${entry}`.includes('"event": "scannerLambda.reindexShortcut"')
+                    && `${entry}`.includes('WARN')
+                    && !`${entry}`.includes('NOTIFY')
+                )
+            ).toBe(true);
+            warnSpy.mockRestore();
+        }
 
         expect(result).toEqual(
             expect.objectContaining({
@@ -1733,6 +1747,35 @@ describe('Scanner lambda unit tests', () => {
         await scannerModule.lambdaHandler({} as any, {} as any);
 
         expect(handlesRepo.initialize).toHaveBeenCalledTimes(1);
+    });
+
+    it('logs recovery flag reindex as WARN instead of NOTIFY', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        store.getIndexSchemaVersion.mockReturnValue(1);
+        handlesRepo.getMetrics.mockReturnValue({
+            lockLambdas: LockedLambdaReason.UNLOCKED,
+            indexSchemaVersion: 1,
+            currentBlockHash: 'start_hash',
+            currentSlot: 100
+        });
+        store.redisClientCall('set', getApiScannerRecoveryKey(), 'rollback');
+
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        try {
+            await expect(scannerModule.lambdaHandler({} as any, {} as any)).resolves.toBeUndefined();
+            expect(
+                warnSpy.mock.calls.some(([entry]) =>
+                    `${entry}`.includes('"event": "scannerLambda.recoveryFlag"')
+                    && `${entry}`.includes('WARN')
+                    && !`${entry}`.includes('NOTIFY')
+                )
+            ).toBe(true);
+        } finally {
+            warnSpy.mockRestore();
+        }
+
+        expect(store.repopulateIndexesFromUTxOs).toHaveBeenCalledTimes(1);
+        expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
     });
 
     it('uses the default rollback offset when processRollback omits rollbackOffset', async () => {
