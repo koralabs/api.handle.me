@@ -1,4 +1,4 @@
-import { AssetNameLabel, awaitForEach, buildHolderInfo, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, NETWORK, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, asyncForEach, buildHolderInfo, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, NETWORK, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { WHITELISTED_API_KEYS } from '../config';
 import { BlockfrostBlock, KoiosAssetUTxO, KoiosTxInfo } from '../interfaces/provider.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
@@ -286,13 +286,10 @@ const getBatchedTxInfo = async (txHashes: string[]) => {
         payload: scannerKoiosTxInfoSettings
     });
     const txs: KoiosTxInfo[] = [];
-    await awaitForEach(batchedTxHashes, async (hashBatch, index) => {
+    await asyncForEach(batchedTxHashes, async (hashBatch) => {
         const txInfo = await fetchTxInfoBatchWithRetryAndSplit(hashBatch);
         txs.push(...(txInfo ?? []));
-        if (KOIOS_TX_INFO_MIN_INTERVAL_MS > 0 && index < batchedTxHashes.length - 1) {
-            await delayMs(KOIOS_TX_INFO_MIN_INTERVAL_MS);
-        }
-    });
+    }, KOIOS_TX_INFO_MIN_INTERVAL_MS);
     return txs;
 };
 
@@ -365,12 +362,9 @@ const getBatchedTxHashes = async (blockHashes: string[]) => {
         maxBodyLength: KOIOS_BLOCK_TXS_SOFT_BODY_LIMIT
     });
     const txHashes: string[] = [];
-    await awaitForEach(batchedBlockHashes, async (hashBatch, index) => {
+    await asyncForEach(batchedBlockHashes, async (hashBatch) => {
         txHashes.push(...await fetchBlockTxHashBatchWithRetry(hashBatch));
-        if (KOIOS_BLOCK_TXS_MIN_INTERVAL_MS > 0 && index < batchedBlockHashes.length - 1) {
-            await delayMs(KOIOS_BLOCK_TXS_MIN_INTERVAL_MS);
-        }
-    });
+    }, KOIOS_BLOCK_TXS_MIN_INTERVAL_MS);
     return txHashes;
 };
 
@@ -506,7 +500,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
 
     const handleTxHashes: string[] = [];
     // This is a separate set of UTxOs representing the current Handle values (potentially different from above UTxOs)
-    await awaitForEach(batchedHandles, async (handleNames, index) => {
+    await asyncForEach(batchedHandles, async (handleNames) => {
         const koiosUtxos = await fetchAssetUtxoBatchWithRetry(handleNames);
         if (koiosUtxos !== null) {
             // go through each asset and grab the data we need to test, tx_hash, tx_index, address
@@ -518,10 +512,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
             // this can happen if a mint was rolled back and didn't return
             // Mostly possible with DEMI and Manually added Handles because handle.me uses Blockfrost
         }
-        if (KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS > 0 && index < batchedHandles.length - 1) {
-            await delayMs(KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS);
-        }
-    });
+    }, KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS);
 
     const latestUTxOsForAffectedHandles = await getBatchedUTxOs(handleTxHashes);
     const rollbackHandleSet = new Set(handles);
