@@ -1,3 +1,6 @@
+// Ad hoc operational lambda.
+// This file is freeform by design; anything in here is expendable and may be replaced
+// or deleted when the operational need changes.
 import Redis from 'ioredis';
 
 const LEGACY_GLOBAL_KEYS = ['metrics', 'scanner:lease', 'scanner:recovery'];

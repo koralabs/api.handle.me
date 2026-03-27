@@ -71,6 +71,7 @@ This document maps the code entrypoints, what they start, and which environment 
 
 ### Valkey Utility Lambda Source
 - `lambdas/valkeyutility.ts` is an operational helper for copying, renaming, deleting API cache namespaces, and rewinding the scanner checkpoint for controlled chain replay across Valkey targets.
+- It is intentionally ad hoc and freeform; code in this lambda is expendable and should not be treated as durable product logic.
 - It is repo-documented because operators use it, but the standard Rollup Lambda bundle in `rollup.lambda.config.js` currently bundles `api.ts`, `scanner.ts`, and `snapshot.ts` only.
 
 ## Packaging Notes
