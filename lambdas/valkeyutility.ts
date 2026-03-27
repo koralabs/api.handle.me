@@ -75,7 +75,7 @@ return result
 `;
 
 type ValkeyCopyEvent = {
-    action?: 'copy_namespace' | 'rename_namespace' | 'delete_namespace';
+    action?: 'copy_namespace' | 'rename_namespace' | 'delete_namespace' | 'set_checkpoint';
     sourceHost?: string;
     sourcePort?: number | string;
     sourcePassword?: string;
@@ -92,6 +92,8 @@ type ValkeyCopyEvent = {
     includeTargetKeys?: boolean | string;
     sourceMode?: 'legacy_only' | 'namespaced_only' | 'all';
     dryRun?: boolean | string;
+    checkpointBlockHash?: string;
+    checkpointSlot?: number | string;
 };
 
 type RedisConfig = {
@@ -309,6 +311,32 @@ const inspectMetrics = async (event: ValkeyCopyEvent) => {
     }
 };
 
+const setCheckpoint = async (event: ValkeyCopyEvent) => {
+    const network = `${event.network || ''}`.toLowerCase();
+    if (!network) throw new Error('network is required for action=set_checkpoint');
+
+    const checkpointBlockHash = `${event.checkpointBlockHash || ''}`.trim();
+    const checkpointSlot = toInt(event.checkpointSlot, 0);
+    if (!checkpointBlockHash) throw new Error('checkpointBlockHash is required for action=set_checkpoint');
+    if (!checkpointSlot) throw new Error('checkpointSlot is required for action=set_checkpoint');
+
+    const target = createClient(getRedisConfig(event, 'target'));
+    await target.connect();
+
+    try {
+        await target.hset(getApiMetricsKey(network), 'currentBlockHash', checkpointBlockHash, 'currentSlot', `${checkpointSlot}`);
+        console.log(JSON.stringify({
+            action: 'set_checkpoint',
+            network,
+            targetHost: target.options.host,
+            currentBlockHash: checkpointBlockHash,
+            currentSlot: checkpointSlot
+        }, jsonReplacer));
+    } finally {
+        target.disconnect();
+    }
+};
+
 const copyNamespace = async (event: ValkeyCopyEvent) => {
     const network = `${event.network || ''}`.toLowerCase();
     if (!network) throw new Error('network is required for action=copy_namespace');
@@ -490,6 +518,10 @@ export const handler = async (event: ValkeyCopyEvent = {}) => {
         }
         if (event.action == 'delete_namespace') {
             await deleteNamespace(event);
+            return;
+        }
+        if (event.action == 'set_checkpoint') {
+            await setCheckpoint(event);
             return;
         }
         await inspectMetrics(event);

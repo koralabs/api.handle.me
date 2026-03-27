@@ -16,6 +16,7 @@ jest.mock('ioredis', () => ({
         client.type ??= jest.fn().mockResolvedValue('none');
         client.callBuffer ??= jest.fn().mockResolvedValue(Buffer.from(''));
         client.call ??= jest.fn().mockResolvedValue(1);
+        client.hset ??= jest.fn().mockResolvedValue(1);
         client.eval ??= jest.fn().mockResolvedValue(['0', '0']);
         client.pttl ??= jest.fn().mockResolvedValue(0);
         client.restore ??= jest.fn().mockResolvedValue('OK');
@@ -72,6 +73,33 @@ describe('lambdas/valkeyutility', () => {
         expect(mockConstructedClients[0].connect).toHaveBeenCalled();
         expect(hgetall).toHaveBeenCalledWith(getApiMetricsKey());
         expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"command":"hgetall"'));
+        expect(mockConstructedClients[0].disconnect).toHaveBeenCalled();
+    });
+
+    it('can rewind the scanner checkpoint by updating the stored metrics hash', async () => {
+        const hset = jest.fn().mockResolvedValue(1);
+        mockRedisClients.push({ hset });
+
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        const lambda = await loadLambda();
+        await lambda.handler({
+            action: 'set_checkpoint',
+            network: 'mainnet',
+            checkpointBlockHash: 'a81958b6e506a5445af863270d12eabd0791e300150750a080adc439d64b635e',
+            checkpointSlot: 183025693,
+            targetHost: 'target.cache',
+            targetTls: false
+        });
+
+        expect(mockConstructedClients[0].options).toEqual(expect.objectContaining({ host: 'target.cache', tls: undefined }));
+        expect(hset).toHaveBeenCalledWith(
+            getApiMetricsKey('mainnet'),
+            'currentBlockHash',
+            'a81958b6e506a5445af863270d12eabd0791e300150750a080adc439d64b635e',
+            'currentSlot',
+            '183025693'
+        );
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"action":"set_checkpoint"'));
         expect(mockConstructedClients[0].disconnect).toHaveBeenCalled();
     });
 
