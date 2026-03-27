@@ -68,6 +68,13 @@ export interface KoiosTxInfo {
     };
 }
 
+export interface KoiosDatumInfo {
+    datum_hash: string;
+    creation_tx_hash: string;
+    value: Record<string, unknown>;
+    bytes: string;
+}
+
 export interface BlockfrostBlock {
     hash: string;
     height: number;

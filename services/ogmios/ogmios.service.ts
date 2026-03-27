@@ -226,9 +226,10 @@ class OgmiosService {
                             .filter(([, labelObj]) => Object.keys(labelObj as any).some(k => k !== 'version'))
                     )
                     // We need to get the datum. This can either be a string or json object.
+                    const rawDatum = o?.datum || (o?.datumHash ? txBody.datums?.[o.datumHash] : undefined);
                     let datum;
                     try {
-                        datum = !o?.datum ? undefined : typeof o?.datum === 'string' ? o?.datum : JSON.stringify(o?.datum);
+                        datum = !rawDatum ? undefined : typeof rawDatum === 'string' ? rawDatum : JSON.stringify(rawDatum);
                     } catch {
                         Logger.log({ message: `Error decoding datum for ${txId}#${i}`, category: LogCategory.ERROR, event: 'processBlock.decodingDatum' });
                     }

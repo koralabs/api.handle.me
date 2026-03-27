@@ -1,6 +1,6 @@
 import { AssetNameLabel, asyncForEach, buildHolderInfo, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, NETWORK, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { WHITELISTED_API_KEYS } from '../config';
-import { BlockfrostBlock, KoiosAssetUTxO, KoiosTxInfo } from '../interfaces/provider.interface';
+import { BlockfrostBlock, KoiosAssetUTxO, KoiosDatumInfo, KoiosTxInfo } from '../interfaces/provider.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { RedisHandlesStore } from '../stores/redis';
@@ -20,10 +20,14 @@ const KOIOS_TX_INFO_SOFT_BODY_LIMIT = 3_000;
 const KOIOS_BLOCK_TXS_SOFT_BODY_LIMIT = 3_000;
 // CloudWatch failures on 2026-02-16 showed tx_info batches failing at 66-71 hashes.
 const KOIOS_TX_INFO_MAX_HASHES_PER_BATCH = 35;
-const scannerKoiosTxInfoSettings = { ...defaultKoiosSettings, _scripts: false, _bytecode: false };
+const scannerKoiosTxInfoSettings = { ...defaultKoiosSettings, _scripts: true, _bytecode: false };
 const KOIOS_TX_INFO_MAX_RPS = 6;
 const KOIOS_TX_INFO_MIN_INTERVAL_MS = Math.ceil(1000 / KOIOS_TX_INFO_MAX_RPS);
 const KOIOS_TX_INFO_MAX_RETRIES = KOIOS_RETRY_DELAYS_MS.length;
+const KOIOS_DATUM_INFO_SOFT_BODY_LIMIT = 3_000;
+const KOIOS_DATUM_INFO_MAX_RPS = 6;
+const KOIOS_DATUM_INFO_MIN_INTERVAL_MS = Math.ceil(1000 / KOIOS_DATUM_INFO_MAX_RPS);
+const KOIOS_DATUM_INFO_MAX_RETRIES = KOIOS_RETRY_DELAYS_MS.length;
 const KOIOS_BLOCK_TXS_MAX_RPS = 6;
 const KOIOS_BLOCK_TXS_MIN_INTERVAL_MS = Math.ceil(1000 / KOIOS_BLOCK_TXS_MAX_RPS);
 const KOIOS_BLOCK_TXS_MAX_RETRIES = KOIOS_RETRY_DELAYS_MS.length;
@@ -142,6 +146,8 @@ const getKoiosBatches = (
 const delayMs = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 const getTxInfoBody = (hashBatch: string[]) => JSON.stringify({ _tx_hashes: hashBatch, ...scannerKoiosTxInfoSettings });
+
+const getDatumInfoBody = (hashBatch: string[]) => JSON.stringify({ _datum_hashes: hashBatch });
 
 const getBlockTxsBody = (hashBatch: string[]) => JSON.stringify({ _block_hashes: hashBatch });
 
@@ -279,6 +285,37 @@ const fetchTxInfoBatchWithRetryAndSplit = async (hashBatch: string[], attempt = 
     }
 };
 
+const fetchDatumInfoBatchWithRetry = async (hashBatch: string[], attempt = 0): Promise<KoiosDatumInfo[]> => {
+    const body = getDatumInfoBody(hashBatch);
+    try {
+        const datumInfo = (await fetchKoios(`datum_info`, 'POST', body)) as KoiosDatumInfo[] | null | { [key: string]: any };
+        if (!datumInfo) return [];
+        if (!Array.isArray(datumInfo)) {
+            const error: any = new Error(`Unexpected datum_info response type`);
+            error.koiosResponse = datumInfo;
+            throw error;
+        }
+        return datumInfo;
+    } catch (error: any) {
+        const retriable = isRetriableKoiosError(error);
+        Logger.local({
+            message: `datum_info request failed. retriable=${retriable} attempt=${attempt + 1}/${KOIOS_DATUM_INFO_MAX_RETRIES + 1} hashCount=${hashBatch.length} bodyLength=${body.length} firstHash=${hashBatch[0] ?? ''} lastHash=${hashBatch[hashBatch.length - 1] ?? ''} code=${error?.code ?? ''} causeCode=${error?.cause?.code ?? ''} error=${error?.message ?? error} cause=${error?.cause?.message ?? ''} curl="${getKoiosDebugCurl('datum_info', body)}"`,
+            category: LogCategory.INFO,
+            event: 'scannerLambda.koiosDatumInfo.requestFailed'
+        });
+
+        if (!retriable) throw error;
+
+        if (attempt < KOIOS_DATUM_INFO_MAX_RETRIES) {
+            const backoff = getKoiosRetryDelay(attempt);
+            await delayMs(backoff);
+            return fetchDatumInfoBatchWithRetry(hashBatch, attempt + 1);
+        }
+
+        throw error;
+    }
+};
+
 const getBatchedTxInfo = async (txHashes: string[]) => {
     const batchedTxHashes = getKoiosBatches(txHashes, '_tx_hashes', {
         maxBodyLength: KOIOS_TX_INFO_SOFT_BODY_LIMIT,
@@ -286,17 +323,53 @@ const getBatchedTxInfo = async (txHashes: string[]) => {
         payload: scannerKoiosTxInfoSettings
     });
     const txs: KoiosTxInfo[] = [];
-    await asyncForEach(batchedTxHashes, async (hashBatch) => {
+    for (const hashBatch of batchedTxHashes) {
         const txInfo = await fetchTxInfoBatchWithRetryAndSplit(hashBatch);
         txs.push(...(txInfo ?? []));
-    }, KOIOS_TX_INFO_MIN_INTERVAL_MS);
+        if (KOIOS_TX_INFO_MIN_INTERVAL_MS > 0) {
+            await delayMs(KOIOS_TX_INFO_MIN_INTERVAL_MS);
+        }
+    }
     return txs;
+};
+
+const getBatchedDatumInfo = async (txInfo: KoiosTxInfo[]) => {
+    const datumHashes = [...new Set(
+        txInfo.flatMap((tx) =>
+            (tx.outputs ?? []).flatMap((output) => {
+                if (output.inline_datum?.bytes || !output.datum_hash) {
+                    return [];
+                }
+
+                return [output.datum_hash];
+            })
+        )
+    )];
+
+    const datumInfoByHash = new Map<string, string>();
+    if (!datumHashes.length) return datumInfoByHash;
+
+    const batchedDatumHashes = getKoiosBatches(datumHashes, '_datum_hashes', {
+        maxBodyLength: KOIOS_DATUM_INFO_SOFT_BODY_LIMIT
+    });
+
+    await asyncForEach(batchedDatumHashes, async (hashBatch) => {
+        const datumInfo = await fetchDatumInfoBatchWithRetry(hashBatch);
+        datumInfo.forEach((datum) => {
+            if (datum?.datum_hash && datum?.bytes) {
+                datumInfoByHash.set(datum.datum_hash, datum.bytes);
+            }
+        });
+    }, KOIOS_DATUM_INFO_MIN_INTERVAL_MS);
+
+    return datumInfoByHash;
 };
 
 const getBatchedUTxOs = async (txHashes: string[], txs?: KoiosTxInfo[]) => {
     const txInfo = txs ?? await getBatchedTxInfo(txHashes);
+    const datumInfoByHash = await getBatchedDatumInfo(txInfo);
     const utxos: UTxOWithTxInfo[] = [];
-    utxos.push(...buildUTxOsFromKoiosTxs(txInfo));
+    utxos.push(...buildUTxOsFromKoiosTxs(txInfo, datumInfoByHash));
     return utxos;
 };
 
@@ -362,9 +435,12 @@ const getBatchedTxHashes = async (blockHashes: string[]) => {
         maxBodyLength: KOIOS_BLOCK_TXS_SOFT_BODY_LIMIT
     });
     const txHashes: string[] = [];
-    await asyncForEach(batchedBlockHashes, async (hashBatch) => {
+    for (const hashBatch of batchedBlockHashes) {
         txHashes.push(...await fetchBlockTxHashBatchWithRetry(hashBatch));
-    }, KOIOS_BLOCK_TXS_MIN_INTERVAL_MS);
+        if (KOIOS_BLOCK_TXS_MIN_INTERVAL_MS > 0) {
+            await delayMs(KOIOS_BLOCK_TXS_MIN_INTERVAL_MS);
+        }
+    }
     return txHashes;
 };
 
@@ -816,6 +892,7 @@ const scan = async () => {
             const blockChunk = bResp.slice(blockIndex, blockIndex + SCANNER_BLOCK_PREFETCH_CHUNK_SIZE);
             const txHashes = [...new Set(await getBatchedTxHashes(blockChunk.map((block) => block.hash)))];
             const txList = await getBatchedTxInfo(txHashes);
+            const datumInfoByHash = await getBatchedDatumInfo(txList);
             const txInfoByBlockHash = new Map<string, KoiosTxInfo[]>();
             for (const tx of txList) {
                 const blockHash = tx?.block_hash;
@@ -827,7 +904,7 @@ const scan = async () => {
             for (const b of blockChunk) {
                 const block = { id: b.hash, slot: b.slot, confirmations: b.confirmations };
                 const blockTxList = txInfoByBlockHash.get(b.hash) ?? [];
-                const builtUTxOs = buildUTxOsFromKoiosTxs(blockTxList);
+                const builtUTxOs = buildUTxOsFromKoiosTxs(blockTxList, datumInfoByHash);
 
                 const handleNames = builtUTxOs.flatMap((u) => u.handles?.flatMap((h) => h[1].map((assetName) => getHandleNameFromAssetName(assetName).name)) ?? []) ?? [];
                 Logger.local(`Processing block ${block.id} at slot ${block.slot} with ${builtUTxOs.length} UTxOs containing ${handleNames.join(', ')} handles from ${blockTxList.length} transactions`);

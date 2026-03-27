@@ -885,6 +885,9 @@ describe('Scanner lambda unit tests', () => {
         expect(handlesRepo.removeUTxOs).toHaveBeenNthCalledWith(1, ['input_newer#0']);
         expect(handlesRepo.removeUTxOs).toHaveBeenNthCalledWith(2, ['input_older#1']);
         expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
+        const txInfoCall = mockedHelpers.fetchKoios.mock.calls.find((call) => call[0] === 'tx_info');
+        expect(txInfoCall).toBeDefined();
+        expect(JSON.parse(txInfoCall![2] as string)).toEqual(expect.objectContaining({ _scripts: true }));
     });
 
     it('scan writes tip metrics from latest blockfrost tip (not chunk tail)', async () => {
@@ -1299,7 +1302,7 @@ describe('Scanner lambda unit tests', () => {
         expect(txInfoCalls.every(([, , body]) => {
             const parsedBody = JSON.parse(`${body ?? '{}'}`);
             return (parsedBody._tx_hashes ?? []).length <= 35
-                && parsedBody._scripts === false
+                && parsedBody._scripts === true
                 && parsedBody._bytecode === false;
         })).toBe(true);
     });

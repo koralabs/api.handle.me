@@ -100,7 +100,10 @@ export const fetchKoios = async (path: string, method = 'GET', body?: string) =>
     return parseResponseJson();
 };
 
-export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[]): UTxOWithTxInfo[] => {
+const resolveKoiosOutputDatum = (output: KoiosTxInfo['outputs'][number], datumByHash: Map<string, string>): string | undefined =>
+    output.inline_datum?.bytes || (output.datum_hash ? datumByHash.get(output.datum_hash) : undefined);
+
+export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[], datumByHash = new Map<string, string>()): UTxOWithTxInfo[] => {
     const utxos: UTxOWithTxInfo[] = [];
     for (const t of transactions) {
         const mint: [string, string[]][] = []
@@ -168,7 +171,7 @@ export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[]): UTxOWithTxI
                 slot: t.absolute_slot,
                 address: o.payment_addr.bech32,
                 lovelace: Number(o.value),
-                datum: o.inline_datum?.bytes,
+                datum: resolveKoiosOutputDatum(o, datumByHash),
                 script: o.reference_script
                     ? {
                         type: 'PlutusScriptV2',
