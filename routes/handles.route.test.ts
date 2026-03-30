@@ -271,6 +271,7 @@ jest.mock('../repositories/handlesRepository', () => ({
         getHandlesByStakeKeyHashes: jest.fn((handles: string[]) => handles),
         getHandlesByPaymentKeyHashes: jest.fn((handles: string[]) => handles),
         getHandlesByAddresses: jest.fn((handles: string[]) => handles),
+        getHandlesByAddressesAsync: jest.fn(async (handles: string[]) => handles),
         getHolderAddressDetails: (key: string) => {
             if (key === 'nope') {
                 throw new HttpException(404, 'Not found');

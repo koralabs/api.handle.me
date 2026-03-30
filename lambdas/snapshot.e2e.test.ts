@@ -121,29 +121,28 @@ describe('Snapshot lambda e2e', () => {
         expect(repo.getMetrics().lockLambdas).toBe(LockedLambdaReason.UNLOCKED);
     });
 
-    it('logs notify when snapshot verification keeps failing and the published snapshot is older than 48 hours', async () => {
+    it('publishes snapshot with verifiedAgainstChain=false when MPT roots mismatch', async () => {
         const loggerSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
+        const sendSpy = jest.spyOn(mockedS3Instance, 'send');
+        const network = `${process.env.NETWORK ?? 'mainnet'}`.toLowerCase();
         store.setHashOnIndex(IndexNames.HANDLE, mintingDataHandleName, {
             name: mintingDataHandleName,
             datum: `d8799f5820${'00'.repeat(32)}ff`,
             has_datum: true
         } as any);
-        global.fetch = jest.fn()
-            .mockResolvedValueOnce({
-                ok: true,
-                status: 200,
-                statusText: 'OK',
-                headers: {
-                    get: (name: string) => name.toLowerCase() === 'last-modified' ? 'Sun, 08 Mar 2026 00:00:00 GMT' : null
-                }
-            }) as any;
 
-        await expect(lambda.handler({})).rejects.toThrow('Snapshot MPT root mismatch');
+        const result = await lambda.handler({});
+
+        expect(result).toEqual({ body: '', statusCode: 200 });
         expect(loggerSpy).toHaveBeenCalledWith(expect.objectContaining({
-            category: LogCategory.NOTIFY,
-            event: 'snapshot.handler.snapshotStaleAfterFailure'
+            category: LogCategory.WARN,
+            event: 'snapshotVerification.mptRootMismatch'
         }));
-        expect(mockedS3Instance.send).not.toHaveBeenCalled();
+        expect(sendSpy).toHaveBeenCalledTimes(1);
+        const uploadedBody = (sendSpy.mock.calls[0]?.[0] as { Body: Buffer }).Body;
+        const uploadedSnapshot = JSON.parse(inflateSync(uploadedBody).toString('utf8'));
+        expect(uploadedSnapshot.verification.verifiedAgainstChain).toBe(false);
+        expect(uploadedSnapshot.verification.network).toBe(network);
         expect(repo.getMetrics().lockLambdas).toBe(LockedLambdaReason.UNLOCKED);
     });
 

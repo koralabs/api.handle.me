@@ -1,7 +1,7 @@
 import { IHandleFileContent, NETWORK } from '@koralabs/kora-labs-common';
 
 export interface SnapshotVerification {
-    verifiedAgainstChain: true;
+    verifiedAgainstChain: boolean;
     snapshotMptRootHash: string;
     chainMptRootHash: string;
     network: string;

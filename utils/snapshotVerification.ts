@@ -7,17 +7,6 @@ import { SnapshotVerification } from './verifiedSnapshot';
 const MINTING_DATA_HANDLE_NAME = 'handle_root@handle_settings';
 const EMPTY_MPT_ROOT_HASH = Buffer.alloc(32).toString('hex');
 
-const getAdditionalTrieHandles = () => {
-    const network = NETWORK.toLowerCase();
-    if (network === 'mainnet') {
-        return ['watchman@ngmerchs'];
-    }
-    if (network === 'preview') {
-        return ['dynamo2@ai'];
-    }
-    return [];
-};
-
 const fetchCurrentMintingDataDatumCbor = async () => {
     const redisHandleStore = new RedisHandlesStore();
     await redisHandleStore.initialize();
@@ -42,7 +31,7 @@ export const getChainMintingDataRootHash = async () => {
 };
 
 export const buildHandleSetMptRootHash = async (handleNames: string[]) => {
-    const normalizedHandleNames = [...new Set([...handleNames, ...getAdditionalTrieHandles()].map((handle) => `${handle}`.trim()).filter(Boolean))].sort();
+    const normalizedHandleNames = [...new Set(handleNames.map((handle) => `${handle}`.trim()).filter(Boolean))].sort();
     const trie = new Trie();
     for (const handleName of normalizedHandleNames) {
         await trie.insert(handleName, '');
@@ -55,17 +44,17 @@ export const buildSnapshotVerification = async (handleNames: string[]): Promise<
     const snapshotMptRootHash = await buildHandleSetMptRootHash(handleNames);
     const chainMptRootHash = await getChainMintingDataRootHash();
 
-    if (snapshotMptRootHash !== chainMptRootHash) {
+    const verifiedAgainstChain = snapshotMptRootHash === chainMptRootHash;
+    if (!verifiedAgainstChain) {
         Logger.log({
             message: `Snapshot MPT root mismatch: snapshot=${snapshotMptRootHash}, chain=${chainMptRootHash}`,
             category: LogCategory.WARN,
             event: 'snapshotVerification.mptRootMismatch'
         });
-        throw new Error(`Snapshot MPT root mismatch: snapshot=${snapshotMptRootHash}, chain=${chainMptRootHash}`);
     }
 
     return {
-        verifiedAgainstChain: true,
+        verifiedAgainstChain,
         snapshotMptRootHash,
         chainMptRootHash,
         network: NETWORK.toLowerCase() || 'preview',

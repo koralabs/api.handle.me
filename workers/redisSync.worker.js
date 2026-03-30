@@ -15,7 +15,10 @@ async function getClient() {
         glideClient = await GlideClient.createClient({
             addresses: [{ host: REDIS_HOST, port: getRedisPort() }],
             useTLS: process.env.REDIS_USE_TLS ? process.env.REDIS_USE_TLS == 'true' : true,
-            requestTimeout: 20_000
+            requestTimeout: 20_000,
+            advancedConfiguration: {
+                connectionTimeout: 10_000
+            }
         });
         const status = await glideClient.ping();
         if (status == 'PONG') {
@@ -60,6 +63,9 @@ if (parentPort) {
             }
             //logKeyResult('handle:', payload, result) // What is the result from Valkey?
         } catch (e) {
+            if (e?.constructor?.name === 'ClosingError' || e?.message?.includes('Connection error')) {
+                glideClient = undefined;
+            }
             const message = `ERROR WITH PAYLOAD: ${JSON.stringify(payload)} | ERROR: ${JSON.stringify(e)} | STACK: ${e?.stack}`;
             reply.postMessage({ id, ok: false, error: { message, stack: e?.stack } });
         } finally {

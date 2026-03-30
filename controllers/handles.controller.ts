@@ -181,10 +181,10 @@ class HandlesController {
                     handles = handleRepo.getHandlesByPaymentKeyHashes(handles)
                     break;
                 case 'bech32address':
-                    handles = handleRepo.getHandlesByAddresses(handles)
+                    handles = await handleRepo.getHandlesByAddressesAsync(handles)
                     break;
                 case 'hexaddress':
-                    handles = handleRepo.getHandlesByAddresses(handles.map(hex => bech32FromHex(hex)))
+                    handles = await handleRepo.getHandlesByAddressesAsync(handles.map(hex => bech32FromHex(hex)))
                     break;
                 default:
                     break;

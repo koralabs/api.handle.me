@@ -43,7 +43,7 @@ describe('snapshotVerification', () => {
         }));
     });
 
-    it('throws when snapshot and indexed chain roots differ', async () => {
+    it('returns verifiedAgainstChain=false when snapshot and indexed chain roots differ', async () => {
         const { buildHandleSetMptRootHash, buildSnapshotVerification } = await import('./snapshotVerification');
         const rootHash = await buildHandleSetMptRootHash(['alpha']);
 
@@ -51,7 +51,12 @@ describe('snapshotVerification', () => {
             datum: `d8799f5820${'00'.repeat(32)}ff`
         });
 
-        await expect(buildSnapshotVerification(['alpha'])).rejects.toThrow(`Snapshot MPT root mismatch: snapshot=${rootHash}, chain=${'00'.repeat(32)}`);
+        const verification = await buildSnapshotVerification(['alpha']);
+        expect(verification).toEqual(expect.objectContaining({
+            verifiedAgainstChain: false,
+            snapshotMptRootHash: rootHash,
+            chainMptRootHash: '00'.repeat(32)
+        }));
     });
 
     it('throws when the indexed settings handle datum is missing', async () => {
