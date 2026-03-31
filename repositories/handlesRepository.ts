@@ -722,6 +722,7 @@ export class HandlesRepository {
         const handleNames = this.store.getValuesFromIndexedSet(IndexNames.HOLDER, address) as HolderHandleNames;
         const defaultHandle = this.store.getValuesFromIndexedSet(IndexNames.DEFAULT_HANDLE, address);
         const storedHandle = this.store.getHashFromIndex(IndexNames.HANDLE, [...handleNames][0]) as StoredHandle;
+        if (!storedHandle?.resolved_addresses?.ada) return undefined;
         return this.buildHolder(handleNames, storedHandle.resolved_addresses.ada, [...(defaultHandle ?? [])]?.[0])
     }
 

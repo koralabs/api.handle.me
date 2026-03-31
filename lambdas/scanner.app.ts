@@ -736,6 +736,12 @@ const checkRollback = async () => {
                 category: LogCategory.INFO,
                 event: 'scannerLambda.rollbackRetriable'
             });
+            // Clear the recovery flag so the next invocation continues scanning
+            // forward instead of rebuilding from a potentially stale snapshot.
+            // The rollback check will run again once the scanner is caught up.
+            if (getRecoveryFlag() === RECOVERY_REASON_ROLLBACK) {
+                clearRecoveryFlag();
+            }
             return;
         }
         throw error;
@@ -1037,7 +1043,18 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
         }
 
         await scan();
-        await checkRollback();
+
+        const postScanMetrics = handlesRepo.getMetrics();
+        const slotsBelow = Number(postScanMetrics.lastSlot ?? 0) - Number(postScanMetrics.currentSlot ?? 0);
+        if (slotsBelow > ROLLBACK_20_SLOT_WINDOW) {
+            Logger.log({
+                message: `Scanner is ${slotsBelow} slots behind tip, skipping rollback check until caught up`,
+                category: LogCategory.INFO,
+                event: 'scannerLambda.rollbackCheckDeferred'
+            });
+        } else {
+            await checkRollback();
+        }
 
         return {
             isBase64Encoded: false,
