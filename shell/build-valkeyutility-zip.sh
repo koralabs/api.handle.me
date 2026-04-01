@@ -23,6 +23,7 @@ cleanup() {
 trap cleanup EXIT
 
 IOREDIS_VERSION="$(cd "$REPO_ROOT" && node -e "const lock=require('./package-lock.json'); const pkg=require('./package.json'); const v=lock?.packages?.['node_modules/ioredis']?.version || (pkg.dependencies?.ioredis||'').replace(/^[^0-9]*/, ''); if(!v) throw new Error('Unable to resolve ioredis version'); process.stdout.write(v);")"
+MPF_VERSION="$(cd "$REPO_ROOT" && node -e "const lock=require('./package-lock.json'); const pkg=require('./package.json'); const v=lock?.packages?.['node_modules/@aiken-lang/merkle-patricia-forestry']?.version || (pkg.dependencies?.['@aiken-lang/merkle-patricia-forestry']||'').replace(/^[^0-9]*/, ''); if(!v) throw new Error('Unable to resolve merkle-patricia-forestry version'); process.stdout.write(v);")"
 
 mkdir -p "$WORKDIR/build" "$OUT_DIR"
 
@@ -33,7 +34,8 @@ cat > "$WORKDIR/package.json" <<JSON
   "private": true,
   "type": "commonjs",
   "dependencies": {
-    "ioredis": "${IOREDIS_VERSION}"
+    "ioredis": "${IOREDIS_VERSION}",
+    "@aiken-lang/merkle-patricia-forestry": "${MPF_VERSION}"
   }
 }
 JSON
