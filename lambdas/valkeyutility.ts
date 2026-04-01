@@ -86,7 +86,7 @@ const GHOST_HANDLES: Record<string, string[]> = {
 const EMPTY_MPT_ROOT_HASH = Buffer.alloc(32).toString('hex');
 
 type ValkeyCopyEvent = {
-    action?: 'copy_namespace' | 'rename_namespace' | 'delete_namespace' | 'set_checkpoint' | 'seed_mpt_root';
+    action?: 'copy_namespace' | 'rename_namespace' | 'delete_namespace' | 'set_checkpoint' | 'seed_mpt_root' | 'add_mint_data';
     sourceHost?: string;
     sourcePort?: number | string;
     sourcePassword?: string;
@@ -102,6 +102,9 @@ type ValkeyCopyEvent = {
     scanCount?: number | string;
     includeTargetKeys?: boolean | string;
     sourceMode?: 'legacy_only' | 'namespaced_only' | 'all';
+    handleName?: string;
+    createdSlot?: number | string;
+    txHash?: string;
     dryRun?: boolean | string;
     checkpointBlockHash?: string;
     checkpointSlot?: number | string;
@@ -517,6 +520,41 @@ const deleteNamespace = async (event: ValkeyCopyEvent) => {
     }
 };
 
+const addMintData = async (event: ValkeyCopyEvent) => {
+    const network = normalizeNetwork(event.network);
+    if (!network) throw new Error('network is required for action=add_mint_data');
+
+    const handleName = `${event.handleName || ''}`.trim();
+    if (!handleName) throw new Error('handleName is required for action=add_mint_data');
+    const createdSlot = toInt(event.createdSlot, 0);
+    if (!createdSlot) throw new Error('createdSlot is required for action=add_mint_data');
+    const txHash = `${event.txHash || ''}`.trim();
+    if (!txHash) throw new Error('txHash is required for action=add_mint_data');
+
+    const tag = getApiCacheTag(network);
+    const mintKey = `${tag}:mint:${handleName}`;
+
+    const target = createClient(getRedisConfig(event, 'target'));
+    await target.connect();
+
+    try {
+        const mintData = JSON.stringify({ created_slot: createdSlot, txHash });
+        await target.sadd(mintKey, mintData);
+
+        console.log(JSON.stringify({
+            action: 'add_mint_data',
+            network,
+            targetHost: target.options.host,
+            handleName,
+            createdSlot,
+            txHash,
+            mintKey
+        }, jsonReplacer));
+    } finally {
+        target.disconnect();
+    }
+};
+
 const seedMptRoot = async (event: ValkeyCopyEvent) => {
     const network = normalizeNetwork(event.network);
     if (!network) throw new Error('network is required for action=seed_mpt_root');
@@ -582,6 +620,10 @@ export const handler = async (event: ValkeyCopyEvent = {}) => {
         }
         if (event.action == 'seed_mpt_root') {
             await seedMptRoot(event);
+            return;
+        }
+        if (event.action == 'add_mint_data') {
+            await addMintData(event);
             return;
         }
         await inspectMetrics(event);
