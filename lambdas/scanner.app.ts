@@ -6,6 +6,7 @@ import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { RedisHandlesStore } from '../stores/redis';
 import { getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
 import { blockfrostApiCall, buildUTxOsFromKoiosTxs, defaultKoiosSettings, fetchKoios, fetchPaginatedResults } from '../utils/helpers';
+import { buildAndStoreMptRootHash, getChainMintingDataRootHash } from '../utils/snapshotVerification';
 
 const store = new RedisHandlesStore(); // I hate this
 const handlesRepo = new HandlesRepository(store);
@@ -759,6 +760,7 @@ const processReindex = async () => {
     try {
         // This function already chunks at a rate of about 20K every 10 seconds. 300K handles should take about 5 minutes
         store.repopulateIndexesFromUTxOs(getUTxOIndexHandlers());
+        await buildAndStoreMptRootHash(store);
         handlesRepo.setMetrics({ indexSchemaVersion: store.getIndexSchemaVersion() });
         clearRecoveryFlag();
     } finally {
@@ -773,6 +775,7 @@ const processRollbackRecovery = async () => {
         if (!restoredPoint) {
             throw new Error('Rollback recovery could not rebuild UTxO state from snapshot');
         }
+        await buildAndStoreMptRootHash(store);
         clearRecoveryFlag();
     } finally {
         handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
@@ -948,6 +951,8 @@ const scan = async () => {
                 });
             }
         }
+
+        await buildAndStoreMptRootHash(store);
     } catch (error: any) {
         if (isRetriableKoiosError(error)) {
             Logger.log({
@@ -1043,6 +1048,26 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
         }
 
         await scan();
+
+        if (handlesRepo.isCaughtUp()) {
+            const storedMptRoot = store.getMptRootHash();
+            try {
+                const chainMptRoot = await getChainMintingDataRootHash();
+                if (storedMptRoot && storedMptRoot !== chainMptRoot) {
+                    Logger.log({
+                        message: `MPT root mismatch at tip: computed=${storedMptRoot}, chain=${chainMptRoot}`,
+                        category: LogCategory.NOTIFY,
+                        event: 'scannerLambda.mptRootMismatchAtTip'
+                    });
+                }
+            } catch (error: any) {
+                Logger.log({
+                    message: `Unable to verify MPT root at tip: ${error?.message ?? error}`,
+                    category: LogCategory.WARN,
+                    event: 'scannerLambda.mptRootVerifyError'
+                });
+            }
+        }
 
         const postScanMetrics = handlesRepo.getMetrics();
         const slotsBelow = Number(postScanMetrics.lastSlot ?? 0) - Number(postScanMetrics.currentSlot ?? 0);

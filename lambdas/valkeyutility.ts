@@ -1,6 +1,7 @@
 // Ad hoc operational lambda.
 // This file is freeform by design; anything in here is expendable and may be replaced
 // or deleted when the operational need changes.
+import { Trie } from '@aiken-lang/merkle-patricia-forestry';
 import Redis from 'ioredis';
 
 const LEGACY_GLOBAL_KEYS = ['metrics', 'scanner:lease', 'scanner:recovery'];
@@ -77,8 +78,15 @@ end
 return result
 `;
 
+const GHOST_HANDLES: Record<string, string[]> = {
+    mainnet: ['watchman@ngmerchs'],
+    preview: ['dynamo2@ai']
+};
+
+const EMPTY_MPT_ROOT_HASH = Buffer.alloc(32).toString('hex');
+
 type ValkeyCopyEvent = {
-    action?: 'copy_namespace' | 'rename_namespace' | 'delete_namespace' | 'set_checkpoint';
+    action?: 'copy_namespace' | 'rename_namespace' | 'delete_namespace' | 'set_checkpoint' | 'seed_mpt_root';
     sourceHost?: string;
     sourcePort?: number | string;
     sourcePassword?: string;
@@ -509,6 +517,51 @@ const deleteNamespace = async (event: ValkeyCopyEvent) => {
     }
 };
 
+const seedMptRoot = async (event: ValkeyCopyEvent) => {
+    const network = normalizeNetwork(event.network);
+    if (!network) throw new Error('network is required for action=seed_mpt_root');
+
+    const tag = getApiCacheTag(network);
+    const handleIndexKey = `${tag}:handle`;
+    const mptRootHashKey = `${tag}:mpt_root_hash`;
+
+    const target = createClient(getRedisConfig(event, 'target'));
+    await target.connect();
+
+    try {
+        const handleNames: string[] = [];
+        let cursor = '0';
+        do {
+            const [nextCursor, batch] = await target.sscan(handleIndexKey, cursor, 'COUNT', '10000');
+            cursor = nextCursor;
+            handleNames.push(...batch);
+        } while (cursor !== '0');
+
+        const ghosts = GHOST_HANDLES[network] ?? [];
+        const allNames = [...new Set([...handleNames, ...ghosts].map((h) => `${h}`.trim()).filter(Boolean))].sort();
+
+        const trie = new Trie();
+        for (const name of allNames) {
+            await trie.insert(name, '');
+        }
+        const hash = trie.hash?.toString('hex') ?? EMPTY_MPT_ROOT_HASH;
+
+        await target.set(mptRootHashKey, hash);
+
+        console.log(JSON.stringify({
+            action: 'seed_mpt_root',
+            network,
+            targetHost: target.options.host,
+            handleCount: handleNames.length,
+            ghostCount: ghosts.length,
+            totalTrieEntries: allNames.length,
+            mptRootHash: hash
+        }, jsonReplacer));
+    } finally {
+        target.disconnect();
+    }
+};
+
 export const handler = async (event: ValkeyCopyEvent = {}) => {
     try {
         if (event.action == 'copy_namespace') {
@@ -525,6 +578,10 @@ export const handler = async (event: ValkeyCopyEvent = {}) => {
         }
         if (event.action == 'set_checkpoint') {
             await setCheckpoint(event);
+            return;
+        }
+        if (event.action == 'seed_mpt_root') {
+            await seedMptRoot(event);
             return;
         }
         await inspectMetrics(event);

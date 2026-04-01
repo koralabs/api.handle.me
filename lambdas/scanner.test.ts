@@ -115,7 +115,10 @@ const setup = ({ whitelistedApiKeys = 'allowed-key' }: { whitelistedApiKeys?: st
         removeValueFromIndexedSet: jest.fn(),
         getIndexSchemaVersion: jest.fn().mockReturnValue(1),
         getUTxOSchemaVersion: jest.fn().mockReturnValue(1),
-        repopulateIndexesFromUTxOs: jest.fn()
+        repopulateIndexesFromUTxOs: jest.fn(),
+        getKeysFromIndex: jest.fn().mockReturnValue([]),
+        getMptRootHash: jest.fn().mockReturnValue(undefined),
+        setMptRootHash: jest.fn()
     };
 
     const handlesRepo = {
@@ -140,7 +143,8 @@ const setup = ({ whitelistedApiKeys = 'allowed-key' }: { whitelistedApiKeys?: st
         removeUTxOs: jest.fn(),
         setMetrics: jest.fn(),
         updateHandleIndexes: jest.fn(),
-        updateHolder: jest.fn()
+        updateHolder: jest.fn(),
+        isCaughtUp: jest.fn().mockReturnValue(false)
     };
 
     MockedStoreClass.mockImplementation(() => store);

@@ -25,3 +25,5 @@ export const getApiMetricsKey = (network = NETWORK) => getApiCacheKey('metrics',
 export const getApiScannerLeaseKey = (network = NETWORK) => getApiCacheKey('scanner:lease', network);
 
 export const getApiScannerRecoveryKey = (network = NETWORK) => getApiCacheKey('scanner:recovery', network);
+
+export const getApiMptRootHashKey = (network = NETWORK) => getApiCacheKey('mpt_root_hash', network);

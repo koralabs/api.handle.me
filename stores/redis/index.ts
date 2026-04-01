@@ -7,7 +7,7 @@ import { DISABLE_HANDLES_SNAPSHOT, NODE_ENV } from '../../config';
 import { handleEraBoundaries, MAX_SETS_PER_PIPE, META_INDEXES, ORDERED_SLOTS } from '../../config/constants';
 import { getHandleNameFromAssetName } from '../../services/ogmios/utils';
 import { isChainVerifiedSnapshot, VerifiedHandleFileContent } from '../../utils/verifiedSnapshot';
-import { getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey, getApiNamespaceScanPattern } from './keys';
+import { getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey, getApiMptRootHashKey, getApiNamespaceScanPattern } from './keys';
 
 // const glideClient = await GlideClient.createClient({
 //       addresses: [{ host: 'https://localhost', port: 6379 }],
@@ -427,6 +427,14 @@ export class RedisHandlesStore implements IApiStore {
     public setMetrics(metrics: Partial<IApiMetrics>): void {
         const formattedMetrics = Object.fromEntries(Object.entries(metrics).map(([k, v]) => [k, String(v)]));
         this.redisClientCall('hset', getApiMetricsKey(), formattedMetrics);
+    }
+
+    public getMptRootHash(): string | undefined {
+        return this.redisClientCall('get', getApiMptRootHashKey()) || undefined;
+    }
+
+    public setMptRootHash(hash: string): void {
+        this.redisClientCall('set', getApiMptRootHashKey(), hash);
     }
 
     public count(): number {
