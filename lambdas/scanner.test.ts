@@ -963,6 +963,25 @@ describe('Scanner lambda unit tests', () => {
         expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
     });
 
+    it('sets rollback recovery flag on missing minting data instead of crash-looping', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 200, confirmations: 5 }] as never);
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'tx_a' }] as never;
+            if (path === 'tx_info') return [{ tx_hash: 'tx_a', block_hash: 'block_newer', inputs: [] }] as never;
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+        handlesRepo.addUTxOsWithMintDataAndUpdateIndexes.mockImplementation(() => {
+            throw new Error('No minting data found for hornpub while processing tx#0 | mintingContext={}');
+        });
+
+        await expect(scannerModule.Internal.scan()).resolves.toBe(false);
+        expect(store.redisClientCall('get', getApiScannerRecoveryKey())).toBe('rollback');
+        expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
+    });
+
     it('retries tx_info on UND_ERR_SOCKET terminated errors and logs troubleshooting curl context', async () => {
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });

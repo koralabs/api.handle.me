@@ -962,6 +962,15 @@ const scan = async () => {
             });
             return false;
         }
+        if (error?.message?.startsWith('No minting data found for')) {
+            Logger.log({
+                message: `Store integrity violation during scan, triggering rollback recovery: ${error.message}`,
+                category: LogCategory.NOTIFY,
+                event: 'scannerLambda.storeIntegrityViolation'
+            });
+            setRecoveryFlag(RECOVERY_REASON_ROLLBACK);
+            return false;
+        }
         Logger.log({ message: `Error in scanner lambda: ${error.message}`, category: LogCategory.ERROR, event: 'scannerLambda.error' });
         throw error;
     } finally {
