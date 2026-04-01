@@ -1033,6 +1033,40 @@ paths:
             application/yaml:
               schema:
                 type: string
+  "/mpt-root":
+    get:
+      tags:
+      - utils
+      summary: MPT root hash verification
+      description: |
+        Returns the API's computed Merkle Patricia Trie root hash alongside the
+        on-chain root hash from the `handle_root@handle_settings` datum.
+        When both hashes are available, `verified` indicates whether they match.
+      responses:
+        '200':
+          description: MPT root hash comparison
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mpt_root_hash:
+                    type: string
+                    nullable: true
+                    description: Computed MPT root hash from the API's handle index
+                    example: "2411906497cba6d7713d99f101182bf48caf8730cea02ae887eeb15fdc2ce51b"
+                  chain_mpt_root_hash:
+                    type: string
+                    nullable: true
+                    description: On-chain MPT root hash from the handle_root datum
+                    example: "2411906497cba6d7713d99f101182bf48caf8730cea02ae887eeb15fdc2ce51b"
+                  verified:
+                    type: boolean
+                    nullable: true
+                    description: Whether the computed and chain hashes match (null if either is unavailable)
+                  network:
+                    type: string
+                    example: "mainnet"
   "/health":
     get:
       tags:

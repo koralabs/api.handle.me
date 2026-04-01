@@ -69,7 +69,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
   - `POST /mcp`
   - `GET /mcp` transport-status response (`405` while SSE transport is disabled)
 - Operations:
-  - `GET /health`, `GET /stats`, `GET /deployment`, `GET /`, `GET /swagger`, `GET /swagger/swagger.yml`
+  - `GET /health`, `GET /stats`, `GET /deployment`, `GET /mpt-root`, `GET /`, `GET /swagger`, `GET /swagger/swagger.yml`
 
 ## Route Inventory
 
@@ -106,6 +106,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - `GET /holders` defaults to `sort=desc` by `total_handles` (highest holder counts first); `sort=asc` returns smallest holder counts first.
 
 ### Utility & Internal
+- `GET /mpt-root` compares the API's computed Merkle Patricia Trie root hash against the on-chain root from the `handle_root@handle_settings` datum; returns `verified: true` when they match
 - `POST /datum` CBOR/JSON encode/decode utility
 - `GET /policies` normalized handle policy settings derived from `handle_policies`
 - `GET /scripts` network script catalog (`latest`, `type` query support)
