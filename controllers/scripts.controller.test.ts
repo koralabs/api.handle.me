@@ -230,10 +230,11 @@ describe('Scripts Routes Test', () => {
             }));
         });
 
-        it('does not fall back to legacy pz handles when a canonical pers handle lacks inline script', async () => {
-            // Feature: `/scripts` should only return canonical `persN@handlecontract` script data now that the on-chain fix is live.
-            // Failure mode: legacy `pz_contract_*` script attachments could leak into `/scripts` and mask a missing canonical script.
-            // Negative control: if the legacy fallback remained, this request would return `pers2@handlecontract` instead of 404.
+        it('falls back to previous deployment when latest ordinal handle lacks inline script', async () => {
+            // Feature: when a newer deployment subhandle exists but has no script yet (minted but not deployed),
+            // the previous working deployment should serve as latest instead of returning 404.
+            // Failure mode: minting a new deployment subhandle before deploying the reference script
+            // would break all script lookups until the new script is deployed.
             mockFetch({ pers: 'pers-unoptimized' });
             const handles = {
                 'pers1@handlecontract': buildHandle('pers1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0201'),
@@ -251,8 +252,13 @@ describe('Scripts Routes Test', () => {
                 () => {}
             );
 
-            expect(response.status).toHaveBeenCalledWith(404);
-            expect(response.send).toHaveBeenCalledWith({ message: 'Latest script not found' });
+            expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+                handle: 'pers1@handlecontract',
+                type: 'pers',
+                latest: true,
+                cbor: '4e4d0201',
+                unoptimizedCbor: 'pers-unoptimized'
+            }));
         });
 
         it('still accepts deprecated legacy type aliases during the migration', async () => {

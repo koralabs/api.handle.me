@@ -295,7 +295,10 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
     const assignedScriptHandlesCache = new Map<ScriptType, Promise<string[] | undefined>>();
 
     for (const [scriptType, matches] of matchesByType.entries()) {
-        const latestOrdinal = Math.max(...matches.map(({ ordinal }) => ordinal));
+        const matchesWithScript = matches.filter(({ handle }) => !!handle.script?.cbor);
+        const latestOrdinal = matchesWithScript.length > 0
+            ? Math.max(...matchesWithScript.map(({ ordinal }) => ordinal))
+            : Math.max(...matches.map(({ ordinal }) => ordinal));
         const unoptimizedCbor = await fetchUnoptimizedCbor(scriptType, unoptimizedCborCache);
         const assignedScriptHandles = await fetchAssignedScriptHandles(scriptType, assignedScriptHandlesCache);
         const activeAssignedHandleName = assignedScriptHandles
