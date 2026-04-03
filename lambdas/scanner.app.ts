@@ -21,7 +21,7 @@ const KOIOS_TX_INFO_SOFT_BODY_LIMIT = 3_000;
 const KOIOS_BLOCK_TXS_SOFT_BODY_LIMIT = 3_000;
 // CloudWatch failures on 2026-02-16 showed tx_info batches failing at 66-71 hashes.
 const KOIOS_TX_INFO_MAX_HASHES_PER_BATCH = 35;
-const scannerKoiosTxInfoSettings = { ...defaultKoiosSettings, _scripts: true, _bytecode: false };
+const scannerKoiosTxInfoSettings = { ...defaultKoiosSettings, _scripts: true, _bytecode: true };
 const KOIOS_TX_INFO_MAX_RPS = 6;
 const KOIOS_TX_INFO_MIN_INTERVAL_MS = Math.ceil(1000 / KOIOS_TX_INFO_MAX_RPS);
 const KOIOS_TX_INFO_MAX_RETRIES = KOIOS_RETRY_DELAYS_MS.length;
