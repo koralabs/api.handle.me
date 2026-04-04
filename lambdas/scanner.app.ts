@@ -621,87 +621,82 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
         // This should be a notify since we are very rarely expecting in this range
         // and may need to adjust the number 20 above accordingly
         if (!suppressNotify && distanceFromTip! > 20) Logger.log({ category: LogCategory.NOTIFY, message: `Rollback at ${distanceFromTip} blocks detected! Block: ${firstMissingHeight}`, event: 'RollbackLambda' });
-        // If there are any missing delete/replay
-        setRecoveryFlag(RECOVERY_REASON_ROLLBACK);
-        let rollbackComplete = false;
-        try {
-            // build the minting data for all handles in this range
-            const handlesMintingData = store.pipeline(() => {
-                handles.forEach((handleName) => handlesRepo.getHandleMintingData(handleName));
-            }) as Set<string>[];
+        // Replay the affected range inline. Only escalate to a full reimport
+        // if the repair fails with a non-retriable error — a transient Koios
+        // timeout should retry the rollback next invocation, not trigger a
+        // 265K-handle S3 reimport that can OOM/timeout at normal memory.
+        // build the minting data for all handles in this range
+        const handlesMintingData = store.pipeline(() => {
+            handles.forEach((handleName) => handlesRepo.getHandleMintingData(handleName));
+        }) as Set<string>[];
 
-            // gets Handles and remove mints that happened in this range
-            store.pipeline(() => {
-                handles.forEach((handleName, index) => {
-                    const mintingDataSet = handlesMintingData[index];
-                    if (mintingDataSet) {
-                        mintingDataSet.forEach((md) => {
-                            const mintingData = JSON.parse(md) as MintingData;
-                            if (mintingData.created_slot >= rollbackStartSlot) {
-                                store.removeValueFromIndexedSet(IndexNames.MINT, handleName, md);
-                            }
-                        });
-                    }
-                });
-            });
-
-            const stakeAddresses = storedHandles.map((h) => buildHolderInfo(h.resolved_addresses.ada).address);
-
-            // get a full list of holders so we can pass it into the updateHolder function later
-            const holderHandles = store.pipeline(() => {
-                stakeAddresses.forEach((address) => store.getValuesFromIndexedSet(IndexNames.HOLDER, address));
-            }) as Set<string>[]; // array of sets of handle names for each holder address
-
-            const holdersMap = new Map<string, Set<string>>();
-            stakeAddresses.forEach((address, index) => {
-                holdersMap.set(address, holderHandles[index]);
-            });
-
-            // update handle holders
-            store.pipeline(() => {
-                storedHandles.forEach((handle) => {
-                    handlesRepo.updateHolder(handle, holdersMap);
-                });
-            });
-
-            // delete all UTxOs after that slot and replay them all
-            const utxoIdsToRemove = apiRollbackUtxos.map((utxo) => utxo.id);
-            if (utxoIdsToRemove.length) {
-                handlesRepo.removeUTxOs(utxoIdsToRemove);
-            }
-
-            // repopulate utxo store and minting data from Bf/Ko
-            handlesRepo.addUTxOsWithMintData(providerRollbackUTxOs);
-
-            const storedHandlesMap = new Map<string, StoredHandle>(storedHandles.map((h) => [h.name, h]));
-
-            handlesRepo.addMintDataFromUTxOs(relevantLatestUTxOsForAffectedHandles);
-
-            const retrievedMintingData = store.pipeline(() => {
-                handles.forEach((handleName) => {
-                    handlesRepo.getHandleMintingData(handleName);
-                });
-            }) as Set<string>[];
-
-            const mintValueIndex: Map<string, MintingData[]> = new Map();
-            retrievedMintingData.forEach((md, i) => {
-                const handleName = handles[i];
-                mintValueIndex.set(
-                    handleName,
-                    Array.from(md).map((md) => JSON.parse(md))
-                );
-            });
-
-            store.pipeline(() => {
-                for (const utxo of relevantLatestUTxOsForAffectedHandles) {
-                    handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap);
+        // gets Handles and remove mints that happened in this range
+        store.pipeline(() => {
+            handles.forEach((handleName, index) => {
+                const mintingDataSet = handlesMintingData[index];
+                if (mintingDataSet) {
+                    mintingDataSet.forEach((md) => {
+                        const mintingData = JSON.parse(md) as MintingData;
+                        if (mintingData.created_slot >= rollbackStartSlot) {
+                            store.removeValueFromIndexedSet(IndexNames.MINT, handleName, md);
+                        }
+                    });
                 }
             });
+        });
 
-            rollbackComplete = true;
-        } finally {
-            if (rollbackComplete) clearRecoveryFlag();
+        const stakeAddresses = storedHandles.map((h) => buildHolderInfo(h.resolved_addresses.ada).address);
+
+        // get a full list of holders so we can pass it into the updateHolder function later
+        const holderHandles = store.pipeline(() => {
+            stakeAddresses.forEach((address) => store.getValuesFromIndexedSet(IndexNames.HOLDER, address));
+        }) as Set<string>[]; // array of sets of handle names for each holder address
+
+        const holdersMap = new Map<string, Set<string>>();
+        stakeAddresses.forEach((address, index) => {
+            holdersMap.set(address, holderHandles[index]);
+        });
+
+        // update handle holders
+        store.pipeline(() => {
+            storedHandles.forEach((handle) => {
+                handlesRepo.updateHolder(handle, holdersMap);
+            });
+        });
+
+        // delete all UTxOs after that slot and replay them all
+        const utxoIdsToRemove = apiRollbackUtxos.map((utxo) => utxo.id);
+        if (utxoIdsToRemove.length) {
+            handlesRepo.removeUTxOs(utxoIdsToRemove);
         }
+
+        // repopulate utxo store and minting data from Bf/Ko
+        handlesRepo.addUTxOsWithMintData(providerRollbackUTxOs);
+
+        const storedHandlesMap = new Map<string, StoredHandle>(storedHandles.map((h) => [h.name, h]));
+
+        handlesRepo.addMintDataFromUTxOs(relevantLatestUTxOsForAffectedHandles);
+
+        const retrievedMintingData = store.pipeline(() => {
+            handles.forEach((handleName) => {
+                handlesRepo.getHandleMintingData(handleName);
+            });
+        }) as Set<string>[];
+
+        const mintValueIndex: Map<string, MintingData[]> = new Map();
+        retrievedMintingData.forEach((md, i) => {
+            const handleName = handles[i];
+            mintValueIndex.set(
+                handleName,
+                Array.from(md).map((md) => JSON.parse(md))
+            );
+        });
+
+        store.pipeline(() => {
+            for (const utxo of relevantLatestUTxOsForAffectedHandles) {
+                handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap);
+            }
+        });
     }
 
     const recoveredHead = providerBlocks[providerBlocks.length - 1];
@@ -737,12 +732,6 @@ const checkRollback = async () => {
                 category: LogCategory.INFO,
                 event: 'scannerLambda.rollbackRetriable'
             });
-            // Clear the recovery flag so the next invocation continues scanning
-            // forward instead of rebuilding from a potentially stale snapshot.
-            // The rollback check will run again once the scanner is caught up.
-            if (getRecoveryFlag() === RECOVERY_REASON_ROLLBACK) {
-                clearRecoveryFlag();
-            }
             return;
         }
         throw error;
@@ -768,19 +757,9 @@ const processReindex = async () => {
     }
 };
 
-const processRollbackRecovery = async () => {
-    handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.REINDEX, lockLambdasTimestamp: Date.now() });
-    try {
-        const restoredPoint = await handlesRepo.getStartingPoint(getUTxOIndexHandlers(), true);
-        if (!restoredPoint) {
-            throw new Error('Rollback recovery could not rebuild UTxO state from snapshot');
-        }
-        await buildAndStoreMptRootHash(store);
-        clearRecoveryFlag();
-    } finally {
-        handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
-    }
-};
+// processRollbackRecovery removed — rollbacks are handled inline in processRollback().
+// A failed inline repair retries on the next invocation via the normal scan path.
+// Full S3 reimports are only for schema version changes or manual resets, never for rollbacks.
 
 const ensureUTxOsReady = async () => {
     const { currentBlockHash, currentSlot, utxoSchemaVersion = 0 } = handlesRepo.getMetrics();
@@ -804,7 +783,6 @@ const clearStaleLockIfNeeded = (metrics: ReturnType<HandlesRepository['getMetric
 
     if ([LockedLambdaReason.ROLLBACK_20, LockedLambdaReason.ROLLBACK_2160].includes(metrics.lockLambdas)) {
         Logger.log({ message: `Scanner lambda has been locked for rollback for over 5 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.rollbackLockedTooLong' });
-        setRecoveryFlag(RECOVERY_REASON_ROLLBACK);
     }
 
     if (metrics.lockLambdas === LockedLambdaReason.REINDEX) {
@@ -964,11 +942,10 @@ const scan = async () => {
         }
         if (error?.message?.startsWith('No minting data found for')) {
             Logger.log({
-                message: `Store integrity violation during scan, triggering rollback recovery: ${error.message}`,
+                message: `Store integrity violation during scan: ${error.message}`,
                 category: LogCategory.NOTIFY,
                 event: 'scannerLambda.storeIntegrityViolation'
             });
-            setRecoveryFlag(RECOVERY_REASON_ROLLBACK);
             return false;
         }
         Logger.log({ message: `Error in scanner lambda: ${error.message}`, category: LogCategory.ERROR, event: 'scannerLambda.error' });
@@ -1034,19 +1011,24 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
 
         const recoveryFlag = getRecoveryFlag();
         if (recoveryFlag) {
-            Logger.log({
-                message: recoveryFlag === RECOVERY_REASON_ROLLBACK
-                    ? `Recovery flag '${recoveryFlag}' detected. Rebuilding UTxO state from snapshot before scan.`
-                    : `Recovery flag '${recoveryFlag}' detected. Running index repair before scan.`,
-                category: LogCategory.NOTIFY,
-                event: 'scannerLambda.recoveryFlag'
-            });
             if (recoveryFlag === RECOVERY_REASON_ROLLBACK) {
-                await processRollbackRecovery();
+                // Stale rollback flag from a previous failed inline repair.
+                // Clear it and let the normal scan path handle rollback detection.
+                Logger.log({
+                    message: `Clearing stale recovery flag '${recoveryFlag}'. Rollback will be retried via normal scan path.`,
+                    category: LogCategory.INFO,
+                    event: 'scannerLambda.clearStaleRollbackFlag'
+                });
+                clearRecoveryFlag();
+            } else {
+                Logger.log({
+                    message: `Recovery flag '${recoveryFlag}' detected. Running index repair before scan.`,
+                    category: LogCategory.NOTIFY,
+                    event: 'scannerLambda.recoveryFlag'
+                });
+                await processReindex();
                 return;
             }
-            await processReindex();
-            return;
         }
 
         // ******** REINDEXING CHECK ********* //
