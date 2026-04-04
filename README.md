@@ -103,8 +103,8 @@ docker run -p 3141:3141 -v <path_to_node.socket_folder>:/ipc -v handles:/app/han
 - API Lambda entrypoint: `lambdas/api.ts`
 - Scanner Lambda entrypoint: `lambdas/scanner.ts`
 - Snapshot Lambda entrypoint: `lambdas/snapshot.ts`
-- Operational Valkey utility source: `lambdas/valkeyutility.ts`
 - The standard Lambda Rollup build bundles `api.ts`, `scanner.ts`, and `snapshot.ts`.
+- The `valkey-utility` Lambda is ad hoc — see `docs/spec/scanner-recovery-runbook.md`.
 - Scanner Lambda function URLs support a whitelisted reindex shortcut through `/reindex` or `/scanner/reindex`.
 
 &nbsp;

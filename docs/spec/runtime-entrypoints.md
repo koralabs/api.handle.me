@@ -69,10 +69,9 @@ This document maps the code entrypoints, what they start, and which environment 
 - `lambdas/snapshot.ts` delegates to `lambdas/snapshot.app.ts`.
 - Snapshot generation forces `ENABLE_OGMIOS_SCANNING=false`, waits for active lambda locks to clear, reads indexed UTxOs + mint data from Valkey, builds chain-verification metadata, and uploads the compressed snapshot to S3.
 
-### Valkey Utility Lambda Source
-- `lambdas/valkeyutility.ts` is an operational helper for copying, renaming, deleting API cache namespaces, and rewinding the scanner checkpoint for controlled chain replay across Valkey targets.
-- It is intentionally ad hoc and freeform; code in this lambda is expendable and should not be treated as durable product logic.
-- It is repo-documented because operators use it, but the standard Rollup Lambda bundle in `rollup.lambda.config.js` currently bundles `api.ts`, `scanner.ts`, and `snapshot.ts` only.
+### Valkey Utility Lambda
+- The `valkey-utility` Lambda is ad hoc operational tooling deployed directly via `aws lambda update-function-code`. Its source is NOT part of this repo.
+- See `docs/spec/scanner-recovery-runbook.md` for usage instructions.
 
 ## Packaging Notes
 - `rollup.lambda.config.js` builds the Lambda bundle into `dist/`.
