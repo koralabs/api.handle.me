@@ -6,7 +6,7 @@
 
 This API uses Ogmios to scan Cardano chain data for Handle-related transactions and stores the indexed state in Valkey for fast reads. Snapshot artifacts are generated from that index and can be loaded at startup to reduce catch-up time.
 
-Snapshot uploads are now chain-verified before they are written to S3, and startup will ignore any snapshot that does not carry that verification metadata.
+Snapshot uploads are chain-verified before they are written to S3, startup ignores snapshots that do not carry that verification metadata, and the snapshot lambda keeps the latest fixed snapshot plus up to 5 days of archived snapshots in S3.
 
 &nbsp;
 

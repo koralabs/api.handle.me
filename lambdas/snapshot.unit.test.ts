@@ -4,7 +4,9 @@ import { getApiIndexKey, getApiIndexScanPattern } from '../stores/redis/keys';
 const mockAwsSdk = () => {
     jest.doMock('@aws-sdk/client-s3', () => ({
         S3Client: jest.fn(() => ({ send: jest.fn().mockResolvedValue('ok') })),
-        PutObjectCommand: jest.fn((params) => params)
+        PutObjectCommand: jest.fn((params) => params),
+        ListObjectsV2Command: jest.fn((params) => params),
+        DeleteObjectsCommand: jest.fn((params) => params)
     }));
 };
 

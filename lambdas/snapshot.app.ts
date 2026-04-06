@@ -1,4 +1,4 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectsCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { awaitForEach, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import fs from 'fs';
 import stdOut from 'node:readline';
@@ -28,10 +28,18 @@ const LOCK_REASON_SNAPSHOT = 'SNAPSHOT' as LockedLambdaReason;
 const LOCKED_LAMBDA_RETRY_DELAY_MS = 15_000;
 const LOCKED_LAMBDA_MAX_RETRIES = 4;
 const SNAPSHOT_STALE_NOTIFY_WINDOW_MS = 48 * 60 * 60 * 1000;
+const SNAPSHOT_RETENTION_DAYS = 5;
+const SNAPSHOT_RETENTION_MS = SNAPSHOT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 const SNAPSHOT_SCAN_COUNT = 10_000;
+const SNAPSHOT_BUCKET = 'api.handle.me';
 
 const delayMs = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const getSnapshotUrl = (network: string, utxoSchemaVersion: number) => `http://api.handle.me.s3-website-us-west-2.amazonaws.com/${network}/utxo-snapshot/${utxoSchemaVersion}/handles_utxos.gz`;
+const getArchivedSnapshotPrefix = (network: string, utxoSchemaVersion: number) => `${network}/utxo-snapshot/${utxoSchemaVersion}/archive/`;
+const getArchivedSnapshotKey = (network: string, utxoSchemaVersion: number, now: Date) => {
+    const timestamp = now.toISOString().replace(/[:.]/g, '-');
+    return `${getArchivedSnapshotPrefix(network, utxoSchemaVersion)}handles_utxos-${timestamp}.gz`;
+};
 
 const waitForUnlockedLambdas = async (handlesRepo: HandlesRepository) => {
     let metrics = handlesRepo.getMetrics();
@@ -60,6 +68,33 @@ const maybeNotifyStalePublishedSnapshot = async (network: string, utxoSchemaVers
             event: 'snapshot.handler.snapshotStaleAfterFailure'
         });
     } catch {}
+};
+
+const pruneExpiredArchivedSnapshots = async (s3Client: S3Client, network: string, utxoSchemaVersion: number, now = Date.now()) => {
+    const cutoff = now - SNAPSHOT_RETENTION_MS;
+    const prefix = getArchivedSnapshotPrefix(network, utxoSchemaVersion);
+    let continuationToken: string | undefined;
+
+    do {
+        const response = await s3Client.send(new ListObjectsV2Command({
+            Bucket: SNAPSHOT_BUCKET,
+            Prefix: prefix,
+            ContinuationToken: continuationToken
+        }));
+
+        const expiredKeys = (response.Contents ?? [])
+            .filter((object) => object.Key && object.LastModified && object.LastModified.getTime() < cutoff)
+            .map((object) => ({ Key: object.Key as string }));
+
+        if (expiredKeys.length > 0) {
+            await s3Client.send(new DeleteObjectsCommand({
+                Bucket: SNAPSHOT_BUCKET,
+                Delete: { Objects: expiredKeys }
+            }));
+        }
+
+        continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
+    } while (continuationToken);
 };
 
 const getRedisItems = async () => {
@@ -208,10 +243,16 @@ export const handler = async (event: any) => {
 
             const { utxoSchemaVersion = 1 } = verifiedFileJson;
             const fileName = `${network}/utxo-snapshot/${utxoSchemaVersion}/handles_utxos.gz`;
+            const s3Client = new S3Client({ region: 'us-west-2' });
+            const now = new Date(Date.now());
 
             const zippedSnapshots = [
                 {
                     Key: fileName,
+                    Body: zlib.deflateSync(JSON.stringify(verifiedFileJson))
+                },
+                {
+                    Key: getArchivedSnapshotKey(network, utxoSchemaVersion, now),
                     Body: zlib.deflateSync(JSON.stringify(verifiedFileJson))
                 }
             ];
@@ -219,13 +260,15 @@ export const handler = async (event: any) => {
             const s3Result = await Promise.all(
                 zippedSnapshots.map(({ Key, Body }) => {
                     const params = {
-                        Bucket: 'api.handle.me',
+                        Bucket: SNAPSHOT_BUCKET,
                         Key,
                         Body
                     };
-                    return new S3Client({ region: 'us-west-2' }).send(new PutObjectCommand(params));
+                    return s3Client.send(new PutObjectCommand(params));
                 })
             );
+
+            await pruneExpiredArchivedSnapshots(s3Client, network, utxoSchemaVersion, now.getTime());
 
             Logger.local(`s3Result ${JSON.stringify(s3Result)}`);
 

@@ -1,7 +1,7 @@
 import { IndexNames, LockedLambdaReason, LogCategory, Logger, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { RedisHandlesStore } from '../stores/redis';
-import { buildHandleSetMptRootHash } from '../utils/snapshotVerification';
+import { buildHandleSetMptRootHash, GHOST_HANDLES } from '../utils/snapshotVerification';
 import { inflateSync } from 'zlib';
 
 const lambda = require('./snapshot');
@@ -16,7 +16,9 @@ jest.mock('@aws-sdk/client-s3', () => {
     };
     return {
         S3Client: jest.fn(() => mockedS3Instance),
-        PutObjectCommand: jest.fn((params) => params)
+        PutObjectCommand: jest.fn((params) => params),
+        ListObjectsV2Command: jest.fn((params) => params),
+        DeleteObjectsCommand: jest.fn((params) => params)
     };
 });
 
@@ -57,6 +59,7 @@ describe('Snapshot lambda e2e', () => {
     const store = new RedisHandlesStore();
     const repo = new HandlesRepository(store);
     let mockedS3Instance: any;
+    let dateNowSpy: jest.SpiedFunction<typeof Date.now>;
 
     beforeAll(async () => {
         await repo.initialize();
@@ -69,9 +72,11 @@ describe('Snapshot lambda e2e', () => {
     });
 
     beforeEach(async () => {
+        dateNowSpy = jest.spyOn(Date, 'now').mockReturnValue(new Date('2026-04-06T12:00:00.000Z').getTime());
         repo.rollBackToGenesis();
         repo.addUTxOsWithMintDataAndUpdateIndexes([buildMintedUTxO()]);
-        const rootHash = await buildHandleSetMptRootHash(['papagoose', mintingDataHandleName]);
+        const ghosts = GHOST_HANDLES[`${process.env.NETWORK ?? 'preview'}`.toLowerCase()] ?? [];
+        const rootHash = await buildHandleSetMptRootHash(['papagoose', mintingDataHandleName], ghosts);
         store.setHashOnIndex(IndexNames.HANDLE, mintingDataHandleName, {
             name: mintingDataHandleName,
             datum: `d8799f5820${rootHash}ff`,
@@ -87,23 +92,38 @@ describe('Snapshot lambda e2e', () => {
     });
 
     afterEach(() => {
+        dateNowSpy.mockRestore();
         global.fetch = originalFetch;
     });
 
     it('creates and uploads a snapshot for the configured network only', async () => {
         const sendSpy = jest.spyOn(mockedS3Instance, 'send');
         const network = `${process.env.NETWORK ?? 'mainnet'}`.toLowerCase();
-        const rootHash = await buildHandleSetMptRootHash(['papagoose', mintingDataHandleName]);
+        const ghosts = GHOST_HANDLES[network] ?? [];
+        const rootHash = await buildHandleSetMptRootHash(['papagoose', mintingDataHandleName], ghosts);
 
         const result = await lambda.handler({});
 
         expect(result).toEqual({ body: '', statusCode: 200 });
-        expect(sendSpy).toHaveBeenCalledTimes(1);
+        expect(sendSpy).toHaveBeenCalledTimes(3);
         expect(sendSpy).toHaveBeenCalledWith(
             expect.objectContaining({
                 Bucket: 'api.handle.me',
                 Key: `${network}/utxo-snapshot/7/handles_utxos.gz`,
                 Body: expect.any(Object)
+            })
+        );
+        expect(sendSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                Bucket: 'api.handle.me',
+                Key: `${network}/utxo-snapshot/7/archive/handles_utxos-2026-04-06T12-00-00-000Z.gz`,
+                Body: expect.any(Object)
+            })
+        );
+        expect(sendSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                Bucket: 'api.handle.me',
+                Prefix: `${network}/utxo-snapshot/7/archive/`
             })
         );
         const uploadedBody = (sendSpy.mock.calls[0]?.[0] as { Body: Buffer }).Body;
@@ -138,7 +158,7 @@ describe('Snapshot lambda e2e', () => {
             category: LogCategory.WARN,
             event: 'snapshotVerification.mptRootMismatch'
         }));
-        expect(sendSpy).toHaveBeenCalledTimes(1);
+        expect(sendSpy).toHaveBeenCalledTimes(3);
         const uploadedBody = (sendSpy.mock.calls[0]?.[0] as { Body: Buffer }).Body;
         const uploadedSnapshot = JSON.parse(inflateSync(uploadedBody).toString('utf8'));
         expect(uploadedSnapshot.verification.verifiedAgainstChain).toBe(false);
@@ -177,7 +197,7 @@ describe('Snapshot lambda e2e', () => {
             const result = await pending;
 
             expect(result).toEqual({ body: '', statusCode: 200 });
-            expect(sendSpy).toHaveBeenCalledTimes(1);
+            expect(sendSpy).toHaveBeenCalledTimes(3);
         } finally {
             jest.useRealTimers();
         }
@@ -190,6 +210,41 @@ describe('Snapshot lambda e2e', () => {
         const result = await lambda.handler({});
 
         expect(result).toEqual({ body: '', statusCode: 200 });
-        expect(sendSpy).toHaveBeenCalledTimes(1);
+        expect(sendSpy).toHaveBeenCalledTimes(3);
+    });
+
+    it('deletes archived snapshots older than 5 days', async () => {
+        const sendSpy = jest.spyOn(mockedS3Instance, 'send');
+        const network = `${process.env.NETWORK ?? 'mainnet'}`.toLowerCase();
+
+        sendSpy
+            .mockResolvedValueOnce('latest-upload')
+            .mockResolvedValueOnce('archive-upload')
+            .mockResolvedValueOnce({
+                Contents: [
+                    {
+                        Key: `${network}/utxo-snapshot/7/archive/handles_utxos-2026-03-31T11-59-59-000Z.gz`,
+                        LastModified: new Date('2026-03-31T11:59:59.000Z')
+                    },
+                    {
+                        Key: `${network}/utxo-snapshot/7/archive/handles_utxos-2026-04-01T12-00-00-000Z.gz`,
+                        LastModified: new Date('2026-04-01T12:00:00.000Z')
+                    }
+                ],
+                IsTruncated: false
+            })
+            .mockResolvedValueOnce('deleted');
+
+        const result = await lambda.handler({});
+
+        expect(result).toEqual({ body: '', statusCode: 200 });
+        expect(sendSpy).toHaveBeenNthCalledWith(4, {
+            Bucket: 'api.handle.me',
+            Delete: {
+                Objects: [
+                    { Key: `${network}/utxo-snapshot/7/archive/handles_utxos-2026-03-31T11-59-59-000Z.gz` }
+                ]
+            }
+        });
     });
 });
