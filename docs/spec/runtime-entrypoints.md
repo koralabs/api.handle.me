@@ -67,7 +67,7 @@ This document maps the code entrypoints, what they start, and which environment 
 
 ### Snapshot Lambda
 - `lambdas/snapshot.ts` delegates to `lambdas/snapshot.app.ts`.
-- Snapshot generation forces `ENABLE_OGMIOS_SCANNING=false`, waits for active lambda locks to clear, reads indexed UTxOs + mint data from Valkey, builds chain-verification metadata, and uploads the compressed snapshot to S3.
+- Snapshot generation forces `ENABLE_OGMIOS_SCANNING=false`, waits for active lambda locks to clear, reads indexed UTxOs + mint data from Valkey, builds chain-verification metadata, uploads the compressed snapshot to the fixed startup key in S3, archives a timestamped copy, and deletes archived snapshots older than 5 days.
 
 ### Valkey Utility Lambda
 - The `valkey-utility` Lambda is ad hoc operational tooling deployed directly via `aws lambda update-function-code`. Its source is NOT part of this repo.
