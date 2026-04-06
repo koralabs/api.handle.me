@@ -49,6 +49,7 @@ const staleLockTimeouts: Partial<Record<LockedLambdaReason, number>> = {
     [LockedLambdaReason.ROLLBACK_20]: 5 * 60 * 1000,
     [LockedLambdaReason.ROLLBACK_2160]: 10 * 60 * 1000,
     [LockedLambdaReason.REINDEX]: 10 * 60 * 1000,
+    [LockedLambdaReason.UTXO_IMPORT]: 10 * 60 * 1000,
     [LOCK_REASON_SNAPSHOT]: 10 * 60 * 1000
 };
 
@@ -766,12 +767,17 @@ const ensureUTxOsReady = async () => {
     const currentUTxOSchemaVersion = Number(store.getUTxOSchemaVersion());
     if (currentUTxOSchemaVersion <= Number(utxoSchemaVersion) && currentBlockHash && currentSlot) return;
 
+    handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UTXO_IMPORT, lockLambdasTimestamp: Date.now() });
     Logger.log({
         message: `UTxOs are repopulating. currentBlockHash=${currentBlockHash ?? ''} currentSlot=${currentSlot ?? ''} storedUTxOSchemaVersion=${utxoSchemaVersion} targetUTxOSchemaVersion=${currentUTxOSchemaVersion}`,
         category: LogCategory.WARN,
         event: 'scannerLambda.repopulateUTxOs'
     });
-    await handlesRepo.getStartingPoint(getUTxOIndexHandlers());
+    try {
+        await handlesRepo.getStartingPoint(getUTxOIndexHandlers());
+    } finally {
+        handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
+    }
 }
 
 const clearStaleLockIfNeeded = (metrics: ReturnType<HandlesRepository['getMetrics']>) => {
