@@ -5,7 +5,7 @@ import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { RedisHandlesStore } from '../stores/redis';
 import { getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
-import { blockfrostApiCall, buildUTxOsFromKoiosTxs, defaultKoiosSettings, fetchKoios, fetchPaginatedResults } from '../utils/helpers';
+import { blockfrostApiCall, buildUTxOsFromKoiosTxs, defaultKoiosSettings, fetchBlockfrostDatumCbor, fetchBlockfrostTxHashes, fetchBlockfrostTxInfo, fetchKoios, fetchPaginatedResults } from '../utils/helpers';
 import { buildAndStoreMptRootHash, getChainMintingDataRootHash } from '../utils/snapshotVerification';
 
 const store = new RedisHandlesStore(); // I hate this
@@ -446,6 +446,64 @@ const getBatchedTxHashes = async (blockHashes: string[]) => {
     return txHashes;
 };
 
+// ========== Blockfrost per-iteration fallback wrappers ==========
+
+const getBatchedTxHashesWithFallback = async (blockHashes: string[]): Promise<string[]> => {
+    try {
+        return await getBatchedTxHashes(blockHashes);
+    } catch (error: any) {
+        Logger.log({
+            message: `Koios block_txs failed, falling back to Blockfrost: ${error?.message ?? error}`,
+            category: LogCategory.WARN,
+            event: 'scannerLambda.koiosBlockTxs.fallbackToBlockfrost'
+        });
+        return fetchBlockfrostTxHashes(blockHashes);
+    }
+};
+
+const getBatchedTxInfoWithFallback = async (txHashes: string[]): Promise<KoiosTxInfo[]> => {
+    try {
+        return await getBatchedTxInfo(txHashes);
+    } catch (error: any) {
+        Logger.log({
+            message: `Koios tx_info failed for ${txHashes.length} txs, falling back to Blockfrost: ${error?.message ?? error}`,
+            category: LogCategory.WARN,
+            event: 'scannerLambda.koiosTxInfo.fallbackToBlockfrost'
+        });
+        const results: KoiosTxInfo[] = [];
+        for (const txHash of txHashes) {
+            results.push(await fetchBlockfrostTxInfo(txHash));
+        }
+        return results;
+    }
+};
+
+const getBatchedDatumInfoWithFallback = async (txInfo: KoiosTxInfo[]): Promise<Map<string, string>> => {
+    try {
+        return await getBatchedDatumInfo(txInfo);
+    } catch (error: any) {
+        Logger.log({
+            message: `Koios datum_info failed, falling back to Blockfrost: ${error?.message ?? error}`,
+            category: LogCategory.WARN,
+            event: 'scannerLambda.koiosDatumInfo.fallbackToBlockfrost'
+        });
+        const datumHashes = [...new Set(
+            txInfo.flatMap((tx) =>
+                (tx.outputs ?? []).flatMap((output) => {
+                    if (output.inline_datum?.bytes || !output.datum_hash) return [];
+                    return [output.datum_hash];
+                })
+            )
+        )];
+        const datumInfoByHash = new Map<string, string>();
+        for (const datumHash of datumHashes) {
+            const cbor = await fetchBlockfrostDatumCbor(datumHash);
+            if (cbor) datumInfoByHash.set(datumHash, cbor);
+        }
+        return datumInfoByHash;
+    }
+};
+
 const filterUTxOToHandleNames = (utxo: UTxOWithTxInfo, handleNames: Set<string>): UTxOWithTxInfo | undefined => {
     const filterAssets = (assets?: [string, string[]][]) =>
         assets?.map(([policy, names]) => {
@@ -883,9 +941,9 @@ const scan = async () => {
                 break;
             }
             const blockChunk = bResp.slice(blockIndex, blockIndex + SCANNER_BLOCK_PREFETCH_CHUNK_SIZE);
-            const txHashes = [...new Set(await getBatchedTxHashes(blockChunk.map((block) => block.hash)))];
-            const txList = await getBatchedTxInfo(txHashes);
-            const datumInfoByHash = await getBatchedDatumInfo(txList);
+            const txHashes = [...new Set(await getBatchedTxHashesWithFallback(blockChunk.map((block) => block.hash)))];
+            const txList = await getBatchedTxInfoWithFallback(txHashes);
+            const datumInfoByHash = await getBatchedDatumInfoWithFallback(txList);
             const txInfoByBlockHash = new Map<string, KoiosTxInfo[]>();
             for (const tx of txList) {
                 const blockHash = tx?.block_hash;

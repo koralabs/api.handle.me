@@ -1,5 +1,5 @@
 import { AssetNameLabel, delay, HANDLE_POLICIES, LogCategory, Logger, Network, NETWORK, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
-import { KoiosTxInfo } from '../interfaces/provider.interface';
+import { KoiosAsset, KoiosOutput, KoiosTxInfo } from '../interfaces/provider.interface';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 
 export const defaultKoiosSettings = { _inputs: true, _withdrawals: false, _certs: false, _governance: false, _scripts: true, _bytecode: true, _metadata: true, _assets: true };
@@ -188,6 +188,147 @@ export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[], datumByHash 
 
     // Sort the UTxOs so that Handles with 222 are first. This fixes when we look for mintingData later.
     utxos.sort(u => u.handles.some(h => h[1].some(a => a.startsWith(AssetNameLabel.LBL_222))) ? -1 : 1);
-    
+
     return utxos;
 }
+
+// ========== Blockfrost fallback for scanner ==========
+
+const BLOCKFROST_FALLBACK_MIN_INTERVAL_MS = 110; // ~9 RPS
+let lastBlockfrostFallbackCallTime = 0;
+
+const blockfrostFallbackJson = async (endpointSegment: string): Promise<any> => {
+    const now = Date.now();
+    const elapsed = now - lastBlockfrostFallbackCallTime;
+    if (elapsed < BLOCKFROST_FALLBACK_MIN_INTERVAL_MS) {
+        await delay(BLOCKFROST_FALLBACK_MIN_INTERVAL_MS - elapsed);
+    }
+    lastBlockfrostFallbackCallTime = Date.now();
+    const response = await blockfrostApiCall(endpointSegment);
+    if (!response.ok) {
+        const error: any = new Error(`Blockfrost ${endpointSegment}: ${response.status} ${response.statusText}`);
+        error.status = response.status;
+        throw error;
+    }
+    return response.json();
+};
+
+export const fetchBlockfrostTxHashes = async (blockHashes: string[]): Promise<string[]> => {
+    const allTxHashes: string[] = [];
+    for (const blockHash of blockHashes) {
+        const txHashes = await fetchPaginatedResults<string>(`blocks/${blockHash}/txs`);
+        allTxHashes.push(...txHashes);
+    }
+    return allTxHashes;
+};
+
+export const fetchBlockfrostTxInfo = async (txHash: string): Promise<KoiosTxInfo> => {
+    const txData = await blockfrostFallbackJson(`txs/${txHash}`);
+    const utxoData = await blockfrostFallbackJson(`txs/${txHash}/utxos`);
+
+    // Compute minted/burned assets from input/output difference
+    const assetTotals = new Map<string, bigint>();
+    for (const output of utxoData.outputs ?? []) {
+        if (output.collateral) continue;
+        for (const { unit, quantity } of output.amount ?? []) {
+            if (unit === 'lovelace') continue;
+            assetTotals.set(unit, (assetTotals.get(unit) ?? 0n) + BigInt(quantity));
+        }
+    }
+    for (const input of utxoData.inputs ?? []) {
+        if (input.collateral || input.reference) continue;
+        for (const { unit, quantity } of input.amount ?? []) {
+            if (unit === 'lovelace') continue;
+            assetTotals.set(unit, (assetTotals.get(unit) ?? 0n) - BigInt(quantity));
+        }
+    }
+
+    const assets_minted: KoiosAsset[] = [];
+    for (const [unit, qty] of assetTotals) {
+        if (qty === 0n) continue;
+        assets_minted.push({
+            policy_id: unit.slice(0, 56),
+            asset_name: unit.slice(56),
+            quantity: qty.toString(),
+            decimals: 0,
+            fingerprint: ''
+        });
+    }
+
+    // Map outputs to KoiosOutput format
+    const outputs: KoiosOutput[] = (utxoData.outputs ?? [])
+        .filter((o: any) => !o.collateral)
+        .map((o: any) => ({
+            tx_hash: txHash,
+            tx_index: o.output_index,
+            datum_hash: o.data_hash ?? null,
+            stake_addr: null,
+            value: o.amount?.find((a: any) => a.unit === 'lovelace')?.quantity ?? '0',
+            payment_addr: { bech32: o.address ?? '', cred: '' },
+            asset_list: (o.amount ?? [])
+                .filter((a: any) => a.unit !== 'lovelace')
+                .map((a: any) => ({
+                    policy_id: a.unit.slice(0, 56),
+                    asset_name: a.unit.slice(56),
+                    quantity: a.quantity,
+                    decimals: 0,
+                    fingerprint: ''
+                })),
+            inline_datum: o.inline_datum ? { bytes: o.inline_datum, value: {} } : null,
+            reference_script: null as { bytes: string; type: string } | null
+        }));
+
+    // Fetch reference script bytes for outputs that have them
+    for (const output of outputs) {
+        const bfOutput = (utxoData.outputs ?? []).find((o: any) => o.output_index === output.tx_index && !o.collateral);
+        if (bfOutput?.reference_script_hash) {
+            try {
+                const scriptCbor = await blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}/cbor`);
+                output.reference_script = { bytes: scriptCbor.cbor ?? '', type: 'PlutusScriptV2' };
+            } catch { /* skip if script fetch fails */ }
+        }
+    }
+
+    // Map inputs
+    const inputs = (utxoData.inputs ?? [])
+        .filter((i: any) => !i.collateral && !i.reference)
+        .map((i: any) => ({ tx_hash: i.tx_hash, tx_index: i.output_index }));
+
+    const reference_inputs = (utxoData.inputs ?? [])
+        .filter((i: any) => i.reference)
+        .map((i: any) => ({ tx_hash: i.tx_hash, tx_index: i.output_index }));
+
+    // Fetch metadata only if assets were minted/burned (721 metadata only exists for mints)
+    let metadata: KoiosTxInfo['metadata'] = {};
+    if (txData.asset_mint_or_burn_count > 0) {
+        try {
+            const metadataArray = await blockfrostFallbackJson(`txs/${txHash}/metadata`);
+            if (Array.isArray(metadataArray)) {
+                for (const entry of metadataArray) {
+                    metadata[entry.label] = entry.json_metadata;
+                }
+            }
+        } catch { /* no metadata */ }
+    }
+
+    return {
+        tx_hash: txHash,
+        block_hash: txData.block ?? '',
+        block_height: txData.block_height ?? 0,
+        absolute_slot: txData.slot ?? 0,
+        reference_inputs,
+        outputs,
+        inputs,
+        assets_minted,
+        metadata
+    };
+};
+
+export const fetchBlockfrostDatumCbor = async (datumHash: string): Promise<string | null> => {
+    try {
+        const data = await blockfrostFallbackJson(`scripts/datum/${datumHash}/cbor`);
+        return data?.cbor ?? null;
+    } catch {
+        return null;
+    }
+};
