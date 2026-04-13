@@ -5,6 +5,8 @@ import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 export const defaultKoiosSettings = { _inputs: true, _withdrawals: false, _certs: false, _governance: false, _scripts: true, _bytecode: true, _metadata: true, _assets: true };
 const KOIOS_REQUEST_TIMEOUT_MS = 20_000;
 
+const BLOCKFROST_REQUEST_TIMEOUT_MS = 20_000;
+
 export const blockfrostApiCall = async (endpointSegment: string) => {
     const headers = {
         project_id: process.env.BLOCKFROST_API_KEY ?? '',
@@ -12,7 +14,7 @@ export const blockfrostApiCall = async (endpointSegment: string) => {
     };
 
     const url = `https://cardano-${NETWORK.toLowerCase()}.blockfrost.io/api/v0/${endpointSegment}`;
-    return await fetch(url, { headers });
+    return await fetch(url, { headers, signal: AbortSignal.timeout(BLOCKFROST_REQUEST_TIMEOUT_MS) });
 };
 
 export const fetchPaginatedResults = async <T>(endpointSegment: string, maxResults = Infinity): Promise<T[]> => {

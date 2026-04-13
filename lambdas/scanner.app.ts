@@ -866,14 +866,21 @@ const scan = async () => {
     Logger.local(`Running scan...`);
     const metrics = handlesRepo.getMetrics();
     const scanStartedAt = Date.now();
+    const scanBreadcrumb = (step: string, extra = '') => Logger.log({
+        message: `[scan:breadcrumb] ${step} at +${Date.now() - scanStartedAt}ms${extra ? ` | ${extra}` : ''}`,
+        category: LogCategory.INFO,
+        event: 'scannerLambda.scan.breadcrumb'
+    });
     const existingLastSlot = Number(metrics.lastSlot ?? 0);
     // Is scanning fast enough to do this without MAX_TIP_SLOTS? Or a much higher one?
     handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.SCANNING, lockLambdasTimestamp: Date.now() });
     try {
+        scanBreadcrumb('fetchPaginatedResults_start', `from=${metrics.currentBlockHash}`);
         let bResp: { hash: string; slot: number; confirmations: number }[] = await fetchPaginatedResults(
             `blocks/${metrics.currentBlockHash}/next`,
             SCANNER_MAX_BLOCKS_PER_INVOCATION + 1
         );
+        scanBreadcrumb('fetchPaginatedResults_done', `blocks=${bResp.length}`);
         bResp.sort((a, b) => b.confirmations - a.confirmations);
         if (bResp.length > SCANNER_MAX_BLOCKS_PER_INVOCATION) {
             Logger.local({
@@ -885,7 +892,9 @@ const scan = async () => {
         }
         if (!bResp.length) {
             const currentSlot = Number(metrics.currentSlot ?? 0);
+            scanBreadcrumb('getLatestChainTip_start', 'no forward blocks');
             const latestBlock = await getLatestChainTip();
+            scanBreadcrumb('getLatestChainTip_done', `tip=${latestBlock?.slot ?? 'null'}`);
             if (!latestBlock?.slot) {
                 handlesRepo.setMetrics({
                     lastSlot: Math.max(existingLastSlot, currentSlot),
@@ -920,7 +929,9 @@ const scan = async () => {
         }
         let tipBlockHash = '';
         let lastSlot = Math.max(existingLastSlot, bResp[bResp.length - 1].slot);
+        scanBreadcrumb('getLatestChainTip_start', 'for tip metrics');
         const latestBlock = await getLatestChainTip();
+        scanBreadcrumb('getLatestChainTip_done', `tip=${latestBlock?.slot ?? 'null'}`);
         if (latestBlock?.slot) {
             tipBlockHash = `${latestBlock?.hash ?? ''}`;
             lastSlot = Number(latestBlock.slot ?? lastSlot);
@@ -941,9 +952,16 @@ const scan = async () => {
                 break;
             }
             const blockChunk = bResp.slice(blockIndex, blockIndex + SCANNER_BLOCK_PREFETCH_CHUNK_SIZE);
+            scanBreadcrumb('chunk_start', `offset=${blockIndex}/${bResp.length} chunkSize=${blockChunk.length}`);
+            scanBreadcrumb('getBatchedTxHashes_start');
             const txHashes = [...new Set(await getBatchedTxHashesWithFallback(blockChunk.map((block) => block.hash)))];
+            scanBreadcrumb('getBatchedTxHashes_done', `txCount=${txHashes.length}`);
+            scanBreadcrumb('getBatchedTxInfo_start');
             const txList = await getBatchedTxInfoWithFallback(txHashes);
+            scanBreadcrumb('getBatchedTxInfo_done', `txInfoCount=${txList.length}`);
+            scanBreadcrumb('getBatchedDatumInfo_start');
             const datumInfoByHash = await getBatchedDatumInfoWithFallback(txList);
+            scanBreadcrumb('getBatchedDatumInfo_done', `datumCount=${datumInfoByHash.size}`);
             const txInfoByBlockHash = new Map<string, KoiosTxInfo[]>();
             for (const tx of txList) {
                 const blockHash = tx?.block_hash;
@@ -994,7 +1012,9 @@ const scan = async () => {
             }
         }
 
+        scanBreadcrumb('buildMptRootHash_start');
         await buildAndStoreMptRootHash(store);
+        scanBreadcrumb('buildMptRootHash_done');
     } catch (error: any) {
         if (isRetriableKoiosError(error)) {
             Logger.log({
@@ -1020,16 +1040,24 @@ const scan = async () => {
 };
 
 export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGatewayProxyEventV2, context: AWSLambda.Context) => {
+    const handlerStartedAt = Date.now();
+    const logBreadcrumb = (step: string, extra = '') => Logger.log({
+        message: `[scanner:breadcrumb] ${step} at +${Date.now() - handlerStartedAt}ms${extra ? ` | ${extra}` : ''}`,
+        category: LogCategory.INFO,
+        event: 'scannerLambda.breadcrumb'
+    });
+    logBreadcrumb('handler_start', `timeout=${context?.getRemainingTimeInMillis?.() ?? 'unknown'}ms`);
     store.initialize();
+    logBreadcrumb('store_initialized');
     const isReindexShortcut = shouldTriggerReindexShortcut(event);
     const leaseOwner = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const leaseAcquired = acquireScannerLease(leaseOwner);
     if (!leaseAcquired && !isReindexShortcut) {
-        Logger.local('Scanner lease is active in another invocation, skipping');
+        logBreadcrumb('lease_not_acquired_skipping');
         return;
     }
     if (!leaseAcquired && isReindexShortcut) {
-        Logger.local('Scanner lease is active, but processing authorized reindex shortcut request');
+        logBreadcrumb('lease_not_acquired_but_reindex_shortcut');
     }
 
     let heartbeat: NodeJS.Timeout | undefined;
@@ -1047,7 +1075,9 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
             heartbeat.unref?.();
         }
 
+        logBreadcrumb('ensure_initialized_start');
         await ensureInitialized();
+        logBreadcrumb('ensure_initialized_done');
         if (shouldTriggerReindexShortcut(event)) {
             if (!isWhitelistedScannerShortcutRequest(event)) {
                 Logger.local({
@@ -1096,14 +1126,21 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
         }
 
         // ******** REINDEXING CHECK ********* //
+        logBreadcrumb('ensure_utxos_ready_start');
         await ensureUTxOsReady();
+        logBreadcrumb('ensure_utxos_ready_done');
         if (Number(store.getIndexSchemaVersion()) > (handlesRepo.getMetrics().indexSchemaVersion ?? 0)) {
+            logBreadcrumb('reindex_start');
             await processReindex();
+            logBreadcrumb('reindex_done');
             return;
         }
 
+        logBreadcrumb('scan_start');
         await scan();
+        logBreadcrumb('scan_done');
 
+        logBreadcrumb('mpt_root_check_start');
         if (handlesRepo.isCaughtUp()) {
             const storedMptRoot = store.getMptRootHash();
             try {
@@ -1124,6 +1161,7 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
             }
         }
 
+        logBreadcrumb('rollback_check_start');
         const postScanMetrics = handlesRepo.getMetrics();
         const slotsBelow = Number(postScanMetrics.lastSlot ?? 0) - Number(postScanMetrics.currentSlot ?? 0);
         if (slotsBelow > ROLLBACK_20_SLOT_WINDOW) {
@@ -1135,6 +1173,7 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
         } else {
             await checkRollback();
         }
+        logBreadcrumb('rollback_check_done');
 
         return {
             isBase64Encoded: false,

@@ -26,7 +26,8 @@ describe('helpers pagination tests', () => {
                 headers: {
                     project_id: 'test-key',
                     'Content-Type': 'application/json'
-                }
+                },
+                signal: expect.anything()
             }
         );
     });
