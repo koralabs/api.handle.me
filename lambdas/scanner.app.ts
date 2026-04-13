@@ -842,7 +842,7 @@ const clearStaleLockIfNeeded = (metrics: ReturnType<HandlesRepository['getMetric
     if (!metrics.lockLambdas || !isLockStale(metrics.lockLambdas, metrics.lockLambdasTimestamp)) return false;
 
     if (metrics.lockLambdas === LockedLambdaReason.SCANNING) {
-        Logger.log({ message: `Scanner lambda has been locked for scanning for over 5 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.lockedTooLong' });
+        Logger.log({ message: `Scanner lambda has been locked for scanning for over 10 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.lockedTooLong' });
     }
 
     if ([LockedLambdaReason.ROLLBACK_20, LockedLambdaReason.ROLLBACK_2160].includes(metrics.lockLambdas)) {
