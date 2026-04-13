@@ -45,7 +45,7 @@ process.env.ENABLE_OGMIOS_SCANNING = 'false';
 const LOCK_REASON_SNAPSHOT = 'SNAPSHOT' as LockedLambdaReason;
 
 const staleLockTimeouts: Partial<Record<LockedLambdaReason, number>> = {
-    [LockedLambdaReason.SCANNING]: 5 * 60 * 1000,
+    [LockedLambdaReason.SCANNING]: 10 * 60 * 1000,
     [LockedLambdaReason.ROLLBACK_20]: 5 * 60 * 1000,
     [LockedLambdaReason.ROLLBACK_2160]: 10 * 60 * 1000,
     [LockedLambdaReason.REINDEX]: 10 * 60 * 1000,
