@@ -504,6 +504,14 @@ const getBatchedDatumInfoWithFallback = async (txInfo: KoiosTxInfo[]): Promise<M
     }
 };
 
+const getBatchedUTxOsWithFallback = async (txHashes: string[], txs?: KoiosTxInfo[]) => {
+    const txInfo = txs ?? await getBatchedTxInfoWithFallback(txHashes);
+    const datumInfoByHash = await getBatchedDatumInfoWithFallback(txInfo);
+    const utxos: UTxOWithTxInfo[] = [];
+    utxos.push(...buildUTxOsFromKoiosTxs(txInfo, datumInfoByHash));
+    return utxos;
+};
+
 const filterUTxOToHandleNames = (utxo: UTxOWithTxInfo, handleNames: Set<string>): UTxOWithTxInfo | undefined => {
     const filterAssets = (assets?: [string, string[]][]) =>
         assets?.map(([policy, names]) => {
@@ -548,8 +556,16 @@ const getLatestChainTip = async () => {
 };
 
 const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotify = false }: { currentSlot: number; rollbackOffset: number; suppressNotify?: boolean }) => {
+    const rbStartedAt = Date.now();
+    const rbBreadcrumb = (step: string, extra = '') => Logger.log({
+        message: `[rollback:breadcrumb] ${step} at +${Date.now() - rbStartedAt}ms${extra ? ` | ${extra}` : ''}`,
+        category: LogCategory.INFO,
+        event: 'scannerLambda.rollback.breadcrumb'
+    });
+    rbBreadcrumb('start', `offset=${rollbackOffset} currentSlot=${currentSlot}`);
     Logger.local(`Running rollback check - ${rollbackOffset}`);
     const latestBlock = await getLatestChainTip();
+    rbBreadcrumb('getLatestChainTip_done', `height=${latestBlock?.height ?? 'null'}`);
     if (!latestBlock?.height) {
         const { lastSlot = 0 } = handlesRepo.getMetrics();
         handlesRepo.setMetrics({
@@ -567,7 +583,9 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
     const blockHeight = latestBlock.height - rollbackOffset;
 
     // Get all blocks/txs/UTxOs from Bf/Ko
+    rbBreadcrumb('fetchPaginatedResults_start', `fromHeight=${blockHeight}`);
     const blockList: BlockfrostBlock[] = await fetchPaginatedResults(`blocks/${blockHeight}/next`);
+    rbBreadcrumb('fetchPaginatedResults_done', `blocks=${blockList.length}`);
     const [firstBlock] = blockList;
     if (!firstBlock) return;
 
@@ -581,8 +599,12 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
         utxoIds.forEach((utxoId) => handlesRepo.getUTxO(utxoId));
     }) as UTxOWithTxInfo[];
 
-    const providerTxHashes = await getBatchedTxHashes(providerBlocks.map((b) => b.hash));
-    const providerUTxOs: UTxOWithTxInfo[] = await getBatchedUTxOs(providerTxHashes);
+    rbBreadcrumb('getBatchedTxHashes_start', `providerBlocks=${providerBlocks.length}`);
+    const providerTxHashes = await getBatchedTxHashesWithFallback(providerBlocks.map((b) => b.hash));
+    rbBreadcrumb('getBatchedTxHashes_done', `txCount=${providerTxHashes.length}`);
+    rbBreadcrumb('getBatchedUTxOs_start');
+    const providerUTxOs: UTxOWithTxInfo[] = await getBatchedUTxOsWithFallback(providerTxHashes);
+    rbBreadcrumb('getBatchedUTxOs_done', `utxoCount=${providerUTxOs.length}`);
     // sort provider UTxOs by slot ascending
     providerUTxOs.sort((a, b) => a.slot - b.slot);
 
@@ -636,6 +658,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
 
     const handleTxHashes: string[] = [];
     // This is a separate set of UTxOs representing the current Handle values (potentially different from above UTxOs)
+    rbBreadcrumb('fetchAssetUtxos_start', `batchCount=${batchedHandles.length} handleCount=${storedHandles.length}`);
     await asyncForEach(batchedHandles, async (handleNames) => {
         const koiosUtxos = await fetchAssetUtxoBatchWithRetry(handleNames);
         if (koiosUtxos !== null) {
@@ -649,8 +672,11 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
             // Mostly possible with DEMI and Manually added Handles because handle.me uses Blockfrost
         }
     }, KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS);
+    rbBreadcrumb('fetchAssetUtxos_done', `handleTxHashes=${handleTxHashes.length}`);
 
-    const latestUTxOsForAffectedHandles = await getBatchedUTxOs(handleTxHashes);
+    rbBreadcrumb('latestUTxOs_start');
+    const latestUTxOsForAffectedHandles = await getBatchedUTxOsWithFallback(handleTxHashes);
+    rbBreadcrumb('latestUTxOs_done', `count=${latestUTxOsForAffectedHandles.length}`);
     const rollbackHandleSet = new Set(handles);
     const relevantLatestUTxOsForAffectedHandles = latestUTxOsForAffectedHandles
         .map((utxo) => filterUTxOToHandleNames(utxo, rollbackHandleSet))
@@ -915,12 +941,9 @@ const scan = async () => {
 
             if (latestSlot > currentSlot && metrics.currentBlockHash && currentSlot > 0) {
                 const rollbackOffset = latestSlot - currentSlot > ROLLBACK_20_SLOT_WINDOW ? 2160 : 20;
-                Logger.local({
-                    message: `No forward blocks found from ${metrics.currentBlockHash} while latest slot=${latestSlot} is ahead of current slot=${currentSlot}. Running rollback_${rollbackOffset}.`,
-                    category: LogCategory.WARN,
-                    event: 'scannerLambda.rollbackOnStaleHead'
-                });
+                scanBreadcrumb('staleHead_rollback_start', `rollbackOffset=${rollbackOffset} latestSlot=${latestSlot} currentSlot=${currentSlot} gap=${latestSlot - currentSlot}`);
                 await processRollback({ currentSlot, rollbackOffset, suppressNotify: true });
+                scanBreadcrumb('staleHead_rollback_done');
                 return;
             }
 
