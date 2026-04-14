@@ -575,15 +575,16 @@ const getLatestChainTip = async () => {
     }
 };
 
-const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotify = false }: { currentSlot: number; rollbackOffset: number; suppressNotify?: boolean }) => {
+const processRollback = async ({ currentSlot, rollbackOffset = 2160, suppressNotify = false }: { currentSlot: number; rollbackOffset?: number; suppressNotify?: boolean }) => {
     const rbStartedAt = Date.now();
     const rbBreadcrumb = (step: string, extra = '') => Logger.log({
         message: `[rollback:breadcrumb] ${step} at +${Date.now() - rbStartedAt}ms${extra ? ` | ${extra}` : ''}`,
         category: LogCategory.INFO,
         event: 'scannerLambda.rollback.breadcrumb'
     });
+
+    // ===== PHASE 1: Fetch canonical block metadata (cheap — hashes only, no tx data) =====
     rbBreadcrumb('start', `offset=${rollbackOffset} currentSlot=${currentSlot}`);
-    Logger.local(`Running rollback check - ${rollbackOffset}`);
     const latestBlock = await getLatestChainTip();
     rbBreadcrumb('getLatestChainTip_done', `height=${latestBlock?.height ?? 'null'}`);
     if (!latestBlock?.height) {
@@ -593,7 +594,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
             tipBlockHash: ''
         });
         Logger.log({
-            message: `Unable to fetch latest block while checking rollback_${rollbackOffset}. Keeping an unknown tip hash and advancing the observed tip slot lower bound.`,
+            message: `Unable to fetch latest block while checking rollback. Keeping an unknown tip hash and advancing the observed tip slot lower bound.`,
             category: LogCategory.WARN,
             event: 'scannerLambda.latestBlockUnavailable'
         });
@@ -601,40 +602,42 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
     }
 
     const blockHeight = latestBlock.height - rollbackOffset;
-
-    // Get all blocks/txs/UTxOs from Bf/Ko
-    rbBreadcrumb('fetchPaginatedResults_start', `fromHeight=${blockHeight}`);
+    rbBreadcrumb('fetchBlockMetadata_start', `fromHeight=${blockHeight}`);
     const blockList: BlockfrostBlock[] = await fetchPaginatedResults(`blocks/${blockHeight}/next`);
-    rbBreadcrumb('fetchPaginatedResults_done', `blocks=${blockList.length}`);
+    rbBreadcrumb('fetchBlockMetadata_done', `blocks=${blockList.length}`);
     const [firstBlock] = blockList;
     if (!firstBlock) return;
 
     const providerBlocks = blockList.filter((b) => b.slot <= currentSlot).sort((a, b) => a.slot - b.slot);
     if (!providerBlocks.length) return;
 
-    // Get all of the UTxOs from db after that slot
-    // Using the firstBlock.slot, we might get a UTxO that does not have Handles.
+    // ===== PHASE 2: Compare block hashes to find orphaned UTxOs (instant — Redis + set lookup) =====
+    const canonicalBlockHashes = new Set(blockList.map((b) => b.hash));
+
     const utxoIds = store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 0, { start: firstBlock.slot }) as string[];
-    const utxos = store.pipeline(() => {
+    const utxos = (store.pipeline(() => {
         utxoIds.forEach((utxoId) => handlesRepo.getUTxO(utxoId));
-    }) as UTxOWithTxInfo[];
+    }) as UTxOWithTxInfo[]).filter(Boolean);
 
-    const providerUTxOs: UTxOWithTxInfo[] = [];
-    for (let i = 0; i < providerBlocks.length; i += SCANNER_BLOCK_PREFETCH_CHUNK_SIZE) {
-        checkDeadline(`rollback_provider_chunk offset=${i}/${providerBlocks.length}`);
-        const chunk = providerBlocks.slice(i, i + SCANNER_BLOCK_PREFETCH_CHUNK_SIZE);
-        rbBreadcrumb('provider_chunk_start', `offset=${i}/${providerBlocks.length} chunkSize=${chunk.length}`);
-        const txHashes = [...new Set(await getBatchedTxHashesWithFallback(chunk.map((b) => b.hash)))];
-        const chunkUTxOs = await getBatchedUTxOsWithFallback(txHashes);
-        providerUTxOs.push(...chunkUTxOs);
-        rbBreadcrumb('provider_chunk_done', `offset=${i} txCount=${txHashes.length} handleUtxos=${chunkUTxOs.length}`);
+    const orphanedUtxos = utxos.filter((u) => u.blockHash && !canonicalBlockHashes.has(u.blockHash));
+    rbBreadcrumb('orphan_check_done', `storedUtxos=${utxos.length} orphaned=${orphanedUtxos.length}`);
+
+    if (!orphanedUtxos.length) {
+        // No orphaned UTxOs — stored state matches canonical chain.
+        // Update head to latest canonical block at or before currentSlot.
+        const recoveredHead = providerBlocks[providerBlocks.length - 1];
+        handlesRepo.setMetrics({
+            currentBlockHash: recoveredHead.hash,
+            currentSlot: recoveredHead.slot,
+            ...(latestBlock.hash ? { tipBlockHash: latestBlock.hash } : {}),
+            ...(latestBlock.slot > 0 ? { lastSlot: latestBlock.slot } : {})
+        });
+        return;
     }
-    rbBreadcrumb('provider_chunks_complete', `totalUtxos=${providerUTxOs.length}`);
-    // sort provider UTxOs by slot ascending
-    providerUTxOs.sort((a, b) => a.slot - b.slot);
 
+    // ===== PHASE 3: Get affected handles (from orphaned UTxOs — small set) =====
     const handleNames: Set<string> = new Set();
-    for (const utxo of [...providerUTxOs, ...utxos]) {
+    for (const utxo of orphanedUtxos) {
         for (const assets of utxo?.handles ?? []) {
             assets[1].forEach((assetName) => {
                 const { name } = getHandleNameFromAssetName(assetName);
@@ -642,199 +645,136 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
             });
         }
     }
-    
     const handles = [...handleNames];
 
     const storedHandles = store
         .pipeline(() => {
-            handles.forEach((handleName) => {
-                handlesRepo.getHandle(handleName);
-            });
+            handles.forEach((handleName) => handlesRepo.getHandle(handleName));
         })
         .filter(Boolean) as StoredHandle[];
 
+    rbBreadcrumb('affected_handles', `orphanedUtxos=${orphanedUtxos.length} handles=${handles.length}`);
+
+    // ===== PHASE 4: Fetch current on-chain state for affected handles (targeted — only the damaged handles) =====
     const batchedHandles: [string, string][][] = [];
-    let storedHandlesIndex = 0;
     let assetNames: [string, string][] = [];
-    while (storedHandlesIndex < storedHandles.length) {
-        // TODO: deal with virtual subHandles
-        const storedHandle = storedHandles[storedHandlesIndex];
+    for (const storedHandle of storedHandles) {
         const { isCip67 } = getHandleNameFromAssetName(storedHandle.hex);
-
-        assetNames.push([storedHandles[storedHandlesIndex].policy, storedHandles[storedHandlesIndex].hex]);
-
+        assetNames.push([storedHandle.policy, storedHandle.hex]);
         if (isCip67) {
-            const hexWithoutLabel = storedHandles[storedHandlesIndex].hex.slice(8);
-            assetNames.push([storedHandles[storedHandlesIndex].policy, `${AssetNameLabel.LBL_100}${hexWithoutLabel}`]);
-            assetNames.push([storedHandles[storedHandlesIndex].policy, `${AssetNameLabel.LBL_001}${hexWithoutLabel}`]);
+            const hexWithoutLabel = storedHandle.hex.slice(8);
+            assetNames.push([storedHandle.policy, `${AssetNameLabel.LBL_100}${hexWithoutLabel}`]);
+            assetNames.push([storedHandle.policy, `${AssetNameLabel.LBL_001}${hexWithoutLabel}`]);
         }
-
         if (JSON.stringify({ _asset_list: assetNames, _extended: true }).length >= 4700) {
-            // Max possible ",[policy,handle]" length is 96
             batchedHandles.push(assetNames);
             assetNames = [];
         }
-        storedHandlesIndex++;
-        // last check if last handle
-        if (storedHandlesIndex == storedHandles.length && assetNames.length) {
-            batchedHandles.push(assetNames);
-        }
     }
+    if (assetNames.length) batchedHandles.push(assetNames);
 
     const handleTxHashes: string[] = [];
-    // This is a separate set of UTxOs representing the current Handle values (potentially different from above UTxOs)
     rbBreadcrumb('fetchAssetUtxos_start', `batchCount=${batchedHandles.length} handleCount=${storedHandles.length}`);
-    await asyncForEach(batchedHandles, async (handleNames) => {
-        const koiosUtxos = await fetchAssetUtxoBatchWithRetry(handleNames);
+    await asyncForEach(batchedHandles, async (batch) => {
+        const koiosUtxos = await fetchAssetUtxoBatchWithRetry(batch);
         if (koiosUtxos !== null) {
-            // go through each asset and grab the data we need to test, tx_hash, tx_index, address
             for (const utxo of koiosUtxos) {
                 handleTxHashes.push(utxo.tx_hash);
             }
-        } else {
-            // Handle not found in provider, we need to remove it from our store.
-            // this can happen if a mint was rolled back and didn't return
-            // Mostly possible with DEMI and Manually added Handles because handle.me uses Blockfrost
         }
     }, KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS);
     rbBreadcrumb('fetchAssetUtxos_done', `handleTxHashes=${handleTxHashes.length}`);
 
-    rbBreadcrumb('latestUTxOs_start');
-    const latestUTxOsForAffectedHandles = await getBatchedUTxOsWithFallback(handleTxHashes);
-    rbBreadcrumb('latestUTxOs_done', `count=${latestUTxOsForAffectedHandles.length}`);
+    rbBreadcrumb('fetchCanonicalUtxos_start');
+    const canonicalHandleUTxOs = await getBatchedUTxOsWithFallback([...new Set(handleTxHashes)]);
+    rbBreadcrumb('fetchCanonicalUtxos_done', `count=${canonicalHandleUTxOs.length}`);
     const rollbackHandleSet = new Set(handles);
-    const relevantLatestUTxOsForAffectedHandles = latestUTxOsForAffectedHandles
+    const relevantCanonicalUTxOs = canonicalHandleUTxOs
         .map((utxo) => filterUTxOToHandleNames(utxo, rollbackHandleSet))
         .filter((utxo): utxo is UTxOWithTxInfo => !!utxo);
 
-    // find the intersection of providerUTxOs and latestUTxOsForAffectedHandles to get the latest UTxOs for the affected handles
-    const latestIds = relevantLatestUTxOsForAffectedHandles.filter((u) => u.slot >= firstBlock.slot && u.slot <= currentSlot).map((u) => u.id);
-    const latestProviderUTxOsForAffectedHandles = providerUTxOs.filter(p => latestIds.includes(p.id));
-    // then find the differences between that and the utxos from our store to find any discrepancies
-    const [latestProviderIds, apiIds] = [new Set(latestProviderUTxOsForAffectedHandles.map((u) => u.id)), new Set(utxos.map((u) => u.id))];
-    const differences = [...latestProviderIds.symmetricDifference(apiIds)].map((id) => {
-        return [...latestProviderUTxOsForAffectedHandles, ...utxos].find((u) => u.id === id);
+    // ===== PHASE 5: Repair — remove orphaned data, apply canonical state =====
+    const rollbackStartSlot = Math.min(...orphanedUtxos.map((u) => u.slot));
+    const firstOrphanedHeight = Math.min(...orphanedUtxos.map((u) => u.blockNum));
+    const distanceFromTip = latestBlock.height - firstOrphanedHeight;
+    Logger.log({
+        message: `Rollback detected: ${orphanedUtxos.length} orphaned UTxOs across ${handles.length} handles from slot ${rollbackStartSlot} (${distanceFromTip} blocks from tip)`,
+        category: suppressNotify || distanceFromTip <= 20 ? LogCategory.WARN : LogCategory.NOTIFY,
+        event: 'scannerLambda.rollbackDetected'
     });
 
-    if (differences.length) {
-        const rollbackStartSlot = Math.min(...differences.map((u) => u?.slot ?? Infinity));
-        if (!Number.isFinite(rollbackStartSlot)) return;
-
-        const providerRollbackUTxOs = providerUTxOs.filter((utxo) => utxo.slot >= rollbackStartSlot);
-
-        const firstMissingHeight = Math.min(...differences.map((u) => u?.blockNum ?? Infinity));
-        const distanceFromTip = latestBlock.height - firstMissingHeight;
-        Logger.log(`Rollback detected from slot ${rollbackStartSlot}${distanceFromTip === null ? '' : ` (${distanceFromTip} blocks from tip)`}`);
-
-        const apiRollbackUtxos = utxos.filter((utxo): utxo is UTxOWithTxInfo => !!utxo && utxo.slot >= rollbackStartSlot);
-
-        // This should be a notify since we are very rarely expecting in this range
-        // and may need to adjust the number 20 above accordingly
-        if (!suppressNotify && distanceFromTip! > 20) Logger.log({ category: LogCategory.NOTIFY, message: `Rollback at ${distanceFromTip} blocks detected! Block: ${firstMissingHeight}`, event: 'RollbackLambda' });
-        // Replay the affected range inline. Only escalate to a full reimport
-        // if the repair fails with a non-retriable error — a transient Koios
-        // timeout should retry the rollback next invocation, not trigger a
-        // 265K-handle S3 reimport that can OOM/timeout at normal memory.
-        // build the minting data for all handles in this range
-        const handlesMintingData = store.pipeline(() => {
-            handles.forEach((handleName) => handlesRepo.getHandleMintingData(handleName));
-        }) as Set<string>[];
-
-        // gets Handles and remove mints that happened in this range
-        store.pipeline(() => {
-            handles.forEach((handleName, index) => {
-                const mintingDataSet = handlesMintingData[index];
-                if (mintingDataSet) {
-                    mintingDataSet.forEach((md) => {
-                        const mintingData = JSON.parse(md) as MintingData;
-                        if (mintingData.created_slot >= rollbackStartSlot) {
-                            store.removeValueFromIndexedSet(IndexNames.MINT, handleName, md);
-                        }
-                    });
-                }
-            });
-        });
-
-        const stakeAddresses = storedHandles.map((h) => buildHolderInfo(h.resolved_addresses.ada).address);
-
-        // get a full list of holders so we can pass it into the updateHolder function later
-        const holderHandles = store.pipeline(() => {
-            stakeAddresses.forEach((address) => store.getValuesFromIndexedSet(IndexNames.HOLDER, address));
-        }) as Set<string>[]; // array of sets of handle names for each holder address
-
-        const holdersMap = new Map<string, Set<string>>();
-        stakeAddresses.forEach((address, index) => {
-            holdersMap.set(address, holderHandles[index]);
-        });
-
-        // update handle holders
-        store.pipeline(() => {
-            storedHandles.forEach((handle) => {
-                handlesRepo.updateHolder(handle, holdersMap);
-            });
-        });
-
-        // delete all UTxOs after that slot and replay them all
-        const utxoIdsToRemove = apiRollbackUtxos.map((utxo) => utxo.id);
-        if (utxoIdsToRemove.length) {
-            handlesRepo.removeUTxOs(utxoIdsToRemove);
-        }
-
-        // repopulate utxo store and minting data from Bf/Ko
-        handlesRepo.addUTxOsWithMintData(providerRollbackUTxOs);
-
-        const storedHandlesMap = new Map<string, StoredHandle>(storedHandles.map((h) => [h.name, h]));
-
-        handlesRepo.addMintDataFromUTxOs(relevantLatestUTxOsForAffectedHandles);
-
-        const retrievedMintingData = store.pipeline(() => {
-            handles.forEach((handleName) => {
-                handlesRepo.getHandleMintingData(handleName);
-            });
-        }) as Set<string>[];
-
-        const mintValueIndex: Map<string, MintingData[]> = new Map();
-        retrievedMintingData.forEach((md, i) => {
-            const handleName = handles[i];
-            mintValueIndex.set(
-                handleName,
-                Array.from(md).map((md) => JSON.parse(md))
-            );
-        });
-
-        store.pipeline(() => {
-            for (const utxo of relevantLatestUTxOsForAffectedHandles) {
-                handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap);
+    // Remove minting data from orphaned range
+    const handlesMintingData = store.pipeline(() => {
+        handles.forEach((handleName) => handlesRepo.getHandleMintingData(handleName));
+    }) as Set<string>[];
+    store.pipeline(() => {
+        handles.forEach((handleName, index) => {
+            const mintingDataSet = handlesMintingData[index];
+            if (mintingDataSet) {
+                mintingDataSet.forEach((md) => {
+                    const mintingData = JSON.parse(md) as MintingData;
+                    if (mintingData.created_slot >= rollbackStartSlot) {
+                        store.removeValueFromIndexedSet(IndexNames.MINT, handleName, md);
+                    }
+                });
             }
         });
-    }
+    });
 
+    // Update holders
+    const stakeAddresses = storedHandles.map((h) => buildHolderInfo(h.resolved_addresses.ada).address);
+    const holderHandles = store.pipeline(() => {
+        stakeAddresses.forEach((address) => store.getValuesFromIndexedSet(IndexNames.HOLDER, address));
+    }) as Set<string>[];
+    const holdersMap = new Map<string, Set<string>>();
+    stakeAddresses.forEach((address, index) => {
+        holdersMap.set(address, holderHandles[index]);
+    });
+    store.pipeline(() => {
+        storedHandles.forEach((handle) => handlesRepo.updateHolder(handle, holdersMap));
+    });
+
+    // Remove orphaned UTxOs
+    handlesRepo.removeUTxOs(orphanedUtxos.map((u) => u.id));
+
+    // Add canonical UTxOs and minting data
+    handlesRepo.addUTxOsWithMintData(relevantCanonicalUTxOs);
+    handlesRepo.addMintDataFromUTxOs(relevantCanonicalUTxOs);
+
+    // Rebuild indexes for affected handles
+    const storedHandlesMap = new Map<string, StoredHandle>(storedHandles.map((h) => [h.name, h]));
+    const retrievedMintingData = store.pipeline(() => {
+        handles.forEach((handleName) => handlesRepo.getHandleMintingData(handleName));
+    }) as Set<string>[];
+    const mintValueIndex: Map<string, MintingData[]> = new Map();
+    retrievedMintingData.forEach((md, i) => {
+        mintValueIndex.set(handles[i], Array.from(md).map((md) => JSON.parse(md)));
+    });
+    store.pipeline(() => {
+        for (const utxo of relevantCanonicalUTxOs) {
+            handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap);
+        }
+    });
+
+    rbBreadcrumb('repair_done', `removedUtxos=${orphanedUtxos.length} addedUtxos=${relevantCanonicalUTxOs.length}`);
+
+    // ===== PHASE 6: Update head to last canonical block at or before currentSlot =====
     const recoveredHead = providerBlocks[providerBlocks.length - 1];
-    const recoveredMetrics: Partial<{ currentBlockHash: string; currentSlot: number; tipBlockHash: string; lastSlot: number }> = {
+    handlesRepo.setMetrics({
         currentBlockHash: recoveredHead.hash,
-        currentSlot: recoveredHead.slot
-    };
-    const latestSlot = Number(latestBlock?.slot ?? 0);
-    if (latestBlock?.hash) recoveredMetrics.tipBlockHash = latestBlock.hash;
-    if (latestSlot > 0) recoveredMetrics.lastSlot = latestSlot;
-    handlesRepo.setMetrics(recoveredMetrics);
+        currentSlot: recoveredHead.slot,
+        ...(latestBlock.hash ? { tipBlockHash: latestBlock.hash } : {}),
+        ...(latestBlock.slot > 0 ? { lastSlot: latestBlock.slot } : {})
+    });
 };
 
 const checkRollback = async () => {
     const { currentSlot = 0 } = handlesRepo.getMetrics();
     try {
         handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.ROLLBACK_20, lockLambdasTimestamp: Date.now() });
-        // 20 confirmation range once a minute
-        // Get "20 ago block" (Blockfrost supports get by height/number)
-        await processRollback({ currentSlot, rollbackOffset: 20 });
-
-        // if (Date.now() - (handlesRepo.getMetrics().lastMaxRollbackCheck ?? 0) > 60 * 60 * 1000) {
-        //     // Get "2160 ago block" (Blockfrost supports get by height/number)
-        //     handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.ROLLBACK_2160, lockLambdasTimestamp: Date.now() });
-        //     await processRollback({ currentSlot, rollbackOffset: 2160 });
-        //     // Update last2160check
-        //     handlesRepo.setMetrics({ lastMaxRollbackCheck: Date.now() });
-        // }
+        // Block metadata fetch covers the full 2160-block window (cheap — hashes only).
+        // Only orphaned Handle UTxOs trigger expensive provider calls (targeted).
+        await processRollback({ currentSlot });
     } catch (error: any) {
         if (error instanceof ScannerDeadlineError) {
             Logger.log({
@@ -973,11 +913,8 @@ const scan = async () => {
             });
 
             if (latestSlot > currentSlot && metrics.currentBlockHash && currentSlot > 0) {
-                // Always try 20-block rollback first — forks are almost always 1-2 blocks deep
-                // regardless of how long the scanner has been stuck. Only escalate to 2160 if
-                // the head is still orphaned after rollback_20 (on the next invocation).
-                scanBreadcrumb('staleHead_rollback_start', `rollbackOffset=20 latestSlot=${latestSlot} currentSlot=${currentSlot} gap=${latestSlot - currentSlot}`);
-                await processRollback({ currentSlot, rollbackOffset: 20, suppressNotify: true });
+                scanBreadcrumb('staleHead_rollback_start', `latestSlot=${latestSlot} currentSlot=${currentSlot} gap=${latestSlot - currentSlot}`);
+                await processRollback({ currentSlot, suppressNotify: true });
                 scanBreadcrumb('staleHead_rollback_done');
                 return;
             }
