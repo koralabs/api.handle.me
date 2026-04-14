@@ -37,7 +37,6 @@ const KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS = Math.ceil(1000 / KOIOS_ASSET_UTXOS_MAX
 const KOIOS_ASSET_UTXOS_MAX_RETRIES = KOIOS_RETRY_DELAYS_MS.length;
 const SCANNER_MAX_BLOCKS_PER_INVOCATION = 720;
 const SCANNER_BLOCK_PREFETCH_CHUNK_SIZE = 30;
-const SCANNER_WORK_BUDGET_MS = 7 * 60_000;
 const SCANNER_HARD_DEADLINE_MS = 12 * 60_000;
 
 class ScannerDeadlineError extends Error {
@@ -48,10 +47,11 @@ class ScannerDeadlineError extends Error {
 }
 
 let scannerDeadline = 0;
-const setScannerDeadline = () => { scannerDeadline = Date.now() + SCANNER_HARD_DEADLINE_MS; };
+const ensureDeadlineSet = () => { if (!scannerDeadline) scannerDeadline = Date.now() + SCANNER_HARD_DEADLINE_MS; };
 const checkDeadline = (step: string) => {
-    if (scannerDeadline && Date.now() >= scannerDeadline) {
-        throw new ScannerDeadlineError(step, SCANNER_HARD_DEADLINE_MS);
+    ensureDeadlineSet();
+    if (Date.now() >= scannerDeadline) {
+        throw new ScannerDeadlineError(step, Date.now() - (scannerDeadline - SCANNER_HARD_DEADLINE_MS));
     }
 };
 const ROLLBACK_20_SLOT_WINDOW = 400; // 20 blocks * ~20 seconds per block
@@ -831,6 +831,14 @@ const checkRollback = async () => {
         //     handlesRepo.setMetrics({ lastMaxRollbackCheck: Date.now() });
         // }
     } catch (error: any) {
+        if (error instanceof ScannerDeadlineError) {
+            Logger.log({
+                message: `${error.message}. Rollback incomplete — next invocation will retry.`,
+                category: LogCategory.INFO,
+                event: 'scannerLambda.deadlineReached'
+            });
+            return;
+        }
         if (isRetriableKoiosError(error)) {
             Logger.log({
                 message: `Retriable rollback reconciliation failure (will retry next invocation): ${error?.message ?? error}`,
@@ -986,14 +994,7 @@ const scan = async () => {
             });
         }
         for (let blockIndex = 0; blockIndex < bResp.length; blockIndex += SCANNER_BLOCK_PREFETCH_CHUNK_SIZE) {
-            if (Date.now() - scanStartedAt >= SCANNER_WORK_BUDGET_MS) {
-                Logger.log({
-                    message: `Scanner work budget reached after ${Date.now() - scanStartedAt}ms. Pausing this invocation at block offset ${blockIndex}/${bResp.length}.`,
-                    category: LogCategory.INFO,
-                    event: 'scannerLambda.workBudgetReached'
-                });
-                break;
-            }
+            checkDeadline(`scan_chunk offset=${blockIndex}/${bResp.length}`);
             const blockChunk = bResp.slice(blockIndex, blockIndex + SCANNER_BLOCK_PREFETCH_CHUNK_SIZE);
             scanBreadcrumb('chunk_start', `offset=${blockIndex}/${bResp.length} chunkSize=${blockChunk.length}`);
             scanBreadcrumb('getBatchedTxHashes_start');
@@ -1059,6 +1060,14 @@ const scan = async () => {
         await buildAndStoreMptRootHash(store);
         scanBreadcrumb('buildMptRootHash_done');
     } catch (error: any) {
+        if (error instanceof ScannerDeadlineError) {
+            Logger.log({
+                message: `${error.message}. Pausing this invocation — next invocation will resume from last saved block.`,
+                category: LogCategory.INFO,
+                event: 'scannerLambda.deadlineReached'
+            });
+            return;
+        }
         if (isRetriableKoiosError(error)) {
             Logger.log({
                 message: `Retriable Koios scanner failure (will retry next invocation): ${error?.message ?? error}`,
@@ -1083,7 +1092,7 @@ const scan = async () => {
 };
 
 export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGatewayProxyEventV2, context: AWSLambda.Context) => {
-    setScannerDeadline();
+    scannerDeadline = Date.now() + SCANNER_HARD_DEADLINE_MS;
     const handlerStartedAt = Date.now();
     const logBreadcrumb = (step: string, extra = '') => Logger.log({
         message: `[scanner:breadcrumb] ${step} at +${Date.now() - handlerStartedAt}ms${extra ? ` | ${extra}` : ''}`,

@@ -1378,7 +1378,7 @@ describe('Scanner lambda unit tests', () => {
         expect(seenBlockHashes).not.toContain(blocks[blocks.length - 1].hash);
     });
 
-    it('pauses scan when the work budget is exhausted and resumes next invocation', async () => {
+    it('pauses scan when the hard deadline is reached and resumes next invocation', async () => {
         const { handlesRepo, scannerModule } = setup();
         const blocks = Array.from({ length: 90 }, (_, index) => ({
             hash: `${'d'.repeat(56)}${index.toString().padStart(8, '0')}`,
@@ -1388,14 +1388,15 @@ describe('Scanner lambda unit tests', () => {
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
         mockedHelpers.fetchPaginatedResults.mockResolvedValue(blocks as never);
 
-        let budgetExceeded = false;
-        const nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => 1_000_000 + (budgetExceeded ? 420_001 : 0));
+        // Simulate deadline exceeded after first chunk processes
+        let deadlineExceeded = false;
+        const nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => 1_000_000 + (deadlineExceeded ? 720_001 : 0));
         const seenBlockHashes: string[] = [];
         mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
             if (path === 'block_txs') {
                 const parsedBody = JSON.parse(body ?? '{}');
                 seenBlockHashes.push(...(parsedBody._block_hashes ?? []));
-                budgetExceeded = true;
+                deadlineExceeded = true;
                 return [] as never;
             }
             return [] as never;
@@ -1403,11 +1404,13 @@ describe('Scanner lambda unit tests', () => {
         mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
 
         const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
         try {
             await scannerModule.Internal.scan();
         } finally {
             nowSpy.mockRestore();
             logSpy.mockRestore();
+            warnSpy.mockRestore();
         }
 
         expect(seenBlockHashes.length).toBeGreaterThan(0);
