@@ -62,8 +62,7 @@ const LOCK_REASON_SNAPSHOT = 'SNAPSHOT' as LockedLambdaReason;
 
 const staleLockTimeouts: Partial<Record<LockedLambdaReason, number>> = {
     [LockedLambdaReason.SCANNING]: 10 * 60 * 1000,
-    [LockedLambdaReason.ROLLBACK_20]: 5 * 60 * 1000,
-    [LockedLambdaReason.ROLLBACK_2160]: 10 * 60 * 1000,
+    [LockedLambdaReason.ROLLBACK]: 10 * 60 * 1000,
     [LockedLambdaReason.REINDEX]: 10 * 60 * 1000,
     [LockedLambdaReason.UTXO_IMPORT]: 10 * 60 * 1000,
     [LOCK_REASON_SNAPSHOT]: 10 * 60 * 1000
@@ -771,7 +770,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 2160, suppressNot
 const checkRollback = async () => {
     const { currentSlot = 0 } = handlesRepo.getMetrics();
     try {
-        handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.ROLLBACK_20, lockLambdasTimestamp: Date.now() });
+        handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.ROLLBACK, lockLambdasTimestamp: Date.now() });
         // Block metadata fetch covers the full 2160-block window (cheap — hashes only).
         // Only orphaned Handle UTxOs trigger expensive provider calls (targeted).
         await processRollback({ currentSlot });
@@ -844,8 +843,8 @@ const clearStaleLockIfNeeded = (metrics: ReturnType<HandlesRepository['getMetric
         Logger.log({ message: `Scanner lambda has been locked for scanning for over 10 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.lockedTooLong' });
     }
 
-    if ([LockedLambdaReason.ROLLBACK_20, LockedLambdaReason.ROLLBACK_2160].includes(metrics.lockLambdas)) {
-        Logger.log({ message: `Scanner lambda has been locked for rollback for over 5 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.rollbackLockedTooLong' });
+    if (metrics.lockLambdas === LockedLambdaReason.ROLLBACK) {
+        Logger.log({ message: `Scanner lambda has been locked for rollback for over 10 minutes, something is wrong!`, category: LogCategory.NOTIFY, event: 'scannerLambda.rollbackLockedTooLong' });
     }
 
     if (metrics.lockLambdas === LockedLambdaReason.REINDEX) {
