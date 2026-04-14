@@ -973,9 +973,11 @@ const scan = async () => {
             });
 
             if (latestSlot > currentSlot && metrics.currentBlockHash && currentSlot > 0) {
-                const rollbackOffset = latestSlot - currentSlot > ROLLBACK_20_SLOT_WINDOW ? 2160 : 20;
-                scanBreadcrumb('staleHead_rollback_start', `rollbackOffset=${rollbackOffset} latestSlot=${latestSlot} currentSlot=${currentSlot} gap=${latestSlot - currentSlot}`);
-                await processRollback({ currentSlot, rollbackOffset, suppressNotify: true });
+                // Always try 20-block rollback first — forks are almost always 1-2 blocks deep
+                // regardless of how long the scanner has been stuck. Only escalate to 2160 if
+                // the head is still orphaned after rollback_20 (on the next invocation).
+                scanBreadcrumb('staleHead_rollback_start', `rollbackOffset=20 latestSlot=${latestSlot} currentSlot=${currentSlot} gap=${latestSlot - currentSlot}`);
+                await processRollback({ currentSlot, rollbackOffset: 20, suppressNotify: true });
                 scanBreadcrumb('staleHead_rollback_done');
                 return;
             }
