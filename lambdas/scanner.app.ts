@@ -38,6 +38,22 @@ const KOIOS_ASSET_UTXOS_MAX_RETRIES = KOIOS_RETRY_DELAYS_MS.length;
 const SCANNER_MAX_BLOCKS_PER_INVOCATION = 720;
 const SCANNER_BLOCK_PREFETCH_CHUNK_SIZE = 30;
 const SCANNER_WORK_BUDGET_MS = 7 * 60_000;
+const SCANNER_HARD_DEADLINE_MS = 12 * 60_000;
+
+class ScannerDeadlineError extends Error {
+    constructor(step: string, elapsed: number) {
+        super(`Scanner hard deadline (${SCANNER_HARD_DEADLINE_MS / 1000}s) reached at ${step} after ${elapsed}ms`);
+        this.name = 'ScannerDeadlineError';
+    }
+}
+
+let scannerDeadline = 0;
+const setScannerDeadline = () => { scannerDeadline = Date.now() + SCANNER_HARD_DEADLINE_MS; };
+const checkDeadline = (step: string) => {
+    if (scannerDeadline && Date.now() >= scannerDeadline) {
+        throw new ScannerDeadlineError(step, SCANNER_HARD_DEADLINE_MS);
+    }
+};
 const ROLLBACK_20_SLOT_WINDOW = 400; // 20 blocks * ~20 seconds per block
 const RECOVERY_REASON_ROLLBACK = 'rollback';
 const RECOVERY_REASON_REINDEX = 'reindex';
@@ -245,6 +261,7 @@ const isRetriableKoiosError = (error: any): boolean => {
 };
 
 const fetchTxInfoBatchWithRetryAndSplit = async (hashBatch: string[], attempt = 0): Promise<KoiosTxInfo[]> => {
+    checkDeadline('tx_info_retry');
     const body = getTxInfoBody(hashBatch);
     try {
         const txInfo = (await fetchKoios(`tx_info`, 'POST', body)) as KoiosTxInfo[] | null | { [key: string]: any };
@@ -288,6 +305,7 @@ const fetchTxInfoBatchWithRetryAndSplit = async (hashBatch: string[], attempt = 
 };
 
 const fetchDatumInfoBatchWithRetry = async (hashBatch: string[], attempt = 0): Promise<KoiosDatumInfo[]> => {
+    checkDeadline('datum_info_retry');
     const body = getDatumInfoBody(hashBatch);
     try {
         const datumInfo = (await fetchKoios(`datum_info`, 'POST', body)) as KoiosDatumInfo[] | null | { [key: string]: any };
@@ -376,6 +394,7 @@ const getBatchedUTxOs = async (txHashes: string[], txs?: KoiosTxInfo[]) => {
 };
 
 const fetchBlockTxHashBatchWithRetry = async (hashBatch: string[], attempt = 0): Promise<string[]> => {
+    checkDeadline('block_txs_retry');
     const body = getBlockTxsBody(hashBatch);
     try {
         const txs = (await fetchKoios(`block_txs`, 'POST', body)) as { tx_hash: string }[] | null;
@@ -413,6 +432,7 @@ const fetchBlockTxHashBatchWithRetry = async (hashBatch: string[], attempt = 0):
 };
 
 const fetchAssetUtxoBatchWithRetry = async (assetList: [string, string][], attempt = 0): Promise<KoiosAssetUTxO[] | null> => {
+    checkDeadline('asset_utxos_retry');
     const body = JSON.stringify({ _asset_list: assetList, _extended: true });
     try {
         return (await fetchKoios(`asset_utxos`, 'POST', body)) as KoiosAssetUTxO[] | null;
@@ -1063,6 +1083,7 @@ const scan = async () => {
 };
 
 export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGatewayProxyEventV2, context: AWSLambda.Context) => {
+    setScannerDeadline();
     const handlerStartedAt = Date.now();
     const logBreadcrumb = (step: string, extra = '') => Logger.log({
         message: `[scanner:breadcrumb] ${step} at +${Date.now() - handlerStartedAt}ms${extra ? ` | ${extra}` : ''}`,
@@ -1203,6 +1224,16 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
             statusCode: 200,
             body: ''
         };
+    } catch (error: any) {
+        if (error instanceof ScannerDeadlineError) {
+            Logger.log({
+                message: `${error.message}. Exiting gracefully — next invocation will resume from last saved block.`,
+                category: LogCategory.WARN,
+                event: 'scannerLambda.deadlineReached'
+            });
+            return;
+        }
+        throw error;
     } finally {
         if (heartbeat) clearInterval(heartbeat);
         if (leaseAcquired) {
