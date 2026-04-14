@@ -619,12 +619,17 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
         utxoIds.forEach((utxoId) => handlesRepo.getUTxO(utxoId));
     }) as UTxOWithTxInfo[];
 
-    rbBreadcrumb('getBatchedTxHashes_start', `providerBlocks=${providerBlocks.length}`);
-    const providerTxHashes = await getBatchedTxHashesWithFallback(providerBlocks.map((b) => b.hash));
-    rbBreadcrumb('getBatchedTxHashes_done', `txCount=${providerTxHashes.length}`);
-    rbBreadcrumb('getBatchedUTxOs_start');
-    const providerUTxOs: UTxOWithTxInfo[] = await getBatchedUTxOsWithFallback(providerTxHashes);
-    rbBreadcrumb('getBatchedUTxOs_done', `utxoCount=${providerUTxOs.length}`);
+    const providerUTxOs: UTxOWithTxInfo[] = [];
+    for (let i = 0; i < providerBlocks.length; i += SCANNER_BLOCK_PREFETCH_CHUNK_SIZE) {
+        checkDeadline(`rollback_provider_chunk offset=${i}/${providerBlocks.length}`);
+        const chunk = providerBlocks.slice(i, i + SCANNER_BLOCK_PREFETCH_CHUNK_SIZE);
+        rbBreadcrumb('provider_chunk_start', `offset=${i}/${providerBlocks.length} chunkSize=${chunk.length}`);
+        const txHashes = [...new Set(await getBatchedTxHashesWithFallback(chunk.map((b) => b.hash)))];
+        const chunkUTxOs = await getBatchedUTxOsWithFallback(txHashes);
+        providerUTxOs.push(...chunkUTxOs);
+        rbBreadcrumb('provider_chunk_done', `offset=${i} txCount=${txHashes.length} handleUtxos=${chunkUTxOs.length}`);
+    }
+    rbBreadcrumb('provider_chunks_complete', `totalUtxos=${providerUTxOs.length}`);
     // sort provider UTxOs by slot ascending
     providerUTxOs.sort((a, b) => a.slot - b.slot);
 
