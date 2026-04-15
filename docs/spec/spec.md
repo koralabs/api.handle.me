@@ -111,9 +111,9 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - `GET /policies` normalized handle policy settings derived from `handle_policies`
 - `GET /scripts` network script catalog (`latest`, `type` query support)
   - script entries are resolved from canonical `<slug><ordinal>@handlecontract` subhandles
-  - the `type` query parameter now prefers canonical slugs such as `pers`, `mkpl`, `demimntprx`, and `halmntprx`
-  - deprecated legacy aliases such as `pz_contract`, `marketplace_contract`, `demi_mint_proxy`, and `hal_mint_proxy` are still accepted during the migration window
-  - response payload `type` values use the canonical slugs such as `pers`, `mkpl`, `demimnt`, and `halmntprx`
+  - the `type` query parameter accepts canonical slugs: `pers`, `subh`, `mkpl`, `demimntprx`, `demimnt`, `demimntmpt`, `demiord`, `halmntprx`, `halmnt`, `halmntmpt`, `halord`, `halrefprx`, `halref`, `halroy`
+  - deprecated legacy aliases (`pz_contract`, `sub_handle_settings`, `marketplace_contract`, `demi_mint_proxy`, `hal_mint_proxy`, etc.) are still accepted
+  - response payload `type` values use the canonical slugs
   - response keys are validator-hash-derived script addresses, while `refScriptAddress` points to the handle-held reference script UTxO address
   - `unoptimizedCbor`, when present, is loaded from the owning contract repo at `deploy/<network>/<slug>.unoptimized.cbor`
 - `POST /mcp` Model Context Protocol JSON-RPC endpoint with read-only tools:
@@ -185,20 +185,18 @@ API transition rule:
 - Missing minting data during handle index updates is treated as a hard failure (scanner invariant), not a soft fallback.
 - Scanner lambda now also owns rollback/reconciliation and reindex checks.
 - Scanner lambda acquires an expiring Valkey lease lock (`SET NX PX`) per invocation and refreshes it with a heartbeat during execution; competing invocations skip work while a valid lease is held.
-- Scanner lambda also uses a recovery flag for destructive phases (`rollback` / `reindex`). If a run terminates mid-phase, the next cron tick detects the flag and runs index repair before normal scan/rollback flow.
-- Rollback reconciliation runs in short and periodic long windows and remains intentionally two-phase:
-  first persist replayed UTxOs + mint history without index updates, then run index updates from provider `tx_info`.
-- Rollback cutoff is computed from the first divergent block (provider/API mismatch) within the checked window, and cleanup/replay is applied from that block forward (not from the beginning of the window).
+- Scanner lambda also uses a recovery flag for destructive phases (`reindex`). If a run terminates mid-reindex, the next cron tick detects the flag and runs index repair before normal scan/rollback flow. Stale `ROLLBACK` and `SCANNING` locks are cleared without setting a recovery flag.
+- Rollback uses hash-set orphan detection: canonical block metadata (hashes, slots) is fetched from Blockfrost for the full 2160-block window (~4 seconds), then stored Handle UTxOs are checked against the canonical hash set. Only UTxOs whose `blockHash` is not in the canonical set are orphaned. For orphaned handles, current on-chain state is fetched via `asset_utxos` + `tx_info` and the repair is applied inline (remove orphaned UTxOs, add canonical ones, rebuild minting data/holders/indexes). A single `LockedLambdaReason.ROLLBACK` lock reason is used.
 - Rollback lock behavior is fail-safe: rollback attempts always clear `lockLambdas` in a `finally` path so scanner cron loops do not deadlock after provider/API failures.
-- Stale scanner locks (`lockLambdas` with aged timestamps) are treated as recoverable: stale locks are cleared and recovery flags are set for rollback/reindex lock reasons.
 - Snapshot lambda takes and releases a dedicated `lockLambdas` reason (`SNAPSHOT`) in `try/finally`, and scanner treats stale snapshot locks as recoverable.
 - Snapshot lambda rechecks active lambda locks up to 4 times with a 15-second delay before skipping a run.
 - Reindex lock behavior is fail-safe: reindex attempts must always clear `lockLambdas` in both success and error paths to avoid deadlocking scanner flows.
 - Scanner block processing batches `tx_info` across the full discovered block window (subject to request-size batching), then groups transactions back by `block_hash` to preserve per-block synchronous application order.
-- Forward scanner passes now request up to `720` next blocks before the work-budget guard decides whether to pause, so backlog catch-up uses more of the existing 7-minute invocation window instead of idling after a small fixed slice.
-- Scanner keeps `block_txs` request-size batching, and `tx_info` now also caps batches at 35 hashes based on observed CloudWatch success after larger 66-71 hash batches failed; forward scan `tx_info` requests also skip `_scripts` and `_bytecode` because the scanner does not consume those top-level payloads.
+- A single 12-minute hard deadline (`ScannerDeadlineError`) governs all scanner code paths: scan chunks, Koios retries, and rollback processing. When the deadline fires, the current operation exits cleanly and the next invocation resumes from the last saved block.
+- Scanner keeps `block_txs` request-size batching, and `tx_info` caps batches at 35 hashes. Scanner `tx_info` requests include `_scripts: true` and `_bytecode: true` to index reference scripts.
+- When Koios calls fail after retries, each scan/rollback iteration falls back to Blockfrost individual-request endpoints (~9 RPS). Blockfrost requests have a 20-second `AbortSignal` timeout. Fallback failures for reference scripts and metadata are logged as NOTIFY.
 - Even with batched `tx_info`, scanner metrics (`currentBlockHash`, `currentSlot`) are advanced block-by-block in processing order so restart/resume points stay deterministic.
-- Scanner `tx_info` requests use adaptive resiliency: retriable transport/provider failures are retried with short backoff, then failing batches are split recursively to smaller `_tx_hashes` groups before failing hard.
+- Scanner `tx_info` requests use adaptive resiliency: retriable transport/provider failures are retried with short backoff, then failing batches are split recursively to smaller `_tx_hashes` groups before falling back to Blockfrost.
 - Koios `tx_info` transient provider pool saturation responses (for example `PGRST003` connection-pool timeouts) are treated as retriable in the same retry/split flow.
 - Scanner paces Koios batch calls (`tx_info`, `block_txs`, `asset_utxos`) to stay under 6 requests/second while still using request-size batching.
 - `block_txs` and `asset_utxos` calls use retry+backoff on transient provider failures (including HTTP 429) before failing hard.

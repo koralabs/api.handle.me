@@ -242,8 +242,8 @@ describe('Health Routes Test', () => {
             });
         });
 
-        it('Should return 202 updating while rollback_2160 is running even if ogmios is disconnected', async () => {
-            lockLambdas = LockedLambdaReason.ROLLBACK_2160;
+        it('Should return 202 updating while rollback is running even if ogmios is disconnected', async () => {
+            lockLambdas = LockedLambdaReason.ROLLBACK;
             jest.spyOn(ogmiosUtils, 'fetchHealth').mockResolvedValue(null);
             caughtUp.mockReturnValue(true);
 
@@ -266,7 +266,7 @@ describe('Health Routes Test', () => {
                     tip_block_hash: expect.any(String),
                     index_schema_version: expect.any(Number),
                     utxo_schema_version: expect.any(Number),
-                    lock_lambdas: 'ROLLBACK_2160'
+                    lock_lambdas: 'ROLLBACK'
                 },
                 status: 'updating'
             });

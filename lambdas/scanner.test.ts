@@ -224,7 +224,7 @@ describe('Scanner lambda unit tests', () => {
 
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next');
         expect(handlesRepo.setMetrics).not.toHaveBeenCalledWith(
-            expect.objectContaining({ lockLambdas: LockedLambdaReason.ROLLBACK_2160 })
+            expect.objectContaining({ lockLambdas: LockedLambdaReason.ROLLBACK })
         );
         expect(handlesRepo.setMetrics).not.toHaveBeenCalledWith(expect.objectContaining({ lastMaxRollbackCheck: expect.any(Number) }));
         expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
@@ -747,7 +747,7 @@ describe('Scanner lambda unit tests', () => {
         });
     });
 
-    it('scan runs rollback_20 when stale head is near tip', async () => {
+    it('scan runs rollback when stale head is near tip', async () => {
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'stale_hash', currentSlot: 100, lockLambdas: LockedLambdaReason.UNLOCKED });
 
@@ -808,7 +808,7 @@ describe('Scanner lambda unit tests', () => {
         );
     });
 
-    it('scan runs rollback_2160 when stale head is far behind tip', async () => {
+    it('scan runs rollback when stale head is far behind tip', async () => {
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'stale_hash', currentSlot: 100, lockLambdas: LockedLambdaReason.UNLOCKED });
 

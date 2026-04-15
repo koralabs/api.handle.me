@@ -18,19 +18,23 @@
 **Symptoms:**
 - CloudWatch shows repeated `scannerLambda.lockedTooLong` warnings
 - `platform.report` shows `status: timeout`, `durationMs: 900000`
-- `lockLambdas: SCANNING` in metrics
+- `lockLambdas: SCANNING` or `lockLambdas: ROLLBACK` in metrics
 - Slot not advancing
 
-**Root cause:** A Koios request is hanging, or a specific block is causing the scanner to spin.
+**Root cause:** The scanner has a 12-minute hard deadline (`ScannerDeadlineError`) that should exit cleanly before the 15-minute Lambda timeout. If you see actual 15-minute timeouts, the deadline mechanism isn't firing — check breadcrumb logs (`scannerLambda.breadcrumb`, `scannerLambda.scan.breadcrumb`, `scannerLambda.rollback.breadcrumb`) to pinpoint where execution hangs.
+
+The scanner falls back to Blockfrost when Koios calls fail. If both providers are down or the head points to an orphaned block, the rollback hash-set detection identifies orphaned UTxOs and repairs only the affected handles.
 
 **Recovery:**
-1. Clear the metrics via valkey-utility to trigger a snapshot reimport:
+1. Check breadcrumb logs in CloudWatch — they show exactly which step hung
+2. If the scanner head is stuck on an orphaned block, the hash-set rollback should self-recover on the next invocation
+3. If self-recovery is not working, clear metrics via valkey-utility to trigger a snapshot reimport:
    ```json
    {"currentBlockHash": "", "currentSlot": "0", "lockLambdas": "", "lockLambdasTimestamp": "0"}
    ```
-2. Before clearing, **bump scanner Lambda memory to 10GB** (see below)
-3. Publish a new version and update the alias
-4. After reimport completes and scanner catches up, restore memory to 4GB
+4. Before clearing, **bump scanner Lambda memory to 10GB** (see below)
+5. Publish a new version and update the alias
+6. After reimport completes and scanner catches up, restore memory to 4GB
 
 ---
 

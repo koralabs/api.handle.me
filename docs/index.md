@@ -12,6 +12,7 @@
 - [Index and Data Model](./spec/index-model.md)
 - [Runtime Entrypoints](./spec/runtime-entrypoints.md)
 - [@handlecontract Script Discovery](./spec/handlecontract-script-discovery.md)
+- [Scanner Recovery Runbook](./spec/scanner-recovery-runbook.md)
 - [OpenAPI Swagger](./swagger.yml)
 
 ## Environment

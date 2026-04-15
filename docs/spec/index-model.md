@@ -37,6 +37,12 @@
 3. Repository hydrates stored handle objects and default-handle projection.
 4. Controller serializes output shape for JSON or text responses.
 
+## Key Namespace
+All index keys are scoped under `{api:<network>}:<IndexName>` (e.g., `{api:mainnet}:HANDLE`). Additional operational keys outside the index domains:
+- `scanner:lease` — expiring SET NX lease for scanner concurrency
+- `scanner:recovery` — recovery flag for mid-phase interruption (`rollback` or `reindex`)
+- `mpt_root_hash` — cached MPT root computed from the current handle set
+
 ## Consistency Invariants
 - Scanner/index writes are synchronous by block/UTxO ordering.
 - Missing minting data during update is a hard error (scanner invariant protection).

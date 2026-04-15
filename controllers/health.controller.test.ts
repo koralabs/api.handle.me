@@ -221,7 +221,7 @@ describe('HealthController', () => {
         const repoMock = {
             getMetrics: jest.fn().mockReturnValue({
                 ...baseMetrics,
-                lockLambdas: LockedLambdaReason.ROLLBACK_2160
+                lockLambdas: LockedLambdaReason.ROLLBACK
             }),
             isCaughtUp: jest.fn().mockReturnValue(true)
         };

@@ -577,7 +577,7 @@ describe('HandlesRepository branch tests', () => {
             currentSlot: freshCurrentSlot,
             currentBlockHash: 'tip',
             tipBlockHash: 'tip',
-            lockLambdas: LockedLambdaReason.ROLLBACK_2160
+            lockLambdas: LockedLambdaReason.ROLLBACK
         });
         expect(repo.isCaughtUp()).toBe(true);
         expect(repo.currentHttpStatus()).toBe(202);
