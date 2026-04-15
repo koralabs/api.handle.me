@@ -442,7 +442,7 @@ export class RedisHandlesStore implements IApiStore {
     }
 
     public holderCount(): number {
-        return this.redisClientCall('scard', getApiIndexRootKey(IndexNames.HOLDER), { value: -Infinity }, { value: Infinity });
+        return this.redisClientCall('scard', getApiIndexRootKey(IndexNames.HOLDER));
     }
 
     public getUTxOSchemaVersion(): number {

@@ -13,7 +13,7 @@ enum HealthStatus {
     WAITING_ON_CARDANO_NODE = 'waiting_on_cardano_node'
 }
 
-const updatingLocks = new Set<LockedLambdaReason>([LockedLambdaReason.ROLLBACK_2160, LockedLambdaReason.REINDEX]);
+const updatingLocks = new Set<LockedLambdaReason>([LockedLambdaReason.ROLLBACK, LockedLambdaReason.REINDEX]);
 
 const getHealthSlotDate = (currentSlot: number) => {
     if (process.env.NETWORK?.toLowerCase() == 'preprod') {

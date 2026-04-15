@@ -1,6 +1,0 @@
-- Owning repo confirmed as `koralabs/api.handle.me` (alert `application=api.handle.me` matches folder/repo convention).
-- Created tracking issue: `koralabs/api.handle.me#[REDACTED_ENV:SHLVL]38`.
-- Remediation in `repositories/handlesRepository.ts:[REDACTED_ENV:SHLVL]3[REDACTED_ENV:SHLVL]`: unfiltered paginated `/handles` searches now short-circuit to paginated index access (avoids full `HANDLE` set enumeration that can trigger request timeouts).
-- Regression coverage added in `repositories/tests/handles.repository.search.test.ts:5` (plus a branch-coverage assertion update in `repositories/tests/handles.repository.branches.test.ts:[REDACTED_ENV:SHLVL]3`).
-- Validation: `npm run test:unit` and `npm run test:e2e` both pass.
-- Staged for inclusion in the eventual branch commit: `.kora/executor-logs/955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70.stderr.log` and `.kora/executor-logs/955[REDACTED_ENV:SHLVL]bd03-0b7e-48b5-ac7c-60f4[REDACTED_ENV:SHLVL]c458[REDACTED_ENV:SHLVL]70.stdout.log`.

@@ -42,7 +42,7 @@ export const fetchPaginatedResults = async <T>(endpointSegment: string, maxResul
         }
     } catch (error) {
         Logger.log({ message: `Error fetching ${endpointSegment}: ${error}`, category: LogCategory.NOTIFY, event: 'fetchPaginatedResults' });
-        return [];
+        throw error;
     }
 
     return Number.isFinite(maxResults) ? results.slice(0, maxResults) : results;
@@ -287,7 +287,13 @@ export const fetchBlockfrostTxInfo = async (txHash: string): Promise<KoiosTxInfo
             try {
                 const scriptCbor = await blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}/cbor`);
                 output.reference_script = { bytes: scriptCbor.cbor ?? '', type: 'PlutusScriptV2' };
-            } catch { /* skip if script fetch fails */ }
+            } catch (e: any) {
+                Logger.log({
+                    message: `Failed to fetch reference script ${bfOutput.reference_script_hash} for ${txHash}#${output.tx_index}: ${e?.message ?? e}`,
+                    category: LogCategory.NOTIFY,
+                    event: 'blockfrostFallback.referenceScriptFetchFailed'
+                });
+            }
         }
     }
 
@@ -310,7 +316,13 @@ export const fetchBlockfrostTxInfo = async (txHash: string): Promise<KoiosTxInfo
                     metadata[entry.label] = entry.json_metadata;
                 }
             }
-        } catch { /* no metadata */ }
+        } catch (e: any) {
+            Logger.log({
+                message: `Failed to fetch metadata for ${txHash}: ${e?.message ?? e}`,
+                category: LogCategory.NOTIFY,
+                event: 'blockfrostFallback.metadataFetchFailed'
+            });
+        }
     }
 
     return {

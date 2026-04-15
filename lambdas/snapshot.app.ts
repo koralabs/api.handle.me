@@ -102,7 +102,7 @@ const getRedisItems = async () => {
     const mints: Map<string, MintingData[] | null> = new Map();
     let handleNames: string[] = [];
 
-    let lastSlot = 0; // Lets hardcode this to 20 blocks ago (from Bf) To avoid recording a rollbak to the snapshot
+    let lastSlot = 0; // Lets hardcode this to 20 blocks ago (from Bf) To avoid recording a rollback to the snapshot
     let lastHash = '';
     let utxoSchemaVersion = 0;
 
@@ -159,24 +159,23 @@ const getRedisItems = async () => {
                 }
 
                 // check if keys start with the env-scoped mint prefix and add the member key
+                const mintKeys: string[] = [];
                 const pipelineResults: (Set<string> | undefined)[] = redisHandleStore.pipeline(() => {
                     for (const key of keys) {
                         const mintKey = extractApiIndexMember(`${key}`, IndexNames.MINT);
                         if (!mintKey) continue;
+                        mintKeys.push(mintKey);
                         redisHandleStore.getValuesFromIndexedSet(IndexNames.MINT, mintKey);
                     }
                 });
-                // Logger.local('PIPELINE RESULTS LENGTH', pipelineResults, pipelineResults.length);
                 for (let i = 0; i < pipelineResults.length; i++) {
                     const item = pipelineResults[i];
-                    const mintKey = extractApiIndexMember(`${keys[i]}`, IndexNames.MINT);
-                    if (!mintKey) continue;
                     const filteredResults: MintingData[] = item
                         ? Array.from(item)
                               .map((md) => JSON.parse(md))
                               .filter((md) => md.created_slot <= lastSlot)
                         : [];
-                    mints.set(mintKey, filteredResults);
+                    mints.set(mintKeys[i], filteredResults);
                 }
             }
         } while (cursor !== '0');
@@ -246,15 +245,10 @@ export const handler = async (event: any) => {
             const s3Client = new S3Client({ region: 'us-west-2' });
             const now = new Date(Date.now());
 
+            const compressedBody = zlib.deflateSync(JSON.stringify(verifiedFileJson));
             const zippedSnapshots = [
-                {
-                    Key: fileName,
-                    Body: zlib.deflateSync(JSON.stringify(verifiedFileJson))
-                },
-                {
-                    Key: getArchivedSnapshotKey(network, utxoSchemaVersion, now),
-                    Body: zlib.deflateSync(JSON.stringify(verifiedFileJson))
-                }
+                { Key: fileName, Body: compressedBody },
+                { Key: getArchivedSnapshotKey(network, utxoSchemaVersion, now), Body: compressedBody }
             ];
 
             const s3Result = await Promise.all(

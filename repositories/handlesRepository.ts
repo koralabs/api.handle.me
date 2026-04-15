@@ -51,7 +51,7 @@ export class HandlesRepository {
 
     public currentHttpStatus(): number {
         const { lockLambdas } = this.store.getMetrics();
-        if ([LockedLambdaReason.ROLLBACK_2160, LockedLambdaReason.REINDEX].includes(lockLambdas as LockedLambdaReason)) {
+        if ([LockedLambdaReason.ROLLBACK, LockedLambdaReason.REINDEX].includes(lockLambdas as LockedLambdaReason)) {
             return 202;
         }
         return this.isCaughtUp() ? 200 : 202        

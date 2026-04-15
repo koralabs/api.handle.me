@@ -88,14 +88,13 @@ describe('helpers pagination tests', () => {
         expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    it('fetchPaginatedResults should return empty list and log on thrown error', async () => {
+    it('fetchPaginatedResults should log and rethrow on thrown error', async () => {
         const fetchMock = jest.fn().mockRejectedValue(new Error('network unavailable'));
         global.fetch = fetchMock as any;
         const logSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
 
-        const results = await fetchPaginatedResults<string>('blocks/latest/next');
+        await expect(fetchPaginatedResults<string>('blocks/latest/next')).rejects.toThrow('network unavailable');
 
-        expect(results).toEqual([]);
         expect(logSpy).toHaveBeenCalledWith(
             expect.objectContaining({
                 message: expect.stringContaining('Error fetching blocks/latest/next')

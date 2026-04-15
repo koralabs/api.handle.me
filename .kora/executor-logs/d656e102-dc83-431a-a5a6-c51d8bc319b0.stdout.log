@@ -1,5 +1,0 @@
-- Owning repo confirmed as `koralabs/api.handle.me`; created tracking issue `koralabs/api.handle.me#[REDACTED_ENV:SHLVL]39`.
-- Keeps unfiltered paginated `/handles` searches from enumerating the full HANDLE set (timeout risk) and uses `store.count()` as the fallback for `searchTotal` when metrics are missing: `repositories/handlesRepository.ts:[REDACTED_ENV:SHLVL]3[REDACTED_ENV:SHLVL]`.
-- Updated unit tests/mocks to match the `count()` fallback: `repositories/tests/handles.repository.search.test.ts:[REDACTED_ENV:SHLVL]`, `repositories/tests/handles.repository.branches.test.ts:[REDACTED_ENV:SHLVL]3`.
-- Force-added this run’s executor logs (per job contract): `.kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stderr.log:[REDACTED_ENV:SHLVL]`, `.kora/executor-logs/d656e[REDACTED_ENV:KORA_AMBIENT_RESPONSE_RATE_PERCENT]2-dc83-43[REDACTED_ENV:SHLVL]a-a5a6-c5[REDACTED_ENV:SHLVL]d8bc3[REDACTED_ENV:SHLVL]9b0.stdout.log:[REDACTED_ENV:SHLVL]`.
-- Verified: `npm run test:unit`, `npm run test:e2e`.

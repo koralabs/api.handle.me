@@ -28,7 +28,6 @@ const SCRIPT_SOURCES: Record<ScriptType, { slug: string; repo: string; deploymen
 const SCRIPT_TYPES_BY_SLUG = Object.entries(SCRIPT_SOURCES)
     .sort(([, left], [, right]) => right.slug.length - left.slug.length)
     .map(([type, source]) => [source.slug, type as ScriptType] as const);
-const SCRIPT_TYPE_VALUES = Object.values(ScriptType).sort((left, right) => right.length - left.length);
 const LEGACY_SCRIPT_TYPE_ALIASES: Record<string, ScriptType> = {
     pz_contract: ScriptType.PZ_CONTRACT,
     sub_handle_settings: ScriptType.SUB_HANDLE_SETTINGS,
@@ -123,15 +122,15 @@ export const resolvePreferredScriptTypeForHandleName = (handleName?: string): Sc
 
     if (normalizedHandleName.endsWith(HANDLE_SUFFIX)) {
         const slugWithOrdinal = normalizedHandleName.slice(0, -HANDLE_SUFFIX.length);
-        const scriptType = SCRIPT_TYPE_VALUES.find((prefix) => {
-            if (!slugWithOrdinal.startsWith(prefix)) {
+        const match = SCRIPT_TYPES_BY_SLUG.find(([slug]) => {
+            if (!slugWithOrdinal.startsWith(slug)) {
                 return false;
             }
 
-            return /^\d+$/.test(slugWithOrdinal.slice(prefix.length));
+            return /^\d+$/.test(slugWithOrdinal.slice(slug.length));
         });
-        if (scriptType) {
-            return scriptType;
+        if (match) {
+            return match[1];
         }
     }
 

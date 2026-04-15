@@ -191,7 +191,7 @@ describe('Scanner lambda unit tests', () => {
 
     it('returns early when lambdas are locked', async () => {
         const { handlesRepo, scannerModule } = setup();
-        handlesRepo.getMetrics.mockReturnValue({ lockLambdas: LockedLambdaReason.ROLLBACK_20, currentSlot: 100 });
+        handlesRepo.getMetrics.mockReturnValue({ lockLambdas: LockedLambdaReason.ROLLBACK, currentSlot: 100 });
 
         await expect(scannerModule.lambdaHandler({} as any, {} as any)).resolves.toBeUndefined();
 
@@ -210,7 +210,7 @@ describe('Scanner lambda unit tests', () => {
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next');
         expect(handlesRepo.setMetrics).toHaveBeenNthCalledWith(
             1,
-            expect.objectContaining({ lockLambdas: LockedLambdaReason.ROLLBACK_20, lockLambdasTimestamp: expect.any(Number) })
+            expect.objectContaining({ lockLambdas: LockedLambdaReason.ROLLBACK, lockLambdasTimestamp: expect.any(Number) })
         );
         expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
     });
@@ -257,7 +257,7 @@ describe('Scanner lambda unit tests', () => {
 
         expect(handlesRepo.setMetrics).toHaveBeenNthCalledWith(
             1,
-            expect.objectContaining({ lockLambdas: LockedLambdaReason.ROLLBACK_20, lockLambdasTimestamp: expect.any(Number) })
+            expect.objectContaining({ lockLambdas: LockedLambdaReason.ROLLBACK, lockLambdasTimestamp: expect.any(Number) })
         );
         expect(handlesRepo.setMetrics).toHaveBeenCalledWith({
             lastSlot: 130,
@@ -1591,8 +1591,8 @@ describe('Scanner lambda unit tests', () => {
     });
 
     it.each([
-        { reason: LockedLambdaReason.SCANNING, ageMs: 6 * 60 * 1000 },
-        { reason: LockedLambdaReason.ROLLBACK_20, ageMs: 6 * 60 * 1000 },
+        { reason: LockedLambdaReason.SCANNING, ageMs: 11 * 60 * 1000 },
+        { reason: LockedLambdaReason.ROLLBACK, ageMs: 11 * 60 * 1000 },
         { reason: LockedLambdaReason.REINDEX, ageMs: 11 * 60 * 1000 },
         { reason: 'SNAPSHOT' as LockedLambdaReason, ageMs: 11 * 60 * 1000 }
     ])('recovers stale lambda lock: $reason', async ({ reason, ageMs }) => {

@@ -352,18 +352,17 @@ const getBatchedTxInfo = async (txHashes: string[]) => {
     return txs;
 };
 
-const getBatchedDatumInfo = async (txInfo: KoiosTxInfo[]) => {
-    const datumHashes = [...new Set(
-        txInfo.flatMap((tx) =>
-            (tx.outputs ?? []).flatMap((output) => {
-                if (output.inline_datum?.bytes || !output.datum_hash) {
-                    return [];
-                }
+const extractDatumHashes = (txInfo: KoiosTxInfo[]): string[] => [...new Set(
+    txInfo.flatMap((tx) =>
+        (tx.outputs ?? []).flatMap((output) => {
+            if (output.inline_datum?.bytes || !output.datum_hash) return [];
+            return [output.datum_hash];
+        })
+    )
+)];
 
-                return [output.datum_hash];
-            })
-        )
-    )];
+const getBatchedDatumInfo = async (txInfo: KoiosTxInfo[]) => {
+    const datumHashes = extractDatumHashes(txInfo);
 
     const datumInfoByHash = new Map<string, string>();
     if (!datumHashes.length) return datumInfoByHash;
@@ -384,13 +383,6 @@ const getBatchedDatumInfo = async (txInfo: KoiosTxInfo[]) => {
     return datumInfoByHash;
 };
 
-const getBatchedUTxOs = async (txHashes: string[], txs?: KoiosTxInfo[]) => {
-    const txInfo = txs ?? await getBatchedTxInfo(txHashes);
-    const datumInfoByHash = await getBatchedDatumInfo(txInfo);
-    const utxos: UTxOWithTxInfo[] = [];
-    utxos.push(...buildUTxOsFromKoiosTxs(txInfo, datumInfoByHash));
-    return utxos;
-};
 
 const fetchBlockTxHashBatchWithRetry = async (hashBatch: string[], attempt = 0): Promise<string[]> => {
     checkDeadline('block_txs_retry');
@@ -506,14 +498,7 @@ const getBatchedDatumInfoWithFallback = async (txInfo: KoiosTxInfo[]): Promise<M
             category: LogCategory.WARN,
             event: 'scannerLambda.koiosDatumInfo.fallbackToBlockfrost'
         });
-        const datumHashes = [...new Set(
-            txInfo.flatMap((tx) =>
-                (tx.outputs ?? []).flatMap((output) => {
-                    if (output.inline_datum?.bytes || !output.datum_hash) return [];
-                    return [output.datum_hash];
-                })
-            )
-        )];
+        const datumHashes = extractDatumHashes(txInfo);
         const datumInfoByHash = new Map<string, string>();
         for (const datumHash of datumHashes) {
             const cbor = await fetchBlockfrostDatumCbor(datumHash);
