@@ -1242,14 +1242,15 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
     store.initialize();
     logBreadcrumb('store_initialized');
     const isReindexShortcut = shouldTriggerReindexShortcut(event);
+    const isRepairShortcut = extractRepairHandlesFromEvent(event) !== null;
     const leaseOwner = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const leaseAcquired = acquireScannerLease(leaseOwner);
-    if (!leaseAcquired && !isReindexShortcut) {
+    if (!leaseAcquired && !isReindexShortcut && !isRepairShortcut) {
         logBreadcrumb('lease_not_acquired_skipping');
         return;
     }
-    if (!leaseAcquired && isReindexShortcut) {
-        logBreadcrumb('lease_not_acquired_but_reindex_shortcut');
+    if (!leaseAcquired && (isReindexShortcut || isRepairShortcut)) {
+        logBreadcrumb(`lease_not_acquired_but_${isReindexShortcut ? 'reindex' : 'repair'}_shortcut`);
     }
 
     let heartbeat: NodeJS.Timeout | undefined;
