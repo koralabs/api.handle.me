@@ -1,4 +1,4 @@
-import { AssetNameLabel, asyncForEach, buildHolderInfo, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, NETWORK, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, asyncForEach, buildHolderInfo, HANDLE_POLICIES, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, Network, NETWORK, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { WHITELISTED_API_KEYS } from '../config';
 import { BlockfrostBlock, KoiosAssetUTxO, KoiosDatumInfo, KoiosTxInfo } from '../interfaces/provider.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
@@ -212,6 +212,24 @@ const shouldTriggerReindexShortcut = (event: any): boolean => {
     } catch {
         return false;
     }
+};
+
+const extractRepairHandlesFromEvent = (event: any): string[] | null => {
+    if (!isFunctionUrlEvent(event)) return null;
+    const path = `${event?.rawPath ?? event?.requestContext?.http?.path ?? ''}`.trim();
+    if (path !== '/repair-handles' && path !== '/scanner/repair-handles') return null;
+    if (!event?.body) return [];
+    let rawBody = `${event.body}`;
+    if (event?.isBase64Encoded) {
+        rawBody = Buffer.from(rawBody, 'base64').toString('utf8');
+    }
+    try {
+        const parsedBody = JSON.parse(rawBody);
+        if (Array.isArray(parsedBody?.handles) && parsedBody.handles.every((h: any) => typeof h === 'string')) {
+            return parsedBody.handles;
+        }
+    } catch { /* fall through */ }
+    return null;
 };
 
 const isWhitelistedScannerShortcutRequest = (event: any): boolean => {
@@ -595,7 +613,14 @@ const processRollback = async ({ currentSlot, rollbackOffset = 2160, suppressNot
     const providerBlocks = blockList.filter((b) => b.slot <= currentSlot).sort((a, b) => a.slot - b.slot);
     if (!providerBlocks.length) return;
 
-    // ===== PHASE 2: Compare block hashes to find orphaned UTxOs (instant — Redis + set lookup) =====
+    // ===== PHASE 2: Find candidates for repair =====
+    // A stored UTxO may be stale in two ways:
+    //  (1) ORPHANED: its blockHash is not on the canonical chain (chain rollback happened)
+    //  (2) DRIFTED:  its blockHash IS canonical, but the chain has since moved the handle
+    //                to a newer UTxO that the scanner missed (missed-update bug)
+    // We detect (1) here via hash-set comparison. (2) is detected in Phase 4 by comparing
+    // each handle's stored tx_hash against its current on-chain tx_hash from asset_utxos.
+    // Both types share the same repair path (Phase 5).
     const canonicalBlockHashes = new Set(blockList.map((b) => b.hash));
 
     const utxoIds = store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 0, { start: firstBlock.slot }) as string[];
@@ -606,9 +631,8 @@ const processRollback = async ({ currentSlot, rollbackOffset = 2160, suppressNot
     const orphanedUtxos = utxos.filter((u) => u.blockHash && !canonicalBlockHashes.has(u.blockHash));
     rbBreadcrumb('orphan_check_done', `storedUtxos=${utxos.length} orphaned=${orphanedUtxos.length}`);
 
-    if (!orphanedUtxos.length) {
-        // No orphaned UTxOs — stored state matches canonical chain.
-        // Update head to latest canonical block at or before currentSlot.
+    if (!utxos.length) {
+        // No stored UTxOs in the window — nothing to verify. Update head and return.
         const recoveredHead = providerBlocks[providerBlocks.length - 1];
         handlesRepo.setMetrics({
             currentBlockHash: recoveredHead.hash,
@@ -619,9 +643,11 @@ const processRollback = async ({ currentSlot, rollbackOffset = 2160, suppressNot
         return;
     }
 
-    // ===== PHASE 3: Get affected handles (from orphaned UTxOs — small set) =====
+    // ===== PHASE 3: Gather ALL handle names in the window (for drift detection) =====
+    // We extract handles from every stored UTxO in the window, not just orphans.
+    // This lets Phase 4 catch canonical drift where the stored UTxO is canonical but stale.
     const handleNames: Set<string> = new Set();
-    for (const utxo of orphanedUtxos) {
+    for (const utxo of utxos) {
         for (const assets of utxo?.handles ?? []) {
             assets[1].forEach((assetName) => {
                 const { name } = getHandleNameFromAssetName(assetName);
@@ -639,7 +665,8 @@ const processRollback = async ({ currentSlot, rollbackOffset = 2160, suppressNot
 
     rbBreadcrumb('affected_handles', `orphanedUtxos=${orphanedUtxos.length} handles=${handles.length}`);
 
-    // ===== PHASE 4: Fetch current on-chain state for affected handles (targeted — only the damaged handles) =====
+    // ===== PHASE 4: Query canonical state for all handles in the window =====
+    // Build batched asset_utxos queries for all handles (LBL_222/100/001 for CIP67, raw hex for legacy)
     const batchedHandles: [string, string][][] = [];
     let assetNames: [string, string][] = [];
     for (const storedHandle of storedHandles) {
@@ -657,56 +684,111 @@ const processRollback = async ({ currentSlot, rollbackOffset = 2160, suppressNot
     }
     if (assetNames.length) batchedHandles.push(assetNames);
 
+    // Fetch asset_utxos — returns current on-chain UTxO location for each handle asset
     const handleTxHashes: string[] = [];
+    const canonicalTxByHandle = new Map<string, string>();
     rbBreadcrumb('fetchAssetUtxos_start', `batchCount=${batchedHandles.length} handleCount=${storedHandles.length}`);
     await asyncForEach(batchedHandles, async (batch) => {
         const koiosUtxos = await fetchAssetUtxoBatchWithRetry(batch);
         if (koiosUtxos !== null) {
             for (const utxo of koiosUtxos) {
                 handleTxHashes.push(utxo.tx_hash);
+                // Extract handle → canonical tx mapping for drift detection
+                for (const asset of utxo.asset_list ?? []) {
+                    if (HANDLE_POLICIES.contains(NETWORK as Network, asset.policy_id)) {
+                        const { name } = getHandleNameFromAssetName(asset.asset_name);
+                        canonicalTxByHandle.set(name, utxo.tx_hash);
+                    }
+                }
             }
         }
     }, KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS);
     rbBreadcrumb('fetchAssetUtxos_done', `handleTxHashes=${handleTxHashes.length}`);
 
+    // ===== PHASE 4b: Identify handles needing repair (orphaned OR drifted) =====
+    const orphanedHandles = new Set<string>();
+    for (const utxo of orphanedUtxos) {
+        for (const assets of utxo.handles ?? []) {
+            assets[1].forEach((assetName) => {
+                orphanedHandles.add(getHandleNameFromAssetName(assetName).name);
+            });
+        }
+    }
+    const driftedHandles = new Set<string>();
+    for (const storedHandle of storedHandles) {
+        const storedTx = storedHandle.utxo?.split('#')[0];
+        const canonicalTx = canonicalTxByHandle.get(storedHandle.name);
+        if (canonicalTx && storedTx && storedTx !== canonicalTx) {
+            driftedHandles.add(storedHandle.name);
+        }
+    }
+    const handlesToRepair = new Set<string>([...orphanedHandles, ...driftedHandles]);
+    rbBreadcrumb('drift_check_done', `orphanedHandles=${orphanedHandles.size} driftedHandles=${driftedHandles.size} toRepair=${handlesToRepair.size}`);
+
+    if (!handlesToRepair.size) {
+        // No repairs needed — stored state matches canonical chain.
+        const recoveredHead = providerBlocks[providerBlocks.length - 1];
+        handlesRepo.setMetrics({
+            currentBlockHash: recoveredHead.hash,
+            currentSlot: recoveredHead.slot,
+            ...(latestBlock.hash ? { tipBlockHash: latestBlock.hash } : {}),
+            ...(latestBlock.slot > 0 ? { lastSlot: latestBlock.slot } : {})
+        });
+        return;
+    }
+
+    // ===== PHASE 5: Fetch canonical UTxO data for handles needing repair =====
     rbBreadcrumb('fetchCanonicalUtxos_start');
     const canonicalHandleUTxOs = await getBatchedUTxOsWithFallback([...new Set(handleTxHashes)]);
     rbBreadcrumb('fetchCanonicalUtxos_done', `count=${canonicalHandleUTxOs.length}`);
-    const rollbackHandleSet = new Set(handles);
-    const relevantCanonicalUTxOs = canonicalHandleUTxOs
-        .map((utxo) => filterUTxOToHandleNames(utxo, rollbackHandleSet))
+    const repairCanonicalUTxOs = canonicalHandleUTxOs
+        .map((utxo) => filterUTxOToHandleNames(utxo, handlesToRepair))
         .filter((utxo): utxo is UTxOWithTxInfo => !!utxo);
 
-    // ===== PHASE 5: Repair — remove orphaned data, apply canonical state =====
-    const rollbackStartSlot = Math.min(...orphanedUtxos.map((u) => u.slot));
-    const firstOrphanedHeight = Math.min(...orphanedUtxos.map((u) => u.blockNum));
-    const distanceFromTip = latestBlock.height - firstOrphanedHeight;
+    // ===== PHASE 6: Repair =====
+    const affectedStoredHandles = storedHandles.filter((h) => handlesToRepair.has(h.name));
+    const repairHandleNames = [...handlesToRepair];
+
+    // Identify stale UTxOs to remove: orphans + drift-source stored UTxOs for affected handles
+    const staleUtxoIds = new Set<string>(orphanedUtxos.map((u) => u.id));
+    for (const h of affectedStoredHandles) {
+        if (driftedHandles.has(h.name) && h.utxo) staleUtxoIds.add(h.utxo);
+    }
+
+    const firstStaleHeight = orphanedUtxos.length
+        ? Math.min(...orphanedUtxos.map((u) => u.blockNum))
+        : latestBlock.height;
+    const distanceFromTip = latestBlock.height - firstStaleHeight;
     Logger.log({
-        message: `Rollback detected: ${orphanedUtxos.length} orphaned UTxOs across ${handles.length} handles from slot ${rollbackStartSlot} (${distanceFromTip} blocks from tip)`,
+        message: `Rollback repair: orphaned=${orphanedHandles.size} drifted=${driftedHandles.size} (${distanceFromTip} blocks from tip)`,
         category: suppressNotify || distanceFromTip <= 20 ? LogCategory.WARN : LogCategory.NOTIFY,
         event: 'scannerLambda.rollbackDetected'
     });
 
-    // Remove minting data from orphaned range
-    const handlesMintingData = store.pipeline(() => {
-        handles.forEach((handleName) => handlesRepo.getHandleMintingData(handleName));
-    }) as Set<string>[];
-    store.pipeline(() => {
-        handles.forEach((handleName, index) => {
-            const mintingDataSet = handlesMintingData[index];
-            if (mintingDataSet) {
-                mintingDataSet.forEach((md) => {
-                    const mintingData = JSON.parse(md) as MintingData;
-                    if (mintingData.created_slot >= rollbackStartSlot) {
-                        store.removeValueFromIndexedSet(IndexNames.MINT, handleName, md);
-                    }
-                });
-            }
+    // Remove mint data created in the orphaned range (only applies if we have orphans —
+    // drift is a pure transfer miss and doesn't involve rolled-back mints).
+    if (orphanedUtxos.length) {
+        const rollbackStartSlot = Math.min(...orphanedUtxos.map((u) => u.slot));
+        const handlesMintingData = store.pipeline(() => {
+            repairHandleNames.forEach((handleName) => handlesRepo.getHandleMintingData(handleName));
+        }) as Set<string>[];
+        store.pipeline(() => {
+            repairHandleNames.forEach((handleName, index) => {
+                const mintingDataSet = handlesMintingData[index];
+                if (mintingDataSet) {
+                    mintingDataSet.forEach((md) => {
+                        const mintingData = JSON.parse(md) as MintingData;
+                        if (mintingData.created_slot >= rollbackStartSlot) {
+                            store.removeValueFromIndexedSet(IndexNames.MINT, handleName, md);
+                        }
+                    });
+                }
+            });
         });
-    });
+    }
 
     // Update holders
-    const stakeAddresses = storedHandles.map((h) => buildHolderInfo(h.resolved_addresses.ada).address);
+    const stakeAddresses = affectedStoredHandles.map((h) => buildHolderInfo(h.resolved_addresses.ada).address);
     const holderHandles = store.pipeline(() => {
         stakeAddresses.forEach((address) => store.getValuesFromIndexedSet(IndexNames.HOLDER, address));
     }) as Set<string>[];
@@ -715,32 +797,32 @@ const processRollback = async ({ currentSlot, rollbackOffset = 2160, suppressNot
         holdersMap.set(address, holderHandles[index]);
     });
     store.pipeline(() => {
-        storedHandles.forEach((handle) => handlesRepo.updateHolder(handle, holdersMap));
+        affectedStoredHandles.forEach((handle) => handlesRepo.updateHolder(handle, holdersMap));
     });
 
-    // Remove orphaned UTxOs
-    handlesRepo.removeUTxOs(orphanedUtxos.map((u) => u.id));
+    // Remove stale UTxOs (orphaned + drift-source)
+    if (staleUtxoIds.size) handlesRepo.removeUTxOs([...staleUtxoIds]);
 
     // Add canonical UTxOs and minting data
-    handlesRepo.addUTxOsWithMintData(relevantCanonicalUTxOs);
-    handlesRepo.addMintDataFromUTxOs(relevantCanonicalUTxOs);
+    handlesRepo.addUTxOsWithMintData(repairCanonicalUTxOs);
+    handlesRepo.addMintDataFromUTxOs(repairCanonicalUTxOs);
 
     // Rebuild indexes for affected handles
-    const storedHandlesMap = new Map<string, StoredHandle>(storedHandles.map((h) => [h.name, h]));
+    const storedHandlesMap = new Map<string, StoredHandle>(affectedStoredHandles.map((h) => [h.name, h]));
     const retrievedMintingData = store.pipeline(() => {
-        handles.forEach((handleName) => handlesRepo.getHandleMintingData(handleName));
+        repairHandleNames.forEach((handleName) => handlesRepo.getHandleMintingData(handleName));
     }) as Set<string>[];
     const mintValueIndex: Map<string, MintingData[]> = new Map();
     retrievedMintingData.forEach((md, i) => {
-        mintValueIndex.set(handles[i], Array.from(md).map((md) => JSON.parse(md)));
+        mintValueIndex.set(repairHandleNames[i], Array.from(md).map((md) => JSON.parse(md)));
     });
     store.pipeline(() => {
-        for (const utxo of relevantCanonicalUTxOs) {
+        for (const utxo of repairCanonicalUTxOs) {
             handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap);
         }
     });
 
-    rbBreadcrumb('repair_done', `removedUtxos=${orphanedUtxos.length} addedUtxos=${relevantCanonicalUTxOs.length}`);
+    rbBreadcrumb('repair_done', `removedUtxos=${staleUtxoIds.size} addedUtxos=${repairCanonicalUTxOs.length} repairedHandles=${handlesToRepair.size}`);
 
     // ===== PHASE 6: Update head to last canonical block at or before currentSlot =====
     const recoveredHead = providerBlocks[providerBlocks.length - 1];
@@ -843,6 +925,135 @@ const clearStaleLockIfNeeded = (metrics: ReturnType<HandlesRepository['getMetric
 
     handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
     return true;
+};
+
+/**
+ * Window-agnostic repair for a specific list of handle names.
+ *
+ * Unlike processRollback (which is scoped to a 2160-block window and catches
+ * orphaned + drifted UTxOs within that window), this function repairs handles
+ * regardless of how old their stored state is. It's used by the one-time
+ * full-chain verification script to fix handles whose stored tx has drifted
+ * further back than the rollback window reaches.
+ *
+ * Flow: load stored handles → asset_utxos for canonical locations → identify
+ * drift → fetch tx_info → apply the same repair as processRollback.
+ */
+const repairHandles = async (handleNames: string[]): Promise<{ checked: number; repaired: number; notFound: number }> => {
+    if (!handleNames.length) return { checked: 0, repaired: 0, notFound: 0 };
+
+    const storedHandles = store
+        .pipeline(() => {
+            handleNames.forEach((name) => handlesRepo.getHandle(name));
+        })
+        .filter(Boolean) as StoredHandle[];
+
+    if (!storedHandles.length) return { checked: handleNames.length, repaired: 0, notFound: handleNames.length };
+
+    // Build asset_utxos batches for all target handles
+    const batchedAssets: [string, string][][] = [];
+    let assetNames: [string, string][] = [];
+    for (const storedHandle of storedHandles) {
+        const { isCip67 } = getHandleNameFromAssetName(storedHandle.hex);
+        assetNames.push([storedHandle.policy, storedHandle.hex]);
+        if (isCip67) {
+            const hexWithoutLabel = storedHandle.hex.slice(8);
+            assetNames.push([storedHandle.policy, `${AssetNameLabel.LBL_100}${hexWithoutLabel}`]);
+            assetNames.push([storedHandle.policy, `${AssetNameLabel.LBL_001}${hexWithoutLabel}`]);
+        }
+        if (JSON.stringify({ _asset_list: assetNames, _extended: true }).length >= 4700) {
+            batchedAssets.push(assetNames);
+            assetNames = [];
+        }
+    }
+    if (assetNames.length) batchedAssets.push(assetNames);
+
+    // Query canonical state
+    const canonicalTxHashes: string[] = [];
+    const canonicalTxByHandle = new Map<string, string>();
+    await asyncForEach(batchedAssets, async (batch) => {
+        const koiosUtxos = await fetchAssetUtxoBatchWithRetry(batch);
+        if (koiosUtxos !== null) {
+            for (const utxo of koiosUtxos) {
+                canonicalTxHashes.push(utxo.tx_hash);
+                for (const asset of utxo.asset_list ?? []) {
+                    if (HANDLE_POLICIES.contains(NETWORK as Network, asset.policy_id)) {
+                        const { name } = getHandleNameFromAssetName(asset.asset_name);
+                        canonicalTxByHandle.set(name, utxo.tx_hash);
+                    }
+                }
+            }
+        }
+    }, KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS);
+
+    // Identify drifted (stored tx_hash ≠ canonical tx_hash)
+    const driftedHandles = storedHandles.filter((h) => {
+        const storedTx = h.utxo?.split('#')[0];
+        const canonical = canonicalTxByHandle.get(h.name);
+        return canonical && storedTx && storedTx !== canonical;
+    });
+
+    if (!driftedHandles.length) {
+        return { checked: handleNames.length, repaired: 0, notFound: handleNames.length - storedHandles.length };
+    }
+
+    // Fetch full tx_info for canonical UTxOs
+    const canonicalHandleUTxOs = await getBatchedUTxOsWithFallback([...new Set(canonicalTxHashes)]);
+    const driftedHandleSet = new Set(driftedHandles.map((h) => h.name));
+    const repairCanonicalUTxOs = canonicalHandleUTxOs
+        .map((utxo) => filterUTxOToHandleNames(utxo, driftedHandleSet))
+        .filter((utxo): utxo is UTxOWithTxInfo => !!utxo);
+
+    // Collect stale stored UTxO ids to remove
+    const staleUtxoIds = new Set<string>();
+    for (const h of driftedHandles) {
+        if (h.utxo) staleUtxoIds.add(h.utxo);
+    }
+
+    // Update holders
+    const stakeAddresses = driftedHandles.map((h) => buildHolderInfo(h.resolved_addresses.ada).address);
+    const holderHandles = store.pipeline(() => {
+        stakeAddresses.forEach((address) => store.getValuesFromIndexedSet(IndexNames.HOLDER, address));
+    }) as Set<string>[];
+    const holdersMap = new Map<string, Set<string>>();
+    stakeAddresses.forEach((address, index) => {
+        holdersMap.set(address, holderHandles[index]);
+    });
+    store.pipeline(() => {
+        driftedHandles.forEach((handle) => handlesRepo.updateHolder(handle, holdersMap));
+    });
+
+    // Remove stale UTxOs, apply canonical state
+    if (staleUtxoIds.size) handlesRepo.removeUTxOs([...staleUtxoIds]);
+    handlesRepo.addUTxOsWithMintData(repairCanonicalUTxOs);
+    handlesRepo.addMintDataFromUTxOs(repairCanonicalUTxOs);
+
+    // Rebuild handle indexes
+    const storedHandlesMap = new Map<string, StoredHandle>(driftedHandles.map((h) => [h.name, h]));
+    const retrievedMintingData = store.pipeline(() => {
+        driftedHandles.forEach((h) => handlesRepo.getHandleMintingData(h.name));
+    }) as Set<string>[];
+    const mintValueIndex: Map<string, MintingData[]> = new Map();
+    retrievedMintingData.forEach((md, i) => {
+        mintValueIndex.set(driftedHandles[i].name, Array.from(md).map((m) => JSON.parse(m)));
+    });
+    store.pipeline(() => {
+        for (const utxo of repairCanonicalUTxOs) {
+            handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap);
+        }
+    });
+
+    Logger.log({
+        message: `Repaired ${driftedHandles.length} drifted handles: ${driftedHandles.slice(0, 10).map((h) => h.name).join(', ')}${driftedHandles.length > 10 ? ` (+${driftedHandles.length - 10})` : ''}`,
+        category: LogCategory.NOTIFY,
+        event: 'scannerLambda.repairHandles'
+    });
+
+    return {
+        checked: handleNames.length,
+        repaired: driftedHandles.length,
+        notFound: handleNames.length - storedHandles.length
+    };
 };
 
 const scan = async () => {
@@ -1076,6 +1287,25 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
             });
             await processReindex();
             return buildFunctionUrlResponse(200, { message: 'Reindex complete' });
+        }
+
+        const repairList = extractRepairHandlesFromEvent(event);
+        if (repairList !== null) {
+            if (!isWhitelistedScannerShortcutRequest(event)) {
+                return buildFunctionUrlResponse(401, { message: 'Unauthorized' });
+            }
+            Logger.log({
+                message: `Running handle repair shortcut for ${repairList.length} handles`,
+                category: LogCategory.NOTIFY,
+                event: 'scannerLambda.repairShortcut'
+            });
+            const result = await repairHandles(repairList);
+            return {
+                isBase64Encoded: false,
+                statusCode: 200,
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify(result)
+            };
         }
 
         const metrics = handlesRepo.getMetrics();

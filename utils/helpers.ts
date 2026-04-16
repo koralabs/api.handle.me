@@ -189,7 +189,14 @@ export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[], datumByHash 
     }
 
     // Sort the UTxOs so that Handles with 222 are first. This fixes when we look for mintingData later.
-    utxos.sort(u => u.handles.some(h => h[1].some(a => a.startsWith(AssetNameLabel.LBL_222))) ? -1 : 1);
+    // Proper binary comparator — the previous unary form caused V8 to silently REVERSE the order of
+    // items within the LBL_222 group, leading to newer-then-older handle update ordering within a
+    // single block (e.g. tx[5] spending tx[4]'s output, processed in reverse → stale handle pointer).
+    utxos.sort((a, b) => {
+        const aHas = a.handles.some(h => h[1].some(asset => asset.startsWith(AssetNameLabel.LBL_222)));
+        const bHas = b.handles.some(h => h[1].some(asset => asset.startsWith(AssetNameLabel.LBL_222)));
+        return Number(bHas) - Number(aHas);
+    });
 
     return utxos;
 }
