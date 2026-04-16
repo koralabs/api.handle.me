@@ -976,13 +976,14 @@ export class HandlesRepository {
                         break;
                     }
                     case AssetNameLabel.LBL_001:
+                        Logger.log({ message: `LBL_001 processing: name=${handle.name} slot=${utxo.slot} updated_slot=${handle.updated_slot_number} hasDatum=${!!utxo.datum} datumLen=${utxo.datum?.length ?? 0}`, category: LogCategory.INFO, event: 'processScannedHandleInfo.subHandle.debug' });
                         if (utxo.slot >= handle.updated_slot_number) {
                             if (!existingHandle) {
                                 // There should always be an existing root handle for a subhandle
                                 // Logger.log({ message: `Cannot save subhandle settings for ${name} because root handle does not exist`, event: 'this.saveSubHandleSettingsChange', category: LogCategory.INFO });
-                                // return;  
+                                // return;
                             }
-                    
+
                             if (!utxo.datum) {
                                 Logger.log({ message: `No datum for SubHandle token ${handle.name}`,  category: LogCategory.ERROR, event: 'processScannedHandleInfo.subHandle.noDatum'});
                                 return;
