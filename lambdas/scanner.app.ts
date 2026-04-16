@@ -1297,7 +1297,7 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
             }
             Logger.log({
                 message: `Running handle repair shortcut for ${repairList.length} handles`,
-                category: LogCategory.NOTIFY,
+                category: LogCategory.INFO,
                 event: 'scannerLambda.repairShortcut'
             });
             const result = await repairHandles(repairList);

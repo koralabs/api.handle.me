@@ -108,24 +108,20 @@ interface ApiHandle {
 
 const fetchAllHandles = async (): Promise<ApiHandle[]> => {
     const all: ApiHandle[] = [];
-    const seen = new Set<string>();
-    let currentSlot = START_SLOT;
+    let page = 1;
+    const slotFilter = START_SLOT > 0 ? `&slot_number=${START_SLOT}` : '';
 
     while (all.length < MAX_HANDLES) {
-        const url = `${API_BASE}/handles?slot_number=${currentSlot}&sort=asc&records_per_page=${API_PAGE_SIZE}`;
+        const url = `${API_BASE}/handles?page=${page}&sort=asc&records_per_page=${API_PAGE_SIZE}${slotFilter}`;
         const resp = await fetch(url);
         if (!resp.ok) {
-            console.error(`page failed at slot=${currentSlot}: ${resp.status}`);
+            console.error(`page ${page} failed: ${resp.status}`);
             break;
         }
         const data = (await resp.json()) as any[];
         if (!data.length) break;
 
-        let added = 0;
         for (const h of data) {
-            const key = `${h.name}|${h.updated_slot_number}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
             all.push({
                 name: h.name,
                 hex: h.hex,
@@ -133,16 +129,13 @@ const fetchAllHandles = async (): Promise<ApiHandle[]> => {
                 utxo: h.utxo,
                 updated_slot_number: h.updated_slot_number
             });
-            added++;
             if (all.length >= MAX_HANDLES) break;
         }
-        const maxSlotSeen = Math.max(...data.map((h) => h.updated_slot_number));
-        process.stderr.write(`\rfetched ${all.length} handles (max slot: ${maxSlotSeen})`);
-        if (!added) break;
+        process.stderr.write(`\rfetched ${all.length} handles (page ${page})`);
         if (data.length < API_PAGE_SIZE) break;
-        if (maxSlotSeen === currentSlot) break;
-        currentSlot = maxSlotSeen + 1;
-        await delay(200);
+        if (all.length >= MAX_HANDLES) break;
+        page++;
+        await delay(150);
     }
     process.stderr.write('\n');
     return all;
