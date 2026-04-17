@@ -939,8 +939,8 @@ const clearStaleLockIfNeeded = (metrics: ReturnType<HandlesRepository['getMetric
  * Flow: load stored handles → asset_utxos for canonical locations → identify
  * drift → fetch tx_info → apply the same repair as processRollback.
  */
-const repairHandles = async (handleNames: string[]): Promise<{ checked: number; repaired: number; notFound: number }> => {
-    if (!handleNames.length) return { checked: 0, repaired: 0, notFound: 0 };
+const repairHandles = async (handleNames: string[]): Promise<{ checked: number; repaired: number; notFound: number; inserted: number }> => {
+    if (!handleNames.length) return { checked: 0, repaired: 0, notFound: 0, inserted: 0 };
 
     const storedHandles = store
         .pipeline(() => {
@@ -948,22 +948,40 @@ const repairHandles = async (handleNames: string[]): Promise<{ checked: number; 
         })
         .filter(Boolean) as StoredHandle[];
 
-    if (!storedHandles.length) return { checked: handleNames.length, repaired: 0, notFound: handleNames.length };
+    const storedByName = new Map(storedHandles.map((h) => [h.name, h]));
+    const missingNames = handleNames.filter((n) => !storedByName.has(n));
 
-    // Build asset_utxos batches for all target handles
+    // Build asset_utxos batches for all target handles — both drift-check for
+    // existing ones and broad lookup for missing ones.
+    const networkKey = NETWORK.toLowerCase() as Network;
+    const activePolicies = Object.keys(HANDLE_POLICIES[networkKey] ?? {});
     const batchedAssets: [string, string][][] = [];
     let assetNames: [string, string][] = [];
-    for (const storedHandle of storedHandles) {
-        const { isCip67 } = getHandleNameFromAssetName(storedHandle.hex);
-        assetNames.push([storedHandle.policy, storedHandle.hex]);
-        if (isCip67) {
-            const hexWithoutLabel = storedHandle.hex.slice(8);
-            assetNames.push([storedHandle.policy, `${AssetNameLabel.LBL_100}${hexWithoutLabel}`]);
-            assetNames.push([storedHandle.policy, `${AssetNameLabel.LBL_001}${hexWithoutLabel}`]);
-        }
+    const pushAsset = (policy: string, hex: string) => {
+        assetNames.push([policy, hex]);
         if (JSON.stringify({ _asset_list: assetNames, _extended: true }).length >= 4700) {
             batchedAssets.push(assetNames);
             assetNames = [];
+        }
+    };
+    for (const storedHandle of storedHandles) {
+        const { isCip67 } = getHandleNameFromAssetName(storedHandle.hex);
+        pushAsset(storedHandle.policy, storedHandle.hex);
+        if (isCip67) {
+            const hexWithoutLabel = storedHandle.hex.slice(8);
+            pushAsset(storedHandle.policy, `${AssetNameLabel.LBL_100}${hexWithoutLabel}`);
+            pushAsset(storedHandle.policy, `${AssetNameLabel.LBL_001}${hexWithoutLabel}`);
+        }
+    }
+    // Missing handles: we don't know the asset form, so try every variant on
+    // every active policy. Koios ignores non-existent assets cheaply.
+    for (const name of missingNames) {
+        const utf8hex = Buffer.from(name, 'utf8').toString('hex');
+        for (const policy of activePolicies) {
+            pushAsset(policy, utf8hex); // legacy (no label)
+            pushAsset(policy, `${AssetNameLabel.LBL_222}${utf8hex}`); // CIP68 owner
+            pushAsset(policy, `${AssetNameLabel.LBL_100}${utf8hex}`); // CIP68 reference
+            pushAsset(policy, `${AssetNameLabel.LBL_000}${utf8hex}`); // virtual subhandle
         }
     }
     if (assetNames.length) batchedAssets.push(assetNames);
@@ -986,65 +1004,69 @@ const repairHandles = async (handleNames: string[]): Promise<{ checked: number; 
         }
     }, KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS);
 
-    // Identify drifted (stored tx_hash ≠ canonical tx_hash)
+    // Classify each target: drifted (stored tx ≠ canonical) | missing-and-on-chain (insert) | ok | not-on-chain
     const driftedHandles = storedHandles.filter((h) => {
         const storedTx = h.utxo?.split('#')[0];
         const canonical = canonicalTxByHandle.get(h.name);
         return canonical && storedTx && storedTx !== canonical;
     });
+    const insertNames = missingNames.filter((n) => canonicalTxByHandle.has(n));
+    const handlesToTouch = new Set<string>([...driftedHandles.map((h) => h.name), ...insertNames]);
 
-    if (!driftedHandles.length) {
-        return { checked: handleNames.length, repaired: 0, notFound: handleNames.length - storedHandles.length };
+    if (!handlesToTouch.size) {
+        return { checked: handleNames.length, repaired: 0, notFound: handleNames.length - storedHandles.length, inserted: 0 };
     }
 
-    // Fetch full tx_info for canonical UTxOs
+    // Fetch full tx_info for the canonical UTxOs we care about
     const canonicalHandleUTxOs = await getBatchedUTxOsWithFallback([...new Set(canonicalTxHashes)]);
-    const driftedHandleSet = new Set(driftedHandles.map((h) => h.name));
-    const repairCanonicalUTxOs = canonicalHandleUTxOs
-        .map((utxo) => filterUTxOToHandleNames(utxo, driftedHandleSet))
+    const touchedUTxOs = canonicalHandleUTxOs
+        .map((utxo) => filterUTxOToHandleNames(utxo, handlesToTouch))
         .filter((utxo): utxo is UTxOWithTxInfo => !!utxo);
 
-    // Collect stale stored UTxO ids to remove
+    // For drifted handles only, collect stale stored UTxO ids to remove
     const staleUtxoIds = new Set<string>();
     for (const h of driftedHandles) {
         if (h.utxo) staleUtxoIds.add(h.utxo);
     }
 
-    // Update holders
-    const stakeAddresses = driftedHandles.map((h) => buildHolderInfo(h.resolved_addresses.ada).address);
-    const holderHandles = store.pipeline(() => {
-        stakeAddresses.forEach((address) => store.getValuesFromIndexedSet(IndexNames.HOLDER, address));
-    }) as Set<string>[];
-    const holdersMap = new Map<string, Set<string>>();
-    stakeAddresses.forEach((address, index) => {
-        holdersMap.set(address, holderHandles[index]);
-    });
-    store.pipeline(() => {
-        driftedHandles.forEach((handle) => handlesRepo.updateHolder(handle, holdersMap));
-    });
+    // Update holders for drifted handles (missing ones will be holder-indexed inside updateHandleIndexes)
+    if (driftedHandles.length) {
+        const stakeAddresses = driftedHandles.map((h) => buildHolderInfo(h.resolved_addresses.ada).address);
+        const holderHandles = store.pipeline(() => {
+            stakeAddresses.forEach((address) => store.getValuesFromIndexedSet(IndexNames.HOLDER, address));
+        }) as Set<string>[];
+        const holdersMap = new Map<string, Set<string>>();
+        stakeAddresses.forEach((address, index) => holdersMap.set(address, holderHandles[index]));
+        store.pipeline(() => {
+            driftedHandles.forEach((handle) => handlesRepo.updateHolder(handle, holdersMap));
+        });
+    }
 
-    // Remove stale UTxOs, apply canonical state
+    // Remove stale UTxOs, apply canonical state (this is insert-friendly: new UTxOs go in cleanly)
     if (staleUtxoIds.size) handlesRepo.removeUTxOs([...staleUtxoIds]);
-    handlesRepo.addUTxOsWithMintData(repairCanonicalUTxOs);
-    handlesRepo.addMintDataFromUTxOs(repairCanonicalUTxOs);
+    handlesRepo.addUTxOsWithMintData(touchedUTxOs);
+    handlesRepo.addMintDataFromUTxOs(touchedUTxOs);
 
-    // Rebuild handle indexes
+    // Rebuild handle indexes — updateHandleIndexes tolerates existingHandle=undefined
+    const touchedNames = [...handlesToTouch];
     const storedHandlesMap = new Map<string, StoredHandle>(driftedHandles.map((h) => [h.name, h]));
     const retrievedMintingData = store.pipeline(() => {
-        driftedHandles.forEach((h) => handlesRepo.getHandleMintingData(h.name));
+        touchedNames.forEach((name) => handlesRepo.getHandleMintingData(name));
     }) as Set<string>[];
     const mintValueIndex: Map<string, MintingData[]> = new Map();
     retrievedMintingData.forEach((md, i) => {
-        mintValueIndex.set(driftedHandles[i].name, Array.from(md).map((m) => JSON.parse(m)));
+        mintValueIndex.set(touchedNames[i], Array.from(md).map((m) => JSON.parse(m)));
     });
     store.pipeline(() => {
-        for (const utxo of repairCanonicalUTxOs) {
+        for (const utxo of touchedUTxOs) {
             handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap);
         }
     });
 
+    const logNames = touchedNames.slice(0, 10).join(', ');
+    const logSuffix = touchedNames.length > 10 ? ` (+${touchedNames.length - 10})` : '';
     Logger.log({
-        message: `Repaired ${driftedHandles.length} drifted handles: ${driftedHandles.slice(0, 10).map((h) => h.name).join(', ')}${driftedHandles.length > 10 ? ` (+${driftedHandles.length - 10})` : ''}`,
+        message: `Repaired handles — drifted=${driftedHandles.length}, inserted=${insertNames.length}: ${logNames}${logSuffix}`,
         category: LogCategory.NOTIFY,
         event: 'scannerLambda.repairHandles'
     });
@@ -1052,7 +1074,8 @@ const repairHandles = async (handleNames: string[]): Promise<{ checked: number; 
     return {
         checked: handleNames.length,
         repaired: driftedHandles.length,
-        notFound: handleNames.length - storedHandles.length
+        notFound: missingNames.length - insertNames.length,
+        inserted: insertNames.length
     };
 };
 
