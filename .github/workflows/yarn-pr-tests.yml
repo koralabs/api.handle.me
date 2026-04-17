@@ -2,9 +2,9 @@ name: Yarn PR Tests
 
 on:
   push:
-    branches: [ master ]
+    branches: [ preview, preprod, mainnet ]
   pull_request:
-    branches: [ master, develop ]
+    branches: [ preview ]
 
 jobs:
   test:

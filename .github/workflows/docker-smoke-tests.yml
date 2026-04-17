@@ -3,7 +3,7 @@ name: Docker Smoke Tests
 on:
   workflow_dispatch:
   push:
-    branches: [ master ]
+    branches: [ preview, preprod, mainnet ]
     paths:
       - Dockerfile
       - package.json
@@ -21,7 +21,7 @@ on:
       - shell/test-container.sh
       - workers/**
   pull_request:
-    branches: [ master, develop ]
+    branches: [ preview ]
     paths:
       - Dockerfile
       - package.json
