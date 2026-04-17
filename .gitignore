@@ -131,3 +131,4 @@ handles_utxos.gz
 build
 # K.O.R.A executor logs
 .kora/executor-logs/
+.claude/scheduled_tasks.lock
