@@ -242,7 +242,7 @@ const isWhitelistedScannerShortcutRequest = (event: any): boolean => {
     return !!apiKey && getWhitelistedApiKeys().includes(apiKey);
 };
 
-const buildFunctionUrlResponse = (statusCode: number, body: { message: string }) => {
+const buildFunctionUrlResponse = (statusCode: number, body: { message: string; [key: string]: unknown }) => {
     return {
         isBase64Encoded: false,
         statusCode,
@@ -1295,12 +1295,21 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
     const isRepairShortcut = extractRepairHandlesFromEvent(event) !== null;
     const leaseOwner = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const leaseAcquired = acquireScannerLease(leaseOwner);
-    if (!leaseAcquired && !isReindexShortcut && !isRepairShortcut) {
+    if (!leaseAcquired) {
+        // Lease is held by another scanner invocation. Scheduled cron ticks just skip.
+        // Shortcut paths (reindex / repair) used to proceed without the lease, which let
+        // them race with the scanner on the same Valkey keys (correctness-spiral V3).
+        // Refuse with a 409 instead so the operator retries after the active scan exits;
+        // the lease TTL is 60s, so retries are cheap.
+        if (isReindexShortcut || isRepairShortcut) {
+            logBreadcrumb(`lease_not_acquired_${isReindexShortcut ? 'reindex' : 'repair'}_shortcut_refused`);
+            return buildFunctionUrlResponse(409, {
+                message: 'Scanner is currently active. Retry shortly.',
+                shortcut: isReindexShortcut ? 'reindex' : 'repair'
+            });
+        }
         logBreadcrumb('lease_not_acquired_skipping');
         return;
-    }
-    if (!leaseAcquired && (isReindexShortcut || isRepairShortcut)) {
-        logBreadcrumb(`lease_not_acquired_but_${isReindexShortcut ? 'reindex' : 'repair'}_shortcut`);
     }
 
     let heartbeat: NodeJS.Timeout | undefined;

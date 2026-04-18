@@ -186,29 +186,45 @@ export class RedisHandlesStore implements IApiStore {
         // we skip clearNamespace and pick up from the saved chunk index so a
         // 15-min Lambda timeout doesn't lose progress; the next invocation
         // continues from where we stopped.
+        //
+        // The marker is tagged with the snapshot's schema version AND block
+        // hash. Resuming only happens when both match the current S3 snapshot.
+        // A schema bump (or an operator uploading a replacement snapshot) across
+        // invocations otherwise causes the next invocation to resume from stale
+        // chunk offsets into new-schema data — see correctness-spiral V2.
         const progressKey = `${getApiCacheTag(NETWORK)}:snapshot_loader:progress`;
-        type LoaderProgress = { mdIdx: number; utxoIdx: number };
+        type LoaderProgress = { mdIdx: number; utxoIdx: number; utxoSchemaVersion: number; snapshotHash: string };
         const readProgress = (): LoaderProgress | null => {
             const raw = this.redisClientCall('hgetall', progressKey) as Record<string, string> | null;
             if (!raw || Object.keys(raw).length === 0) return null;
-            return { mdIdx: Number(raw.mdIdx ?? 0), utxoIdx: Number(raw.utxoIdx ?? 0) };
+            return {
+                mdIdx: Number(raw.mdIdx ?? 0),
+                utxoIdx: Number(raw.utxoIdx ?? 0),
+                utxoSchemaVersion: Number(raw.utxoSchemaVersion ?? 0),
+                snapshotHash: `${raw.snapshotHash ?? ''}`
+            };
         };
         const writeProgress = (p: LoaderProgress) => {
-            this.redisClientCall('hset', progressKey, { mdIdx: String(p.mdIdx), utxoIdx: String(p.utxoIdx) });
+            this.redisClientCall('hset', progressKey, {
+                mdIdx: String(p.mdIdx),
+                utxoIdx: String(p.utxoIdx),
+                utxoSchemaVersion: String(p.utxoSchemaVersion),
+                snapshotHash: p.snapshotHash
+            });
         };
         const deleteProgress = () => {
             this.redisClientCall('del', [progressKey]);
         };
 
         const existing = readProgress();
+
+        // No existing progress = fresh boot (or post-reset). Clean the namespace up-front so
+        // any stale keys from a prior deploy don't coexist with whatever we're about to write.
+        // If S3 is 404 we fall through and use era-genesis metrics over a cleared namespace.
         if (!existing) {
             Logger.log(`Snapshot loader: fresh start — clearing namespace`);
             this.clearNamespace();
-            writeProgress({ mdIdx: 0, utxoIdx: 0 });
-        } else {
-            Logger.log(`Snapshot loader: resuming at mdIdx=${existing.mdIdx} utxoIdx=${existing.utxoIdx}`);
         }
-        const progress: LoaderProgress = existing ?? { mdIdx: 0, utxoIdx: 0 };
 
         let id = handleEraBoundaries[NETWORK].id;
         let slot = handleEraBoundaries[NETWORK].slot;
@@ -222,6 +238,30 @@ export class RedisHandlesStore implements IApiStore {
             Logger.log(`Found ${url}`);
             const storedS3HandlesUTxOJson = JSON.parse(text) as VerifiedHandleFileContent;
             const { utxos, slot: s3Slot, mintingData, hash: s3Hash, utxoSchemaVersion } = storedS3HandlesUTxOJson;
+
+            // Determine whether to resume or restart. Resuming requires both the schema version
+            // and the snapshot hash to match what the progress marker was written against —
+            // otherwise the prior invocation's offsets would be applied to new-schema data.
+            const progressIsReusable = !!existing
+                && existing.utxoSchemaVersion === Number(utxoSchemaVersion)
+                && existing.snapshotHash === `${s3Hash}`;
+            if (existing && !progressIsReusable) {
+                Logger.log({
+                    message: `Snapshot loader: discarding progress marker — schemaVersion=${existing.utxoSchemaVersion}→${utxoSchemaVersion} snapshotHash=${existing.snapshotHash}→${s3Hash}`,
+                    category: LogCategory.WARN,
+                    event: 'snapshotLoader.progressMismatch'
+                });
+                deleteProgress();
+                this.clearNamespace();
+            }
+            if (progressIsReusable) {
+                Logger.log(`Snapshot loader: resuming at mdIdx=${existing!.mdIdx} utxoIdx=${existing!.utxoIdx}`);
+            } else {
+                writeProgress({ mdIdx: 0, utxoIdx: 0, utxoSchemaVersion: Number(utxoSchemaVersion), snapshotHash: `${s3Hash}` });
+            }
+            const progress: LoaderProgress = progressIsReusable
+                ? existing!
+                : { mdIdx: 0, utxoIdx: 0, utxoSchemaVersion: Number(utxoSchemaVersion), snapshotHash: `${s3Hash}` };
 
             if (utxoSchemaVersion == currentUTxOSchemaVersion && isChainVerifiedSnapshot(storedS3HandlesUTxOJson)) {
                 const mintingDataChunks = chunk(Object.entries(mintingData), MAX_SETS_PER_PIPE);

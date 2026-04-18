@@ -438,6 +438,117 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(redisSpy).not.toHaveBeenCalledWith('flushdb');
     });
 
+    // Invariant: a snapshot-loader progress marker is only valid for the exact
+    // snapshot bytes it was written against (same schema version AND same block
+    // hash). Across invocations, a schema bump or operator-uploaded replacement
+    // snapshot must cause the next invocation to delete progress, clearNamespace,
+    // and restart from chunk 0 — otherwise it resumes with stale offsets into
+    // new-schema data and silently corrupts the index.
+    it('tryPopulateFromS3UTxOs discards stale progress marker when snapshot hash changes', async () => {
+        const store = new RedisHandlesStore();
+        const hgetAllCalls: any[] = [];
+        const delCalls: any[] = [];
+        const hsetCalls: any[] = [];
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'hgetall') {
+                hgetAllCalls.push(args);
+                // First call returns a stale marker from a different snapshot hash
+                return { mdIdx: '50', utxoIdx: '10', utxoSchemaVersion: '1', snapshotHash: 'old_hash' };
+            }
+            if (cmd === 'del') { delCalls.push(args); return 1; }
+            if (cmd === 'hset') { hsetCalls.push(args); return 1; }
+            if (cmd === 'scan') return ['0', []];
+            return undefined;
+        });
+        jest.spyOn(store, 'getUTxOSchemaVersion').mockReturnValue(1);
+        jest.spyOn(store, 'setMetrics').mockImplementation(jest.fn());
+        jest.spyOn(store, 'getMetrics').mockReturnValue({ handleCount: 0 } as any);
+        jest.spyOn(store, 'pipeline').mockImplementation((commands: CallableFunction) => { commands(); return []; });
+
+        const snapshot = {
+            utxos: [],
+            slot: 11,
+            hash: 'new_hash',
+            mintingData: {},
+            utxoSchemaVersion: 1,
+            verification: {
+                verifiedAgainstChain: true,
+                snapshotMptRootHash: 'ab'.repeat(32),
+                chainMptRootHash: 'ab'.repeat(32),
+                network,
+                verifiedAtUtc: '2026-04-18T00:00:00.000Z'
+            }
+        };
+        const compressed = deflateSync(Buffer.from(JSON.stringify(snapshot)));
+        const ab = compressed.buffer.slice(compressed.byteOffset, compressed.byteOffset + compressed.byteLength);
+        global.fetch = jest.fn().mockResolvedValue({ status: 200, arrayBuffer: async () => ab }) as any;
+
+        await store.tryPopulateFromS3UTxOs({
+            [UTxOFunctionName.ADD_UTXO]: jest.fn(),
+            [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: jest.fn()
+        } as any);
+
+        // The stale progress marker must have been deleted, then the namespace
+        // must have been cleared (via SCAN/DEL), then a fresh progress marker
+        // tagged with the new snapshot hash must have been written starting at 0.
+        expect(delCalls.some((args) => Array.isArray(args[1]) && args[1].some((k: string) => k.endsWith(':snapshot_loader:progress')))).toBe(true);
+        expect(redisSpy).toHaveBeenCalledWith('scan', '0', { match: getApiNamespaceScanPattern(), count: 1000 });
+        const freshProgressWrite = hsetCalls.find((args) => args[2]?.mdIdx === '0' && args[2]?.utxoIdx === '0');
+        expect(freshProgressWrite).toBeDefined();
+        expect(freshProgressWrite?.[2]).toEqual(expect.objectContaining({ utxoSchemaVersion: '1', snapshotHash: 'new_hash' }));
+    });
+
+    it('tryPopulateFromS3UTxOs resumes in-place when progress marker matches snapshot', async () => {
+        const store = new RedisHandlesStore();
+        const delCalls: any[] = [];
+        const scanCalls: any[] = [];
+        jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'hgetall') {
+                // Marker matches the snapshot below — resume, don't clear
+                return { mdIdx: '0', utxoIdx: '0', utxoSchemaVersion: '1', snapshotHash: 'matching_hash' };
+            }
+            if (cmd === 'del') { delCalls.push(args); return 1; }
+            if (cmd === 'scan') { scanCalls.push(args); return ['0', []]; }
+            return undefined;
+        });
+        jest.spyOn(store, 'getUTxOSchemaVersion').mockReturnValue(1);
+        jest.spyOn(store, 'setMetrics').mockImplementation(jest.fn());
+        jest.spyOn(store, 'getMetrics').mockReturnValue({ handleCount: 0 } as any);
+        jest.spyOn(store, 'pipeline').mockImplementation((commands: CallableFunction) => { commands(); return []; });
+
+        const snapshot = {
+            utxos: [],
+            slot: 11,
+            hash: 'matching_hash',
+            mintingData: {},
+            utxoSchemaVersion: 1,
+            verification: {
+                verifiedAgainstChain: true,
+                snapshotMptRootHash: 'ab'.repeat(32),
+                chainMptRootHash: 'ab'.repeat(32),
+                network,
+                verifiedAtUtc: '2026-04-18T00:00:00.000Z'
+            }
+        };
+        const compressed = deflateSync(Buffer.from(JSON.stringify(snapshot)));
+        const ab = compressed.buffer.slice(compressed.byteOffset, compressed.byteOffset + compressed.byteLength);
+        global.fetch = jest.fn().mockResolvedValue({ status: 200, arrayBuffer: async () => ab }) as any;
+
+        await store.tryPopulateFromS3UTxOs({
+            [UTxOFunctionName.ADD_UTXO]: jest.fn(),
+            [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: jest.fn()
+        } as any);
+
+        // Resume path — progress is NOT deleted mid-run; namespace is NOT scanned for clear.
+        const progressDels = delCalls.filter((args) => Array.isArray(args[1]) && args[1].some((k: string) => k.endsWith(':snapshot_loader:progress')));
+        // The terminal deleteProgress at the end of tryPopulateFromS3UTxOs will still fire once on completion.
+        expect(progressDels.length).toBeLessThanOrEqual(1);
+        // No namespace SCAN issued for clearNamespace on resume path
+        expect(scanCalls.length).toBe(0);
+    });
+
     it('getStartingPoint uses snapshot path when schema/version requires refresh', async () => {
         const store = new RedisHandlesStore();
         jest.spyOn(store, 'getMetrics').mockReturnValue({
