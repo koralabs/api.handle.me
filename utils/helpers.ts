@@ -3,6 +3,25 @@ import { KoiosAsset, KoiosOutput, KoiosTxInfo } from '../interfaces/provider.int
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 
 export const defaultKoiosSettings = { _inputs: true, _withdrawals: false, _certs: false, _governance: false, _scripts: true, _bytecode: true, _metadata: true, _assets: true };
+
+// Deterministic JSON encoding — sorts keys recursively and coerces bigints.
+// Required for any value used as a Redis set member (e.g. MintingData in
+// IndexNames.MINT), so that replaying a block produces a byte-identical
+// member and SADD deduplicates instead of creating a second entry.
+export const canonicalJsonStringify = (value: unknown): string => {
+    const sortKeys = (v: unknown): unknown => {
+        if (Array.isArray(v)) return v.map(sortKeys);
+        if (v && typeof v === 'object') {
+            const sorted: Record<string, unknown> = {};
+            for (const key of Object.keys(v as Record<string, unknown>).sort()) {
+                sorted[key] = sortKeys((v as Record<string, unknown>)[key]);
+            }
+            return sorted;
+        }
+        return v;
+    };
+    return JSON.stringify(sortKeys(value), (_, v) => (typeof v === 'bigint' ? `${Number(v)}` : v));
+};
 const KOIOS_REQUEST_TIMEOUT_MS = 20_000;
 
 const BLOCKFROST_REQUEST_TIMEOUT_MS = 20_000;

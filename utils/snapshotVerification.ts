@@ -56,41 +56,59 @@ const getMintingDataAssetNameHex = () => {
     return `${AssetNameLabel.LBL_222}${utf8Hex}`;
 };
 
+// HANDLE_POLICIES.getActivePolicy(net, false) is broken upstream in kora-labs-common
+// (undefined == false never matches so it returns undefined for every network).
+// Pick the non-DeMi policy directly.
+const getMainHandlePolicy = (): string | undefined => {
+    const entry = Object.entries(HANDLE_POLICIES[NETWORK.toLowerCase() as Network] ?? {}).find(
+        ([, v]) => v && typeof v === 'object' && 'firstMintingSlot' in (v as any) && !(v as { isDeMi?: boolean }).isDeMi
+    );
+    return entry?.[0];
+};
+
 const probeKoiosRootHash = async (): Promise<ProviderMptProbe | null> => {
-    const activePolicy = HANDLE_POLICIES.getActivePolicy(NETWORK.toLowerCase() as Network, false);
+    const activePolicy = getMainHandlePolicy();
     if (!activePolicy) return null;
     const assetHex = getMintingDataAssetNameHex();
     const [utxos, tip] = await Promise.all([
         fetchKoios('asset_utxos', 'POST', JSON.stringify({ _asset_list: [[activePolicy, assetHex]], _extended: true })) as Promise<any[]>,
         fetchKoios('tip') as Promise<any>
     ]);
-    const rootHash = extractMptRootFromConstructor0(utxos?.[0]?.inline_datum?.value);
+    // Koios returns inline_datum as { bytes: <cbor hex>, value: { constructor, fields } }.
+    // Route through decodeCborToJson on the raw CBOR so the extractor sees the
+    // same shape as Blockfrost's path.
+    const koiosInlineCbor: string | undefined = utxos?.[0]?.inline_datum?.bytes;
+    const decoded = koiosInlineCbor ? decodeCborToJson({ cborString: koiosInlineCbor, schema: {} }) : undefined;
+    const rootHash = extractMptRootFromConstructor0(decoded);
     const tipEntry = Array.isArray(tip) ? tip[0] : tip;
-    const tipSlot = Number(tipEntry?.abs_slot);
-    if (!rootHash || !Number.isFinite(tipSlot)) return null;
+    // Koios sometimes returns 200 with an empty body for /tip; Number(undefined?.abs_slot) is NaN,
+    // but Number(null?.abs_slot ?? 0) would be 0 — a finite value that poisons the tipSlot check
+    // and lets a zero-slot probe masquerade as valid. Require a real tipEntry before reading.
+    if (!tipEntry) return null;
+    const tipSlot = Number(tipEntry.abs_slot);
+    if (!rootHash || !Number.isFinite(tipSlot) || tipSlot <= 0) return null;
     return { provider: 'koios', rootHash, tipSlot };
 };
 
 const probeBlockfrostRootHash = async (): Promise<ProviderMptProbe | null> => {
-    const activePolicy = HANDLE_POLICIES.getActivePolicy(NETWORK.toLowerCase() as Network, false);
+    const activePolicy = getMainHandlePolicy();
     if (!activePolicy) return null;
     const assetId = `${activePolicy}${getMintingDataAssetNameHex()}`;
-    const [utxosResp, tipResp] = await Promise.all([
-        blockfrostApiCall(`assets/${assetId}/utxos?order=desc&count=1`),
+    // Blockfrost has no /assets/{id}/utxos endpoint (confirmed against its
+    // OpenAPI spec). Two-call path: /assets/{asset}/addresses -> /addresses/{addr}/utxos/{asset}.
+    const [addressesResp, tipResp] = await Promise.all([
+        blockfrostApiCall(`assets/${assetId}/addresses?count=1`),
         blockfrostApiCall('blocks/latest')
     ]);
-    if (!utxosResp.ok || !tipResp.ok) return null;
+    if (!addressesResp.ok || !tipResp.ok) return null;
+    const addresses = await addressesResp.json() as { address: string; quantity: string }[];
+    const holder = addresses?.[0];
+    if (!holder?.address) return null;
+    const utxosResp = await blockfrostApiCall(`addresses/${encodeURIComponent(holder.address)}/utxos/${assetId}?count=1`);
+    if (!utxosResp.ok) return null;
     const utxos = await utxosResp.json() as any[];
     const latestUtxo = utxos?.[0];
-    if (!latestUtxo?.tx_hash) return null;
-    const txResp = await blockfrostApiCall(`txs/${latestUtxo.tx_hash}/utxos`);
-    if (!txResp.ok) return null;
-    const txUtxos = await txResp.json() as any;
-    const output = (txUtxos.outputs ?? []).find((o: any) =>
-        o.output_index === latestUtxo.output_index &&
-        (o.amount ?? []).some((a: any) => a.unit === assetId)
-    );
-    const inlineDatum = output?.inline_datum;
+    const inlineDatum = latestUtxo?.inline_datum;
     if (typeof inlineDatum !== 'string') return null;
     const decoded = decodeCborToJson({ cborString: inlineDatum, schema: {} });
     const rootHash = extractMptRootFromConstructor0(decoded);

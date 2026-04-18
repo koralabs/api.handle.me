@@ -112,6 +112,21 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(redisSpy).not.toHaveBeenCalled();
     });
 
+    // Invariant: a reentrant pipeline() call must throw instead of silently
+    // resetting the outer queue. The previous behavior (static field
+    // overwritten on entry) caused the outer batch's queued commands to be
+    // dropped without any signal, which is a silent data-loss bug.
+    it('pipeline() throws if invoked while another pipeline is already active', () => {
+        const store = new RedisHandlesStore();
+        jest.spyOn(store as any, 'redisClientCall').mockImplementation(jest.fn());
+
+        expect(() => {
+            store.pipeline(() => {
+                store.pipeline(() => {});
+            });
+        }).toThrow(/pipeline.*already active/i);
+    });
+
     it('rehydrates hgetall results returned from batch pipeline calls', () => {
         const store = new RedisHandlesStore();
         const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {

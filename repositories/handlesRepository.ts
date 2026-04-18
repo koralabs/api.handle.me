@@ -6,6 +6,7 @@ import { isDatumEndpointEnabled } from '../config';
 import { MAX_SETS_PER_PIPE } from '../config/constants';
 import { BuildPersonalizationInput, HandleOnChainMetadata, MetadataLabel } from '../interfaces/ogmios.interfaces';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
+import { canonicalJsonStringify } from '../utils/helpers';
 import { decodeCborFromIPFSFile } from '../utils/ipfs';
 const blackListedIpfsCids: string[] = [];
 const isTestnet = NETWORK.toLowerCase() !== 'mainnet';
@@ -550,7 +551,7 @@ export class HandlesRepository {
         this.store.pipeline(() => {
             for (const [handleName, mintingData] of mintData) {
                 mintingData.forEach(md => {
-                    this.store.addValueToIndexedSet(IndexNames.MINT, handleName, JSON.stringify(md, (_, val) => (typeof val === 'bigint' ? `${Number(val)}` : val)));
+                    this.store.addValueToIndexedSet(IndexNames.MINT, handleName, canonicalJsonStringify(md));
                 }) 
             }
         });
@@ -796,7 +797,7 @@ export class HandlesRepository {
     public removeHandle(handle: StoredHandle | RewoundHandle): void {
         const handleName = handle.name;
         const amount = handle.amount - 1;
-        
+
         if (amount <= 0) {
             // if (handle.name == 'ap@adaprotocol')
             //     debugLog('ap@adaprotocol being burned', slotNumber, handle);
@@ -811,13 +812,25 @@ export class HandlesRepository {
             this.store.removeValueFromIndexedSet(IndexNames.ADDRESS, handle.resolved_addresses.ada, handleName)
             this.store.removeValueFromIndexedSet(IndexNames.NUMERIC_MODIFIER, handle.numeric_modifiers, handleName)
             this.store.removeValueFromIndexedSet(IndexNames.LENGTH, handle.length, handleName)
-    
+
+            // save() writes to HANDLE_TYPE, PERSONALIZED, and SLOT — burn must clean them too,
+            // or searches filtered by those indexes will return keys that no longer exist in HANDLE.
+            this.store.removeValueFromIndexedSet(IndexNames.HANDLE_TYPE, handle.handle_type, handleName);
+            // Remove from both PERSONALIZED buckets instead of recomputing the current value.
+            // Recomputation (image_hash vs standard_image_hash + personalization fields) can
+            // disagree with what save() wrote if the on-handle state has drifted from legacy
+            // imports or partial updates, leaving an orphan in the opposite bucket. SREM on the
+            // wrong bucket is a no-op, so this is defensive without side effects.
+            this.store.removeValueFromIndexedSet(IndexNames.PERSONALIZED, 0, handleName);
+            this.store.removeValueFromIndexedSet(IndexNames.PERSONALIZED, 1, handleName);
+            this.store.removeValuesFromOrderedSet(IndexNames.SLOT, handleName);
+
             // delete from subhandles index
             if (handleName.includes('@')) {
                 const rootHandle = handleName.split('@')[1];
                 this.store.removeValueFromIndexedSet(IndexNames.SUBHANDLE, rootHandle, handleName);
             }
-    
+
             // remove the handle from the holder
             this._removeHandleFromHolder(handle.holder, handleName);
 
@@ -859,7 +872,7 @@ export class HandlesRepository {
         this.store.addValueToOrderedSet(IndexNames.HOLDER_COUNT, holderHandles.size, handle.holder);
     }
 
-    public updateHandleIndexes(utxo: UTxOWithTxInfo, mintingData?: Map<string, MintingData[]>, handles?: Map<string, StoredHandle>, holders?: Map<string, HolderHandleNames>): void {
+    public updateHandleIndexes(utxo: UTxOWithTxInfo, mintingData?: Map<string, MintingData[]>, handles?: Map<string, StoredHandle>, holders?: Map<string, HolderHandleNames>, options?: { suppressDoubleMintDetection?: boolean }): void {
         const mintedAssetNames = this.getMintedAssetNames(utxo);
         for (const asset of utxo.handles) {
             const policy = asset[0];
@@ -931,8 +944,11 @@ export class HandlesRepository {
                             handle.created_slot_number = Math.min(handle.created_slot_number, utxo.slot, existingHandle?.created_slot_number ?? Number.POSITIVE_INFINITY);
                         }
                         if (utxo.slot >= handle.updated_slot_number || !handle.utxo) {
-                            // check if existing handle has a utxo. If it does, we may have a double mint
-                            if (isMintTx && existingHandle?.utxo && existingHandle?.utxo != utxo.id) {
+                            // check if existing handle has a utxo. If it does, we may have a double mint.
+                            // Rollback repair intentionally re-applies canonical state over a known-stale
+                            // utxo pointer, so skip this check when the caller flags the repair path —
+                            // otherwise every repair falsely inflates amount and breaks the burn threshold.
+                            if (!options?.suppressDoubleMintDetection && isMintTx && existingHandle?.utxo && existingHandle?.utxo != utxo.id) {
                                 handle.amount = (handle.amount ?? 1) + 1;
                                 if (handle.name != 'mydexaccounts') // The one double mint we had when half of Cardano nodes disconnected/restarted at 2023-01-22T00:09:00Z. Both the doublemint and what caused it on our side have been remedied
                                     Logger.log({ message: `POSSIBLE DOUBLE MINT! Name: ${name} | Old UTxO ${existingHandle?.utxo} | Old Slot: ${existingHandle.created_slot_number} | New UTxO: ${utxo.id} | New Slot: ${utxo.slot}`, category: LogCategory.NOTIFY, event: 'saveHandleUpdate.utxoAlreadyExists'});
@@ -953,7 +969,9 @@ export class HandlesRepository {
                         if (utxo.slot >= handle.updated_slot_number) {
                             if (!utxo.datum) {
                                 Logger.log({ message: `No datum for reference token ${handle.name}`, category: LogCategory.ERROR, event: 'processScannedHandleInfo.referenceToken.noDatum' });
-                                return;
+                                // Skip only this asset. `return` previously exited the whole function,
+                                // silently abandoning every remaining handle asset in the UTxO.
+                                continue;
                             }
 
                             const { projectAttributes } = this.buildPersonalizationData(handle, utxo.datum); // <- handle is mutated
@@ -986,7 +1004,9 @@ export class HandlesRepository {
 
                             if (!utxo.datum) {
                                 Logger.log({ message: `No datum for SubHandle token ${handle.name}`,  category: LogCategory.ERROR, event: 'processScannedHandleInfo.subHandle.noDatum'});
-                                return;
+                                // Skip only this asset. `return` previously exited the whole function,
+                                // silently abandoning every remaining handle asset in the UTxO.
+                                continue;
                             }
 
                             // TODO: change to utxo_id to utxo and update handle.me to requst /subhandle-settings/utxo
@@ -1060,6 +1080,12 @@ export class HandlesRepository {
         this.store.addValueToIndexedSet(IndexNames.CHARACTER, characters, name);
         this.store.addValueToIndexedSet(IndexNames.NUMERIC_MODIFIER, numeric_modifiers, name);
         this.store.addValueToIndexedSet(IndexNames.LENGTH, length, name);
+        // handle_type can shift during a handle's lifetime (e.g. HANDLE → VIRTUAL_SUBHANDLE
+        // on LBL_000 processing); without this cleanup the old bucket keeps the handle name
+        // forever and searches filtered by handle_type return ghost results.
+        if (oldHandle && oldHandle.handle_type !== handle.handle_type) {
+            this.store.removeValueFromIndexedSet(IndexNames.HANDLE_TYPE, oldHandle.handle_type, name);
+        }
         this.store.addValueToIndexedSet(IndexNames.HANDLE_TYPE, handle.handle_type, name);
 
         if (name.includes('@')) {
@@ -1078,7 +1104,13 @@ export class HandlesRepository {
         this.store.removeValueFromIndexedSet(IndexNames.PERSONALIZED, Number(!personalized), name);
         this.store.removeValueFromIndexedSet(IndexNames.ADDRESS, oldHandle?.resolved_addresses.ada!, name); 
         this.store.removeValueFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, old_payment_key_hash, name);
-        this.store.removeValuesFromOrderedSet(IndexNames.SLOT, updated_slot_number);
+        // SLOT is a ZSET keyed by handle name with slot as score. The prior code passed the
+        // *ordinal* to removeValuesFromOrderedSet, which ran ZREM against the stringified slot
+        // number — a no-op that never matched the actual member (the handle name). Worse, for
+        // a handle whose name happens to equal the slot string (rare but possible), it would
+        // accidentally remove the wrong record. ZADD below updates the score for the existing
+        // member idempotently, but we keep this defensive ZREM-by-name for cleanliness.
+        this.store.removeValuesFromOrderedSet(IndexNames.SLOT, name);
         
         // add the new
         this.store.addValueToIndexedSet(IndexNames.PERSONALIZED, Number(personalized), name);

@@ -82,18 +82,23 @@ const acquireScannerLease = (owner: string): boolean => {
     return result === 'OK';
 };
 
+// Atomic compare-and-pexpire via Lua. A non-atomic GET + PEXPIRE would let a
+// stale owner reach in during the TOCTOU window and extend a freshly-acquired
+// lease belonging to another invocation.
+const LEASE_RENEW_SCRIPT = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('PEXPIRE', KEYS[1], ARGV[2]) else return 0 end";
+const LEASE_RELEASE_SCRIPT = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end";
+
 const renewScannerLease = (owner: string): boolean => {
-    const currentOwner = store.redisClientCall('get', SCANNER_LEASE_KEY);
-    if (currentOwner !== owner) return false;
-    const updated = store.redisClientCall('pexpire', SCANNER_LEASE_KEY, SCANNER_LEASE_TTL_MS);
-    return !!updated;
+    const result = store.redisClientCall('customCommand', [
+        'EVAL', LEASE_RENEW_SCRIPT, '1', SCANNER_LEASE_KEY, owner, `${SCANNER_LEASE_TTL_MS}`
+    ]);
+    return Number(result) === 1;
 };
 
 const releaseScannerLease = (owner: string): void => {
-    const currentOwner = store.redisClientCall('get', SCANNER_LEASE_KEY);
-    if (currentOwner === owner) {
-        store.redisClientCall('del', [SCANNER_LEASE_KEY]);
-    }
+    store.redisClientCall('customCommand', [
+        'EVAL', LEASE_RELEASE_SCRIPT, '1', SCANNER_LEASE_KEY, owner
+    ]);
 };
 
 const setRecoveryFlag = (reason: string): void => {
@@ -818,7 +823,10 @@ const processRollback = async ({ currentSlot, rollbackOffset = 2160, suppressNot
     });
     store.pipeline(() => {
         for (const utxo of repairCanonicalUTxOs) {
-            handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap);
+            // Rollback repair deliberately replaces a known-stale utxo pointer with the canonical
+            // one, so the ordinary double-mint detection would fire on every repair — falsely
+            // bumping `handle.amount` and eventually breaking the burn threshold in removeHandle().
+            handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap, undefined, { suppressDoubleMintDetection: true });
         }
     });
 
@@ -1059,7 +1067,9 @@ const repairHandles = async (handleNames: string[]): Promise<{ checked: number; 
     });
     store.pipeline(() => {
         for (const utxo of touchedUTxOs) {
-            handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap);
+            // Same repair semantics as processRollback: suppress the double-mint bump so repeated
+            // drift repair doesn't inflate `handle.amount` past the burn threshold in removeHandle().
+            handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap, undefined, { suppressDoubleMintDetection: true });
         }
     });
 
@@ -1089,6 +1099,7 @@ const scan = async () => {
         event: 'scannerLambda.scan.breadcrumb'
     });
     const existingLastSlot = Number(metrics.lastSlot ?? 0);
+    const startingCurrentSlot = Number(metrics.currentSlot ?? 0);
     // Is scanning fast enough to do this without MAX_TIP_SLOTS? Or a much higher one?
     handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.SCANNING, lockLambdasTimestamp: Date.now() });
     try {
@@ -1218,9 +1229,6 @@ const scan = async () => {
             }
         }
 
-        scanBreadcrumb('buildMptRootHash_start');
-        await buildAndStoreMptRootHash(store);
-        scanBreadcrumb('buildMptRootHash_done');
     } catch (error: any) {
         if (error instanceof ScannerDeadlineError) {
             Logger.log({
@@ -1249,6 +1257,25 @@ const scan = async () => {
         Logger.log({ message: `Error in scanner lambda: ${error.message}`, category: LogCategory.ERROR, event: 'scannerLambda.error' });
         throw error;
     } finally {
+        // Rebuild whenever currentSlot changed this invocation — the scan loop
+        // advances currentSlot and IndexNames.HANDLE per-block, so any exit
+        // path (including a deadline-terminated one) that committed blocks
+        // must refresh stored mpt_root_hash, or /mpt-root will report a hash
+        // from an earlier handle-set state.
+        const endingCurrentSlot = Number(handlesRepo.getMetrics().currentSlot ?? 0);
+        if (endingCurrentSlot !== startingCurrentSlot) {
+            try {
+                scanBreadcrumb('buildMptRootHash_start');
+                await buildAndStoreMptRootHash(store);
+                scanBreadcrumb('buildMptRootHash_done');
+            } catch (mptError: any) {
+                Logger.log({
+                    message: `Failed to rebuild mpt_root_hash in scan finally: ${mptError?.message ?? mptError}`,
+                    category: LogCategory.ERROR,
+                    event: 'scannerLambda.buildMptRootHash.error'
+                });
+            }
+        }
         handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
     }
 };
@@ -1441,5 +1468,8 @@ export const Internal = {
     checkRollback,
     processRollback,
     processReindex,
-    scan
+    scan,
+    acquireScannerLease,
+    renewScannerLease,
+    releaseScannerLease
 };

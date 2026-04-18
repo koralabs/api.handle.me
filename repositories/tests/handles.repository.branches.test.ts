@@ -1,5 +1,5 @@
 import * as common from '@koralabs/kora-labs-common';
-import { AssetNameLabel, decodeAddress, EMPTY, getSlotNumberFromDate, IndexNames, LockedLambdaReason, Logger } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, decodeAddress, EMPTY, getSlotNumberFromDate, HandleType, IndexNames, LockedLambdaReason, Logger } from '@koralabs/kora-labs-common';
 import * as crypto from 'crypto';
 import * as config from '../../config';
 import * as ogmiosUtils from '../../services/ogmios/utils';
@@ -341,7 +341,7 @@ describe('HandlesRepository branch tests', () => {
         expect(saveSpy).toHaveBeenCalledWith(
             expect.objectContaining({
                 name: 'tiny@root',
-                handle_type: 'virtual_subhandle',
+                handle_type: HandleType.VIRTUAL_SUBHANDLE,
                 resolved_addresses: expect.objectContaining({
                     ada: expect.stringMatching(/^addr/),
                     btc: 'bc1qdemo',
@@ -1754,5 +1754,276 @@ describe('HandlesRepository branch tests', () => {
             }),
             brokenHandle
         );
+    });
+
+    // Invariant: burning a handle must remove it from every secondary index that save() populated,
+    // or searches filtered by handle_type / personalized / slot keep returning keys that no longer
+    // exist in IndexNames.HANDLE. Failure mode: without the three added removals, a burned handle
+    // shows up in /handles?handle_type=... and /handles?personalized=true queries.
+    it('removeHandle cleans HANDLE_TYPE, both PERSONALIZED buckets, and SLOT on full burn', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        const handle = {
+            name: 'alpha',
+            amount: 1,
+            holder,
+            handle_type: HandleType.HANDLE,
+            rarity: 'basic',
+            og_number: 0,
+            characters: 'letters',
+            resolved_addresses: { ada: address },
+            numeric_modifiers: '',
+            length: 5,
+            image_hash: '0xhash',
+            standard_image_hash: '0xhash',
+            personalization: undefined
+        } as any;
+
+        repo.removeHandle(handle);
+
+        expect(store.removeValueFromIndexedSet).toHaveBeenCalledWith(IndexNames.HANDLE_TYPE, 'handle', 'alpha');
+        // Both PERSONALIZED buckets are pruned so a stored bucket mismatch (legacy or drifted
+        // state) can't leave an orphan on the opposite side.
+        expect(store.removeValueFromIndexedSet).toHaveBeenCalledWith(IndexNames.PERSONALIZED, 0, 'alpha');
+        expect(store.removeValueFromIndexedSet).toHaveBeenCalledWith(IndexNames.PERSONALIZED, 1, 'alpha');
+        expect(store.removeValuesFromOrderedSet).toHaveBeenCalledWith(IndexNames.SLOT, 'alpha');
+    });
+
+    // Invariant: save() must remove the old HANDLE_TYPE bucket entry when a handle's type
+    // changes (e.g. HANDLE → VIRTUAL_SUBHANDLE when an LBL_000 update arrives). Without this,
+    // the old bucket retains a stale reference and searches filtered by the old handle_type
+    // return a handle that no longer matches that type.
+    it('save() removes old HANDLE_TYPE bucket when handle_type changes', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+
+        const newHandle = repo.Internal.buildHandle({
+            name: 'alpha',
+            hex: Buffer.from('alpha').toString('hex'),
+            policy,
+            resolved_addresses: { ada: address },
+            updated_slot_number: 100,
+            handle_type: HandleType.VIRTUAL_SUBHANDLE
+        });
+        newHandle.holder = holder;
+        newHandle.holder_type = 'wallet';
+
+        const oldHandle = { ...newHandle, handle_type: HandleType.HANDLE } as any;
+
+        repo.save(newHandle, oldHandle);
+
+        expect(store.removeValueFromIndexedSet).toHaveBeenCalledWith(IndexNames.HANDLE_TYPE, 'handle', 'alpha');
+        expect(store.addValueToIndexedSet).toHaveBeenCalledWith(IndexNames.HANDLE_TYPE, 'virtual_subhandle', 'alpha');
+    });
+
+    it('save() does not remove HANDLE_TYPE bucket when handle_type is unchanged', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+
+        const newHandle = repo.Internal.buildHandle({
+            name: 'alpha',
+            hex: Buffer.from('alpha').toString('hex'),
+            policy,
+            resolved_addresses: { ada: address },
+            updated_slot_number: 100,
+            handle_type: HandleType.HANDLE
+        });
+        newHandle.holder = holder;
+        newHandle.holder_type = 'wallet';
+
+        repo.save(newHandle, { ...newHandle } as any);
+
+        const typeRemovals = (store.removeValueFromIndexedSet as jest.Mock).mock.calls.filter(
+            (call) => call[0] === IndexNames.HANDLE_TYPE
+        );
+        expect(typeRemovals).toHaveLength(0);
+    });
+
+    // Invariant: save() must clean SLOT by the handle *name*, not by the slot ordinal. The prior
+    // code called removeValuesFromOrderedSet(SLOT, updated_slot_number) which issued ZREM with
+    // the stringified number — a no-op for normal handles, and worst case a wrong-target removal
+    // for a handle whose name happened to collide with the slot string.
+    it('save() cleans SLOT zset by handle name, not by slot ordinal', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+
+        const newHandle = repo.Internal.buildHandle({
+            name: 'alpha',
+            hex: Buffer.from('alpha').toString('hex'),
+            policy,
+            resolved_addresses: { ada: address },
+            updated_slot_number: 12345,
+            handle_type: HandleType.HANDLE
+        });
+        newHandle.holder = holder;
+        newHandle.holder_type = 'wallet';
+
+        repo.save(newHandle);
+
+        expect(store.removeValuesFromOrderedSet).toHaveBeenCalledWith(IndexNames.SLOT, 'alpha');
+        expect(store.removeValuesFromOrderedSet).not.toHaveBeenCalledWith(IndexNames.SLOT, 12345);
+    });
+
+    // Invariant: when updateHandleIndexes encounters an LBL_100 or LBL_001 asset whose datum
+    // is missing, it must skip only that asset and continue processing the rest of the UTxO's
+    // handle assets. Failure mode: the prior `return` exited the whole function, abandoning
+    // every subsequent handle asset with no error signal — a transfer of handle A in the same
+    // UTxO as a broken reference token for handle B would silently leave A at its old UTxO.
+    it('LBL_100 with missing datum skips only that asset; subsequent assets still save', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        const saveSpy = jest.spyOn(repo, 'save').mockImplementation(jest.fn());
+        jest.spyOn(repo, 'updateHolder').mockImplementation(jest.fn());
+
+        const assetRefBad = `${AssetNameLabel.LBL_100}${Buffer.from('broken').toString('hex')}`;
+        const assetMain = `${AssetNameLabel.LBL_222}${Buffer.from('alpha').toString('hex')}`;
+
+        jest.spyOn(ogmiosUtils, 'getHandleNameFromAssetName').mockImplementation((assetName: string) => {
+            if (assetName === assetRefBad) return { name: 'broken', ownerTokenHex: assetRefBad, isCip67: true, assetLabel: AssetNameLabel.LBL_100 };
+            return { name: 'alpha', ownerTokenHex: assetMain, isCip67: true, assetLabel: AssetNameLabel.LBL_222 };
+        });
+
+        const mintingData = new Map([
+            ['broken', [{ created_slot: 1, metadata: {}, txHash: 'tx_a' } as any]],
+            ['alpha', [{ created_slot: 1, metadata: {}, txHash: 'tx_a' } as any]]
+        ]);
+
+        repo.updateHandleIndexes(
+            {
+                ...buildUtxo('', 50, /* datum */ undefined),
+                handles: [[policy, [assetRefBad, assetMain]]],
+                mint: [[policy, [assetRefBad, assetMain]]]
+            } as any,
+            mintingData as any,
+            new Map(),
+            new Map()
+        );
+
+        expect(saveSpy.mock.calls.some(([handle]) => handle?.name === 'alpha')).toBe(true);
+    });
+
+    it('LBL_001 with missing datum skips only that asset; subsequent assets still save', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        const saveSpy = jest.spyOn(repo, 'save').mockImplementation(jest.fn());
+        jest.spyOn(repo, 'updateHolder').mockImplementation(jest.fn());
+
+        const assetSubHandleSettingsBad = `${AssetNameLabel.LBL_001}${Buffer.from('broken').toString('hex')}`;
+        const assetMain = `${AssetNameLabel.LBL_222}${Buffer.from('alpha').toString('hex')}`;
+
+        jest.spyOn(ogmiosUtils, 'getHandleNameFromAssetName').mockImplementation((assetName: string) => {
+            if (assetName === assetSubHandleSettingsBad) return { name: 'broken', ownerTokenHex: assetSubHandleSettingsBad, isCip67: true, assetLabel: AssetNameLabel.LBL_001 };
+            return { name: 'alpha', ownerTokenHex: assetMain, isCip67: true, assetLabel: AssetNameLabel.LBL_222 };
+        });
+
+        const mintingData = new Map([
+            ['broken', [{ created_slot: 1, metadata: {}, txHash: 'tx_a' } as any]],
+            ['alpha', [{ created_slot: 1, metadata: {}, txHash: 'tx_a' } as any]]
+        ]);
+
+        repo.updateHandleIndexes(
+            {
+                ...buildUtxo('', 50, /* datum */ undefined),
+                handles: [[policy, [assetSubHandleSettingsBad, assetMain]]],
+                mint: [[policy, [assetSubHandleSettingsBad, assetMain]]]
+            } as any,
+            mintingData as any,
+            new Map(),
+            new Map()
+        );
+
+        expect(saveSpy.mock.calls.some(([handle]) => handle?.name === 'alpha')).toBe(true);
+    });
+
+    // Invariant: during rollback repair, updateHandleIndexes is invoked with a known-stale stored
+    // handle pointer and the canonical on-chain UTxO. Its double-mint detection compares the two
+    // and increments handle.amount when they differ — which they always do during repair.
+    // Repeated repairs would inflate amount past the burn threshold (amount - 1 <= 0 in
+    // removeHandle) and leave burned handles permanently in the HANDLE index. The options flag
+    // suppresses that detection so repair is safe to replay.
+    it('updateHandleIndexes with suppressDoubleMintDetection does not bump amount on stale-vs-canonical utxo', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        const saveSpy = jest.spyOn(repo, 'save').mockImplementation(jest.fn());
+        jest.spyOn(repo, 'updateHolder').mockImplementation(jest.fn());
+
+        const assetMain = `${AssetNameLabel.LBL_222}${Buffer.from('alpha').toString('hex')}`;
+        jest.spyOn(ogmiosUtils, 'getHandleNameFromAssetName').mockReturnValue({
+            name: 'alpha',
+            ownerTokenHex: assetMain,
+            isCip67: true,
+            assetLabel: AssetNameLabel.LBL_222
+        });
+
+        const stored = {
+            name: 'alpha',
+            hex: assetMain,
+            policy,
+            amount: 1,
+            utxo: 'stale_tx#0',
+            updated_slot_number: 10,
+            created_slot_number: 5,
+            resolved_addresses: { ada: address },
+            holder
+        } as any;
+
+        repo.updateHandleIndexes(
+            {
+                ...buildUtxo(assetMain, 100),
+                id: 'canonical_tx#0',
+                tx_id: 'canonical_tx',
+                mint: [[policy, [assetMain]]]
+            } as any,
+            new Map([['alpha', [{ created_slot: 5, metadata: {}, txHash: 'canonical_tx' } as any]]]),
+            new Map([['alpha', stored]]),
+            new Map(),
+            { suppressDoubleMintDetection: true }
+        );
+
+        const [savedHandle] = saveSpy.mock.calls[0];
+        expect(savedHandle.amount).toBe(1);
+    });
+
+    it('updateHandleIndexes without the suppress flag DOES bump amount (baseline)', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        const saveSpy = jest.spyOn(repo, 'save').mockImplementation(jest.fn());
+        jest.spyOn(repo, 'updateHolder').mockImplementation(jest.fn());
+        jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
+
+        const assetMain = `${AssetNameLabel.LBL_222}${Buffer.from('alpha').toString('hex')}`;
+        jest.spyOn(ogmiosUtils, 'getHandleNameFromAssetName').mockReturnValue({
+            name: 'alpha',
+            ownerTokenHex: assetMain,
+            isCip67: true,
+            assetLabel: AssetNameLabel.LBL_222
+        });
+
+        const stored = {
+            name: 'alpha',
+            hex: assetMain,
+            policy,
+            amount: 1,
+            utxo: 'stale_tx#0',
+            updated_slot_number: 10,
+            created_slot_number: 5,
+            resolved_addresses: { ada: address },
+            holder
+        } as any;
+
+        repo.updateHandleIndexes(
+            {
+                ...buildUtxo(assetMain, 100),
+                id: 'canonical_tx#0',
+                tx_id: 'canonical_tx',
+                mint: [[policy, [assetMain]]]
+            } as any,
+            new Map([['alpha', [{ created_slot: 5, metadata: {}, txHash: 'canonical_tx' } as any]]]),
+            new Map([['alpha', stored]]),
+            new Map()
+        );
+
+        const [savedHandle] = saveSpy.mock.calls[0];
+        expect(savedHandle.amount).toBe(2);
     });
 });

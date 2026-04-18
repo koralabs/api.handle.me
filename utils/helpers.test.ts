@@ -1,5 +1,5 @@
 import { KoiosTxInfo } from '../interfaces/provider.interface';
-import { buildUTxOsFromKoiosTxs } from './helpers';
+import { buildUTxOsFromKoiosTxs, canonicalJsonStringify } from './helpers';
 
 export { buildUTxOsFromKoiosTxs } from './helpers';
 
@@ -386,6 +386,54 @@ describe('helper tests', () => {
                     tx_id: 'fe40d980c3105c956c2cf29567966b6cafcab0e150e856ec6d4969a4d08aa353'
                 }
             ]);
+        });
+    });
+
+    // Invariant: two MintingData objects that differ only in property-insertion
+    // order must serialize to the same string, so Redis SADD on IndexNames.MINT
+    // deduplicates when a block is replayed after a crash. Failure mode: if
+    // canonical encoding is removed, a metadata object with reordered keys
+    // produces a distinct member and the mint is double-counted on replay.
+    describe('canonicalJsonStringify', () => {
+        it('produces identical strings for objects whose keys differ only in insertion order', () => {
+            const a = { b: 1, a: { z: 'y', x: 'w' }, c: [1, 2] };
+            const b = { c: [1, 2], a: { x: 'w', z: 'y' }, b: 1 };
+            expect(canonicalJsonStringify(a)).toEqual(canonicalJsonStringify(b));
+        });
+
+        it('distinguishes logically different values', () => {
+            expect(canonicalJsonStringify({ a: 1 })).not.toEqual(canonicalJsonStringify({ a: 2 }));
+            expect(canonicalJsonStringify({ a: 1, b: 2 })).not.toEqual(canonicalJsonStringify({ a: 1 }));
+        });
+
+        it('coerces bigint to a numeric string (survives JSON encoding)', () => {
+            expect(canonicalJsonStringify({ n: BigInt(42) })).toEqual('{"n":"42"}');
+        });
+
+        it('produces stable output across nested arrays and objects', () => {
+            const payload = {
+                created_slot: 100,
+                txHash: 'abc',
+                metadata: {
+                    '721': {
+                        'policy-x': {
+                            asset: { og: 0, name: '$ada', image: 'ipfs://x' }
+                        }
+                    }
+                }
+            };
+            const reordered = {
+                metadata: {
+                    '721': {
+                        'policy-x': {
+                            asset: { image: 'ipfs://x', name: '$ada', og: 0 }
+                        }
+                    }
+                },
+                txHash: 'abc',
+                created_slot: 100
+            };
+            expect(canonicalJsonStringify(payload)).toEqual(canonicalJsonStringify(reordered));
         });
     });
 });

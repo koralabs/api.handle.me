@@ -110,6 +110,29 @@ const setup = ({ whitelistedApiKeys = 'allowed-key' }: { whitelistedApiKeys?: st
                 for (const key of keys) kvStore.delete(key);
                 return keys.length;
             }
+            if (cmd === 'customCommand') {
+                // Fake-evaluate the EVAL script forms the scanner uses for
+                // atomic lease renew/release. Only handles the scripts actually
+                // shipped in scanner.app.ts; unknown scripts return undefined.
+                const [cmdArgs] = args as [string[]];
+                if (cmdArgs?.[0] === 'EVAL' && cmdArgs[2] === '1') {
+                    const script = `${cmdArgs[1] ?? ''}`;
+                    const key = cmdArgs[3];
+                    const owner = cmdArgs[4];
+                    const ttl = cmdArgs[5];
+                    if (script.includes('PEXPIRE')) {
+                        return kvStore.get(key) === owner && ttl ? 1 : 0;
+                    }
+                    if (script.includes('DEL')) {
+                        if (kvStore.get(key) === owner) {
+                            kvStore.delete(key);
+                            return 1;
+                        }
+                        return 0;
+                    }
+                }
+                return undefined;
+            }
             return undefined;
         }),
         removeValueFromIndexedSet: jest.fn(),
@@ -964,6 +987,120 @@ describe('Scanner lambda unit tests', () => {
             expect.objectContaining({ lockLambdas: LockedLambdaReason.SCANNING, lockLambdasTimestamp: expect.any(Number) })
         );
         expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
+    });
+
+    // Invariant: after every scan invocation, the persisted mpt_root_hash must
+    // reflect the handle set currently in IndexNames.HANDLE. currentSlot and
+    // the handle index are mutated per-block inside the scan loop, so an
+    // invocation that exits via a retriable provider failure (or hits the
+    // scanner deadline) must still rebuild the root before unlocking —
+    // otherwise /mpt-root reports a hash from an earlier handle-set state.
+    // Invariant: lease renewal and release must be compare-and-set atomic.
+    // A non-atomic GET + PEXPIRE would let a stale owner extend a lease that
+    // has expired and been re-acquired by another invocation (double-writer).
+    // Failure mode: with non-atomic ops, heartbeat by a stale owner could
+    // keep a lease alive for the new owner, letting both run concurrently.
+    it('renewScannerLease refuses to extend a lease held by another owner', () => {
+        const { scannerModule, store } = setup();
+        scannerModule.Internal.acquireScannerLease('owner-a');
+        expect(scannerModule.Internal.renewScannerLease('owner-b')).toBe(false);
+        // Ensure no PEXPIRE / DEL side-effect was applied on behalf of owner-b
+        const customCalls = (store.redisClientCall as jest.Mock).mock.calls.filter(([cmd]) => cmd === 'customCommand');
+        expect(customCalls.length).toBeGreaterThan(0);
+    });
+
+    it('renewScannerLease succeeds only for the current owner', () => {
+        const { scannerModule } = setup();
+        expect(scannerModule.Internal.acquireScannerLease('owner-a')).toBe(true);
+        expect(scannerModule.Internal.renewScannerLease('owner-a')).toBe(true);
+    });
+
+    it('releaseScannerLease does not delete a lease owned by someone else', () => {
+        const { scannerModule } = setup();
+        expect(scannerModule.Internal.acquireScannerLease('owner-a')).toBe(true);
+        scannerModule.Internal.releaseScannerLease('owner-b');
+        // owner-a should still be able to renew — their lease wasn't touched
+        expect(scannerModule.Internal.renewScannerLease('owner-a')).toBe(true);
+    });
+
+    it('persists mpt_root_hash on retriable provider failure when currentSlot advanced', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        // Simulate a scan that committed at least one block before hitting the
+        // retriable error: getMetrics returns slot=100 on entry (starting) and
+        // slot=105 in finally (ending). The invariant requires a rebuild.
+        handlesRepo.getMetrics
+            .mockReturnValueOnce({ currentBlockHash: 'start_hash', currentSlot: 100, lockLambdas: LockedLambdaReason.UNLOCKED })
+            .mockReturnValue({ currentBlockHash: 'later_hash', currentSlot: 105, lockLambdas: LockedLambdaReason.SCANNING });
+        store.getKeysFromIndex.mockReturnValue(['handle-a', 'handle-b']);
+        const retriable: any = new Error('terminated');
+        retriable.code = 'UND_ERR_SOCKET';
+        mockedHelpers.fetchPaginatedResults.mockRejectedValue(retriable);
+
+        await expect(scannerModule.Internal.scan()).resolves.toBe(false);
+
+        expect(store.setMptRootHash).toHaveBeenCalledTimes(1);
+        const persistedHash = store.setMptRootHash.mock.calls[0][0];
+        expect(typeof persistedHash).toBe('string');
+        expect(persistedHash).toMatch(/^[0-9a-f]{64}$/);
+        expect(store.getKeysFromIndex).toHaveBeenCalledWith(IndexNames.HANDLE);
+        expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
+    });
+
+    it('persists mpt_root_hash on fatal rethrown error when currentSlot advanced', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        handlesRepo.getMetrics
+            .mockReturnValueOnce({ currentBlockHash: 'start_hash', currentSlot: 100, lockLambdas: LockedLambdaReason.UNLOCKED })
+            .mockReturnValue({ currentBlockHash: 'later_hash', currentSlot: 110, lockLambdas: LockedLambdaReason.SCANNING });
+        store.getKeysFromIndex.mockReturnValue(['only-handle']);
+        mockedHelpers.fetchPaginatedResults.mockRejectedValue(new Error('non-retriable scan explosion'));
+
+        await expect(scannerModule.Internal.scan()).rejects.toThrow('non-retriable scan explosion');
+
+        expect(store.setMptRootHash).toHaveBeenCalledTimes(1);
+        expect(store.setMptRootHash.mock.calls[0][0]).toMatch(/^[0-9a-f]{64}$/);
+        expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
+    });
+
+    it('skips mpt_root_hash rebuild when currentSlot did not advance', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        // Scanner ran but processed no blocks (e.g. provider throw before any
+        // block committed). currentSlot is unchanged between entry and finally.
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', currentSlot: 100, lockLambdas: LockedLambdaReason.UNLOCKED });
+        store.getKeysFromIndex.mockReturnValue(['handle-a']);
+        const retriable: any = new Error('terminated');
+        retriable.code = 'UND_ERR_SOCKET';
+        mockedHelpers.fetchPaginatedResults.mockRejectedValue(retriable);
+
+        await expect(scannerModule.Internal.scan()).resolves.toBe(false);
+
+        expect(store.setMptRootHash).not.toHaveBeenCalled();
+        expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
+    });
+
+    it('persists distinct mpt_root_hash values for distinct handle sets', async () => {
+        const { handlesRepo, scannerModule, store } = setup();
+        const advancingSlotMock = () => {
+            handlesRepo.getMetrics
+                .mockReturnValueOnce({ currentBlockHash: 'start_hash', currentSlot: 100, lockLambdas: LockedLambdaReason.UNLOCKED })
+                .mockReturnValue({ currentBlockHash: 'later_hash', currentSlot: 101, lockLambdas: LockedLambdaReason.SCANNING });
+        };
+        mockedHelpers.fetchPaginatedResults.mockRejectedValue(new Error('boom'));
+
+        advancingSlotMock();
+        store.getKeysFromIndex.mockReturnValue(['alpha']);
+        await expect(scannerModule.Internal.scan()).rejects.toThrow('boom');
+        const firstHash = store.setMptRootHash.mock.calls[0][0];
+
+        store.setMptRootHash.mockClear();
+        handlesRepo.getMetrics.mockReset();
+        advancingSlotMock();
+        store.getKeysFromIndex.mockReturnValue(['alpha', 'beta']);
+        await expect(scannerModule.Internal.scan()).rejects.toThrow('boom');
+        const secondHash = store.setMptRootHash.mock.calls[0][0];
+
+        expect(firstHash).toMatch(/^[0-9a-f]{64}$/);
+        expect(secondHash).toMatch(/^[0-9a-f]{64}$/);
+        expect(firstHash).not.toEqual(secondHash);
     });
 
     it('sets rollback recovery flag on missing minting data instead of crash-looping', async () => {

@@ -3,6 +3,8 @@ const mockGetHashFromIndex = jest.fn();
 const mockGetKeysFromIndex = jest.fn().mockReturnValue([]);
 const mockGetMptRootHash = jest.fn().mockReturnValue(undefined);
 const mockSetMptRootHash = jest.fn();
+const mockFetchKoios = jest.fn();
+const mockBlockfrostApiCall = jest.fn();
 
 jest.mock('../stores/redis', () => ({
     RedisHandlesStore: jest.fn().mockImplementation(() => ({
@@ -13,6 +15,15 @@ jest.mock('../stores/redis', () => ({
         setMptRootHash: mockSetMptRootHash
     }))
 }));
+
+jest.mock('./helpers', () => {
+    const actual = jest.requireActual('./helpers');
+    return {
+        ...actual,
+        fetchKoios: (...args: any[]) => mockFetchKoios(...args),
+        blockfrostApiCall: (...args: any[]) => mockBlockfrostApiCall(...args)
+    };
+});
 
 describe('snapshotVerification', () => {
     beforeEach(() => {
@@ -109,5 +120,38 @@ describe('snapshotVerification', () => {
         mockGetHashFromIndex.mockReturnValue(undefined);
 
         await expect(getChainMintingDataRootHash()).rejects.toThrow('Minting data datum not found for handle handle_root@handle_settings');
+    });
+
+    // Invariant: when Koios returns 200 with an empty body for /tip, the prober must not synthesize
+    // a valid-looking probe with tipSlot=0 — the downstream verified check compares provider.tipSlot
+    // against our scanner's currentSlot, and a zero tipSlot either always "wins" or always loses,
+    // either way masking a real Koios outage. Failure mode: removing the null-guard makes the
+    // prober return { tipSlot: 0 } and the /mpt-root endpoint treats a broken provider as working.
+    it('probeProviderMptRootHash returns null when Koios tip endpoint returns empty body', async () => {
+        const { probeProviderMptRootHash } = await import('./snapshotVerification');
+        mockFetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'asset_utxos') {
+                return [{ inline_datum: { bytes: `d8799f5820${'aa'.repeat(32)}ff` } }];
+            }
+            if (path === 'tip') return null;
+            return null;
+        });
+        mockBlockfrostApiCall.mockResolvedValue({ ok: false });
+
+        await expect(probeProviderMptRootHash()).resolves.toBeNull();
+    });
+
+    it('probeProviderMptRootHash returns null when Koios tip entry has abs_slot=0', async () => {
+        const { probeProviderMptRootHash } = await import('./snapshotVerification');
+        mockFetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'asset_utxos') {
+                return [{ inline_datum: { bytes: `d8799f5820${'aa'.repeat(32)}ff` } }];
+            }
+            if (path === 'tip') return [{ abs_slot: 0 }];
+            return null;
+        });
+        mockBlockfrostApiCall.mockResolvedValue({ ok: false });
+
+        await expect(probeProviderMptRootHash()).resolves.toBeNull();
     });
 });

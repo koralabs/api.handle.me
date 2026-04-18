@@ -6,8 +6,9 @@ import { inflate } from 'zlib';
 import { DISABLE_HANDLES_SNAPSHOT, NODE_ENV } from '../../config';
 import { handleEraBoundaries, MAX_SETS_PER_PIPE, META_INDEXES, ORDERED_SLOTS } from '../../config/constants';
 import { getHandleNameFromAssetName } from '../../services/ogmios/utils';
+import { canonicalJsonStringify } from '../../utils/helpers';
 import { isChainVerifiedSnapshot, VerifiedHandleFileContent } from '../../utils/verifiedSnapshot';
-import { getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey, getApiMptRootHashKey, getApiNamespaceScanPattern } from './keys';
+import { getApiCacheTag, getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey, getApiMptRootHashKey, getApiNamespaceScanPattern } from './keys';
 
 // const glideClient = await GlideClient.createClient({
 //       addresses: [{ host: 'https://localhost', port: 6379 }],
@@ -49,6 +50,12 @@ export class RedisHandlesStore implements IApiStore {
      * If it feels like your code "isn't running" or "isn't returning anything", this is probably why.
      */
     public pipeline(commands: CallableFunction) {
+        if (RedisHandlesStore._pipeline !== undefined) {
+            // Fail loudly on reentrance — the previous behavior silently
+            // overwrote the outer pipeline's queued commands, causing writes
+            // to vanish. Callers must not nest pipelines.
+            throw new Error('RedisHandlesStore.pipeline() called while another pipeline is already active');
+        }
         RedisHandlesStore._pipeline = [];
         try {
             commands();
@@ -169,12 +176,42 @@ export class RedisHandlesStore implements IApiStore {
 
     public async tryPopulateFromS3UTxOs(utxoFunctions: UTxOFunctions): Promise<{ slot: number; id: string }> {
         const startTime = Date.now();
-        this.clearNamespace();
-        let id = handleEraBoundaries[NETWORK].id;
-        let slot = handleEraBoundaries[NETWORK].slot;
         const currentUTxOSchemaVersion = this.getUTxOSchemaVersion();
         const fileName = 'handles_utxos.gz';
         const url = `http://api.handle.me.s3-website-us-west-2.amazonaws.com/${NETWORK}/utxo-snapshot/${this.getUTxOSchemaVersion()}/${fileName}`;
+
+        // Resume-capable loader. Progress marker lives in the namespace as a
+        // hash at {api:NETWORK}:snapshot_loader:progress. On fresh start we
+        // clearNamespace() and then write an empty progress marker. On resume
+        // we skip clearNamespace and pick up from the saved chunk index so a
+        // 15-min Lambda timeout doesn't lose progress; the next invocation
+        // continues from where we stopped.
+        const progressKey = `${getApiCacheTag(NETWORK)}:snapshot_loader:progress`;
+        type LoaderProgress = { mdIdx: number; utxoIdx: number };
+        const readProgress = (): LoaderProgress | null => {
+            const raw = this.redisClientCall('hgetall', progressKey) as Record<string, string> | null;
+            if (!raw || Object.keys(raw).length === 0) return null;
+            return { mdIdx: Number(raw.mdIdx ?? 0), utxoIdx: Number(raw.utxoIdx ?? 0) };
+        };
+        const writeProgress = (p: LoaderProgress) => {
+            this.redisClientCall('hset', progressKey, { mdIdx: String(p.mdIdx), utxoIdx: String(p.utxoIdx) });
+        };
+        const deleteProgress = () => {
+            this.redisClientCall('del', [progressKey]);
+        };
+
+        const existing = readProgress();
+        if (!existing) {
+            Logger.log(`Snapshot loader: fresh start — clearing namespace`);
+            this.clearNamespace();
+            writeProgress({ mdIdx: 0, utxoIdx: 0 });
+        } else {
+            Logger.log(`Snapshot loader: resuming at mdIdx=${existing.mdIdx} utxoIdx=${existing.utxoIdx}`);
+        }
+        const progress: LoaderProgress = existing ?? { mdIdx: 0, utxoIdx: 0 };
+
+        let id = handleEraBoundaries[NETWORK].id;
+        let slot = handleEraBoundaries[NETWORK].slot;
         Logger.log(`Fetching ${url}`);
         const awsResponse = await fetch(url);
         if (awsResponse.status === 200) {
@@ -188,13 +225,20 @@ export class RedisHandlesStore implements IApiStore {
 
             if (utxoSchemaVersion == currentUTxOSchemaVersion && isChainVerifiedSnapshot(storedS3HandlesUTxOJson)) {
                 const mintingDataChunks = chunk(Object.entries(mintingData), MAX_SETS_PER_PIPE);
-                for (const mintingDataChunk of mintingDataChunks) {
+                for (let i = progress.mdIdx; i < mintingDataChunks.length; i++) {
+                    const mintingDataChunk = mintingDataChunks[i];
                     this.pipeline(() => {
                         mintingDataChunk.forEach(([handle, mintData]) => {
-                            mintData.forEach(md => this.addValueToIndexedSet(IndexNames.MINT, handle, JSON.stringify(md)));
+                            mintData.forEach(md => this.addValueToIndexedSet(IndexNames.MINT, handle, canonicalJsonStringify(md)));
                         });
                     });
+                    progress.mdIdx = i + 1;
+                    if ((i + 1) % 20 === 0 || i + 1 === mintingDataChunks.length) {
+                        writeProgress(progress);
+                        Logger.log(`Snapshot loader: mintingData ${progress.mdIdx}/${mintingDataChunks.length} chunks`);
+                    }
                 }
+                writeProgress(progress);
 
                 Logger.log(`Saved minting data for ${Object.keys(mintingData).length.toLocaleString()} handles from S3 snapshot`);
 
@@ -204,14 +248,21 @@ export class RedisHandlesStore implements IApiStore {
                 const handles = new Map<string, StoredHandle>();
                 const holders = new Map<string, HolderHandleNames>();
                 const mintData = new Map(Object.entries(mintingData) as [string, MintingData[]][]);
-                for (const utxoChunk of utxoChunks) {
+                for (let i = progress.utxoIdx; i < utxoChunks.length; i++) {
+                    const utxoChunk = utxoChunks[i];
                     this.pipeline(() => {
                         utxoChunk.forEach((utxo) => {
                             utxoFunctions[UTxOFunctionName.ADD_UTXO](utxo);
                             utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo, mintData, handles, holders);
                         });
                     });
+                    progress.utxoIdx = i + 1;
+                    if ((i + 1) % 20 === 0 || i + 1 === utxoChunks.length) {
+                        writeProgress(progress);
+                        Logger.log(`Snapshot loader: utxos ${progress.utxoIdx}/${utxoChunks.length} chunks`);
+                    }
                 }
+                writeProgress(progress);
 
                 Logger.log(`Saved ${utxos.length.toLocaleString()} UTxOs from S3 snapshot`);
                 id = s3Hash;
@@ -231,6 +282,7 @@ export class RedisHandlesStore implements IApiStore {
         Logger.log(`UTxO storage starting at slot: ${slot} and hash: ${id} with ${metrics.handleCount} Handles`);
 
         this.setMetrics({ utxoSchemaVersion: currentUTxOSchemaVersion, indexSchemaVersion: this.getIndexSchemaVersion(), currentBlockHash: id, currentSlot: slot, startTimestamp: Date.now() });
+        deleteProgress();
         return { id, slot };
     }
 
