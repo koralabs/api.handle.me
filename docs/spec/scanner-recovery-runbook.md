@@ -114,3 +114,38 @@ aws lambda update-function-code --function-name valkey-utility --zip-file fileb:
 ```
 
 Environment variables available: `REDIS_HOST_US_EAST_1`, `REDIS_HOST_US_WEST_2`, `REDIS_USE_TLS`, `NETWORK`.
+
+### Index-Orphan Audit and Cleanup
+
+The utility also ships with read-only `audit_orphans` and mutating `cleanup_orphans` actions for reconciling secondary indexes against `IndexNames.HANDLE`. These surface entries in `HANDLE_TYPE`, `PERSONALIZED`, and `SLOT` that reference handle names no longer present in the HANDLE index (typically the residue of pre-fix `removeHandle` not pruning every index that `save()` populated), plus any `handle.amount > 1` (which can result from the pre-fix rollback-repair false-positive double-mint bump).
+
+```bash
+# Read-only report — safe to run anytime, both regions
+aws lambda invoke --region us-east-1 --function-name valkey-utility \
+    --cli-binary-format raw-in-base64-out \
+    --payload '{"action":"audit_orphans","region":"us-east-1","network":"mainnet"}' \
+    /tmp/audit.json
+
+# Inspect: counts by category, sample orphans per bucket, inflated-amount handle list
+cat /tmp/audit.json | jq '{live_handles, handle_type_orphan_count, personalized_orphan_0, personalized_orphan_1, slot_orphan_count, inflated_amount_count}'
+```
+
+Cleanup accepts `dryRun: true` to report what it would remove without touching Valkey. Amount resets are unconditional: any `amount > 1` is set to `1`, because there are no real on-chain double-mints in the current state (the historical `mydexaccounts` incident has since been resolved on chain).
+
+```bash
+# Dry run first
+aws lambda invoke --region us-east-1 --function-name valkey-utility \
+    --cli-binary-format raw-in-base64-out \
+    --payload '{"action":"cleanup_orphans","region":"us-east-1","network":"mainnet","dryRun":true}' \
+    /tmp/cleanup-dry.json
+
+# Live cleanup — idempotent; safe to re-run
+aws lambda invoke --region us-east-1 --function-name valkey-utility \
+    --cli-binary-format raw-in-base64-out \
+    --payload '{"action":"cleanup_orphans","region":"us-east-1","network":"mainnet"}' \
+    /tmp/cleanup.json
+```
+
+Mainnet ops rule: run audit/cleanup on east first, verify `/health` and `/mpt-root` remain healthy for ~10 minutes, then do west. The cleanup does not take a region offline but does mutate index state while the API is serving reads, so keep the sequential-region discipline.
+
+**Design note:** a freshly rebuilt snapshot (full S3 reimport) produces a clean index automatically, so post-reimport audit counts are typically zero. Orphans tend to accumulate only across long-lived Valkey instances that have seen many rollbacks or type transitions before the fixes landed.

@@ -1039,9 +1039,12 @@ paths:
       - utils
       summary: MPT root hash verification
       description: |
-        Returns the API's computed Merkle Patricia Trie root hash alongside the
-        on-chain root hash from the `handle_root@handle_settings` datum.
-        When both hashes are available, `verified` indicates whether they match.
+        Returns three Merkle Patricia Trie root hashes for the handle set:
+        - `calculated_mpt_root_hash`: computed from the API's current handle index (plus ghost handles the on-chain validator cannot remove).
+        - `datum_mpt_root_hash`: extracted from the API's cached `handle_root@handle_settings` datum (advances with the scanner as blocks are processed).
+        - `chain_mpt_root_hash`: probed live from Koios (fallback Blockfrost) at provider chain tip.
+
+        `verified` is `true` only when all three hashes are equal AND the provider's tip slot is at or ahead of our `current_slot` (otherwise the provider's view is older than ours and the comparison is not meaningful). A transient `verified: false` with `calculated === datum !== chain` simply reflects scanner lag behind the live chain tip — internal state is consistent, we just haven't applied the most recent blocks.
       responses:
         '200':
           description: MPT root hash comparison
@@ -1050,23 +1053,40 @@ paths:
               schema:
                 type: object
                 properties:
-                  mpt_root_hash:
+                  calculated_mpt_root_hash:
                     type: string
                     nullable: true
-                    description: Computed MPT root hash from the API's handle index
+                    description: MPT root hash computed from the API's current handle set (including ghost handles).
+                    example: "2411906497cba6d7713d99f101182bf48caf8730cea02ae887eeb15fdc2ce51b"
+                  datum_mpt_root_hash:
+                    type: string
+                    nullable: true
+                    description: MPT root hash decoded from the API's cached `handle_root@handle_settings` datum.
                     example: "2411906497cba6d7713d99f101182bf48caf8730cea02ae887eeb15fdc2ce51b"
                   chain_mpt_root_hash:
                     type: string
                     nullable: true
-                    description: On-chain MPT root hash from the handle_root datum
+                    description: MPT root hash probed live from Koios/Blockfrost at chain tip. Null when both providers fail or return an unusable response.
                     example: "2411906497cba6d7713d99f101182bf48caf8730cea02ae887eeb15fdc2ce51b"
                   verified:
                     type: boolean
                     nullable: true
-                    description: Whether the computed and chain hashes match (null if either is unavailable)
+                    description: True only when all three hashes match AND `provider_tip_slot >= our_current_slot`. Null if any of the three hashes is unavailable.
                   network:
                     type: string
                     example: "mainnet"
+                  provider:
+                    type: string
+                    nullable: true
+                    description: Which provider produced `chain_mpt_root_hash`.
+                    enum: [koios, blockfrost]
+                  provider_tip_slot:
+                    type: integer
+                    nullable: true
+                    description: The absolute slot at which the provider reported `chain_mpt_root_hash`.
+                  our_current_slot:
+                    type: integer
+                    description: The absolute slot our scanner has processed up to.
   "/health":
     get:
       tags:
