@@ -28,6 +28,18 @@ This document maps the code entrypoints, what they start, and which environment 
 - In development or test, setting `ENABLE_OGMIOS_SCANNING=false` and `USE_LAMBDA_SCANNER=true` makes `app.ts` invoke `lambdas/scanner.ts` immediately and then every 60 seconds.
 - This is only a local/dev execution mode. The scanner still owns synchronous block application semantics.
 
+### API-based Snapshot Bootstrap
+- `npm run bootstrap:apis` runs `scripts/bootstrap-from-apis.ts`, which rebuilds a full verified handle-set snapshot from Koios + Blockfrost REST calls instead of walking chain history through Ogmios.
+- Replaces the ~20-hour Ogmios bootstrap path with a ~30–45 minute API bootstrap. Produces the same `VerifiedHandleFileContent` shape used by `tryPopulateFromS3UTxOs`, including `slot`, `hash`, `utxos`, `mintingData`, `utxoSchemaVersion`, and chain-verified `verification` metadata whose `verifiedAgainstChain` flag must be true before the snapshot is usable.
+- Output: writes both `<SNAPSHOT_OUT>` (zlib-deflated `.gz`) and the sibling raw `.json` file. Defaults to `tmp/handles_utxos.gz`; set `SNAPSHOT_OUT` to override.
+- Network selection: `NETWORK` (defaults to `preview`).
+- Required credentials: `KOIOS_API_BEARER_TOKEN` and `BLOCKFROST_API_KEY` (both must be present or the script exits immediately).
+- Optional secondary credentials for parallel fetch pools: `KOIOS_API_BEARER_TOKEN_LOW`, `BLOCKFROST_API_KEY_LOW`. When set, the script spreads asset-UTxO and tx-info work across the primary/secondary pool pair for throughput.
+- RPS tuning (defaults in parentheses): `KOIOS_HIGH_RPS` (8), `KOIOS_LOW_RPS` (3), `BF_HIGH_RPS` (10), `BF_LOW_RPS` (10). Lower these if you hit provider rate limits.
+- Debug knobs: `PHASE4=0` skips the tx-info enrichment phase; `PHASE4_MAX_ITEMS=<N>` caps the number of tx-info entries fetched (useful for quick local smoke tests).
+- Verification: the script computes the MPT root from the collected handle set and compares it against the live on-chain `handle_root@handle_settings` datum before writing the snapshot. `verification.verifiedAgainstChain=false` means the computed set did not match chain and the snapshot should NOT be uploaded for the indexer to consume.
+- The resulting `.gz` can be uploaded to `s3://api.handle.me/<network>/utxo-snapshot/<utxoSchemaVersion>/handles_utxos.gz` so the scanner Lambda's `tryPopulateFromS3UTxOs` picks it up on next cold start or reset.
+
 ## Container Runtime
 - `Dockerfile` installs the runtime into `/app` and uses `shell/entrypoint.sh` as the container entrypoint.
 - `shell/install.sh` installs `cardano-node`, Ogmios, Node.js, Valkey, and network config files during image build.
