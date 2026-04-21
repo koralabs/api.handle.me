@@ -27,10 +27,33 @@ paths:
     get:
       tags:
       - utils
-      summary: Redirect to Swagger UI
+      summary: API index with content-negotiated discovery links
+      description: |
+        Returns a pointer to the API's human and machine discovery surfaces. The response is selected via the `Accept` header:
+
+        - `application/yaml` or `text/yaml` → raw OpenAPI spec (this document).
+        - `application/json` → OpenAPI spec parsed to JSON.
+        - `text/plain` → plain-text list of absolute URLs to the Swagger UI, the OpenAPI spec, and the MCP endpoint.
+        - `text/html` (or `*/*` / no `Accept` header) → HTML page with the same links.
+        - Any other media type → `406 Not Acceptable`.
       responses:
-        '302':
-          description: Redirects to `/swagger`
+        '200':
+          description: Discovery payload in the negotiated media type.
+          content:
+            text/html:
+              schema:
+                type: string
+            text/plain:
+              schema:
+                type: string
+            application/yaml:
+              schema:
+                type: string
+            application/json:
+              schema:
+                type: object
+        '406':
+          description: No offered media type matches the request `Accept` header.
   "/mcp":
     post:
       tags:
