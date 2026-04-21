@@ -33,6 +33,22 @@ describe('[GET] /', () => {
         expect(response.text).toEqual(SWAGGER_YAML);
     });
 
+    it('returns full OpenAPI YAML when Accept: application/x-yaml (Postman variant)', async () => {
+        const response = await request(app!.getServer()).get('/').set('Accept', 'application/x-yaml');
+        expect(response.status).toEqual(200);
+        expect(response.headers['content-type']).toMatch(/application\/yaml/);
+        expect(response.text).toEqual(SWAGGER_YAML);
+    });
+
+    it('returns YAML when Accept contains the substring "yaml" alongside other types', async () => {
+        const response = await request(app!.getServer())
+            .get('/')
+            .set('Accept', 'text/html, application/x-yaml;q=0.1');
+        expect(response.status).toEqual(200);
+        expect(response.headers['content-type']).toMatch(/application\/yaml/);
+        expect(response.text).toEqual(SWAGGER_YAML);
+    });
+
     it('returns parsed OpenAPI JSON when Accept: application/json', async () => {
         const response = await request(app!.getServer()).get('/').set('Accept', 'application/json');
         expect(response.status).toEqual(200);

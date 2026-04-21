@@ -34,18 +34,17 @@ const renderHtmlLinks = () => {
 class HomeController {
     public async index(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
-            const accepted = req.accepts([
-                'text/html',
-                'application/json',
-                'application/yaml',
-                'text/yaml',
-                'text/plain'
-            ]);
-
-            if (accepted === 'application/yaml' || accepted === 'text/yaml') {
+            const acceptHeader = String(req.headers.accept ?? '');
+            if (/yaml/i.test(acceptHeader)) {
                 res.type('application/yaml').send(loadSwagger().yaml);
                 return;
             }
+
+            const accepted = req.accepts([
+                'text/html',
+                'application/json',
+                'text/plain'
+            ]);
 
             if (accepted === 'application/json') {
                 res.json(loadSwagger().json);
