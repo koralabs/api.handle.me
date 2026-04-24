@@ -3,7 +3,7 @@ import https from 'https';
 const API_HOST = 'api.handle.me';
 
 const run = async () => {
-    https.get({host: API_HOST, path: '/holders', headers: {'api-key': 'UIFc5DVRlSXJRaQpRMvN'}}, (res) => {
+    https.get({host: API_HOST, path: '/holders', headers: {'api-key': process.env.HANDLES_API_KEY ?? ''}}, (res) => {
         let data = '';
         res.on('data', (chunk) => {
             data += chunk;
