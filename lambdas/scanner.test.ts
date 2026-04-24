@@ -141,7 +141,12 @@ const setup = ({ whitelistedApiKeys = 'allowed-key' }: { whitelistedApiKeys?: st
         repopulateIndexesFromUTxOs: jest.fn(),
         getKeysFromIndex: jest.fn().mockReturnValue([]),
         getMptRootHash: jest.fn().mockReturnValue(undefined),
-        setMptRootHash: jest.fn()
+        setMptRootHash: jest.fn(),
+        recordScannedBlock: jest.fn(),
+        addScannedBlocks: jest.fn(),
+        getScannedBlockHashesInRange: jest.fn().mockReturnValue(new Set<string>()),
+        listAllScannedBlocks: jest.fn().mockReturnValue([]),
+        trimScannedBlocksToRecent: jest.fn()
     };
 
     const handlesRepo = {
@@ -624,7 +629,10 @@ describe('Scanner lambda unit tests', () => {
         }));
 
         pipelineResponses.push(
-            [buildUtxo({ id: 'u1', slot: 200, blockHash: 'provider_a', assetName: 'asset-a' })],
+            // Stored UTxO points at 'api_a', but canonical is 'provider_a' → u1 is orphaned.
+            // Orphaning is the trigger for drift-candidate enumeration; without it, the new
+            // delta-based processRollback would short-circuit before reaching Phase 4 batching.
+            [buildUtxo({ id: 'u1', slot: 200, blockHash: 'api_a', assetName: 'asset-a' })],
             oversizedStoredHandles
         );
 
@@ -1628,7 +1636,9 @@ describe('Scanner lambda unit tests', () => {
 
         const providerUtxo = buildUtxo({ id: 'u1', slot: 200, blockHash: 'provider_a', assetName: 'asset-a' });
         pipelineResponses.push(
-            [buildUtxo({ id: 'u1', slot: 200, blockHash: 'provider_a', assetName: 'asset-a' })],
+            // Orphan u1 (stored at 'api_a' but canonical is 'provider_a') so the asset_utxos
+            // path is reached — otherwise the new delta-based rollback check short-circuits.
+            [buildUtxo({ id: 'u1', slot: 200, blockHash: 'api_a', assetName: 'asset-a' })],
             [{ name: 'asset-a', policy: 'policy-a', hex: 'asset-a', resolved_addresses: { ada: knownAddress } }]
         );
 
@@ -2062,7 +2072,8 @@ describe('Scanner lambda unit tests', () => {
 
         const providerUtxo = buildUtxo({ id: 'u1', slot: 200, blockHash: 'provider_a', assetName: 'asset-a' });
         pipelineResponses.push(
-            [buildUtxo({ id: 'u1', slot: 200, blockHash: 'provider_a', assetName: 'asset-a' })],
+            // Orphan u1 to reach the asset_utxos path under the new delta-based rollback check.
+            [buildUtxo({ id: 'u1', slot: 200, blockHash: 'api_a', assetName: 'asset-a' })],
             [{ name: 'asset-a', policy: 'policy-a', hex: 'asset-a', resolved_addresses: { ada: knownAddress } }]
         );
 

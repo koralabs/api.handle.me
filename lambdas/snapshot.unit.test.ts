@@ -65,7 +65,8 @@ describe('snapshot unit branches', () => {
             }),
             getHashFromIndex: jest.fn(),
             getValuesFromIndexedSet: jest.fn(),
-            getKeysFromIndex: jest.fn().mockReturnValue(['papagoose'])
+            getKeysFromIndex: jest.fn().mockReturnValue(['papagoose']),
+            listAllScannedBlocks: jest.fn().mockReturnValue([])
         }));
 
         const result = await snapshot.processSnapshot('preview');
@@ -81,7 +82,8 @@ describe('snapshot unit branches', () => {
     it('logs and returns empty snapshot content when redis enumeration fails', async () => {
         const snapshot = await loadSnapshotModule(() => ({
             initialize: jest.fn().mockRejectedValue('redis down'),
-            getKeysFromIndex: jest.fn().mockReturnValue([])
+            getKeysFromIndex: jest.fn().mockReturnValue([]),
+            listAllScannedBlocks: jest.fn().mockReturnValue([])
         }));
 
         const result = await snapshot.processSnapshot('preview');
@@ -113,7 +115,8 @@ describe('snapshot unit branches', () => {
             }),
             getHashFromIndex: jest.fn(),
             getValuesFromIndexedSet: jest.fn(),
-            getKeysFromIndex: jest.fn().mockReturnValue(['papagoose'])
+            getKeysFromIndex: jest.fn().mockReturnValue(['papagoose']),
+            listAllScannedBlocks: jest.fn().mockReturnValue([])
         }));
 
         const result = await snapshot.processSnapshot('preview');

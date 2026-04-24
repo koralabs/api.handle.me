@@ -27,3 +27,9 @@ export const getApiScannerLeaseKey = (network = NETWORK) => getApiCacheKey('scan
 export const getApiScannerRecoveryKey = (network = NETWORK) => getApiCacheKey('scanner:recovery', network);
 
 export const getApiMptRootHashKey = (network = NETWORK) => getApiCacheKey('mpt_root_hash', network);
+
+// Sorted set: score=slot, value=blockHash. One entry per block the scanner has processed,
+// whether or not that block contained handle txs. Enables processRollback to identify
+// truly-missed canonical blocks (vs. blocks we correctly scanned but that had no handle
+// activity, which would otherwise be false positives for missed-block drift detection).
+export const getApiScannedBlocksKey = (network = NETWORK) => getApiCacheKey('scanned_blocks', network);

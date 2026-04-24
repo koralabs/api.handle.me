@@ -101,6 +101,7 @@ const getRedisItems = async () => {
     const utxos: Map<string, UTxOWithTxInfo | null> = new Map();
     const mints: Map<string, MintingData[] | null> = new Map();
     let handleNames: string[] = [];
+    let scannedBlocks: { slot: number; hash: string }[] = [];
 
     let lastSlot = 0; // Lets hardcode this to 20 blocks ago (from Bf) To avoid recording a rollback to the snapshot
     let lastHash = '';
@@ -118,6 +119,9 @@ const getRedisItems = async () => {
         lastHash = `${metrics.currentBlockHash}`;
         utxoSchemaVersion = Number(metrics.utxoSchemaVersion);
         handleNames = (redisHandleStore.getKeysFromIndex(IndexNames.HANDLE) as string[]).map((handleName) => `${handleName}`);
+        // Scanned-blocks ledger — filtered to the snapshot's cutoff slot so we don't ship blocks
+        // past lastSlot (which would be inconsistent with the UTxO/mint state frozen at lastSlot).
+        scannedBlocks = redisHandleStore.listAllScannedBlocks().filter((b) => b.slot <= lastSlot);
 
         do {
             const [nextCursor, keys] = redisHandleStore.redisClientCall('scan', cursor, { match: getApiIndexScanPattern(IndexNames.UTXO), count: SNAPSHOT_SCAN_COUNT }) as [string, string[]];
@@ -185,11 +189,13 @@ const getRedisItems = async () => {
 
     Logger.local(`Total UTxOs: ${utxos.size.toLocaleString()}`);
     Logger.local(`Total Mints: ${mints.size.toLocaleString()}`);
+    Logger.local(`Total scanned blocks: ${scannedBlocks.length.toLocaleString()}`);
 
     return {
         utxos,
         mints,
         handleNames,
+        scannedBlocks,
         lastSlot,
         lastHash,
         utxoSchemaVersion
@@ -204,6 +210,7 @@ export const processSnapshot = async (_network: string) => {
         hash: results.lastHash,
         utxoSchemaVersion: results.utxoSchemaVersion,
         handleNames: results.handleNames,
+        scannedBlocks: results.scannedBlocks,
         utxos: Array.from(results.utxos)
             .map(([_, v]) => v)
             .filter((v): v is UTxOWithTxInfo => v !== null),

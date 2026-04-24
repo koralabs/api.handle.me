@@ -8,7 +8,7 @@ import { handleEraBoundaries, MAX_SETS_PER_PIPE, META_INDEXES, ORDERED_SLOTS } f
 import { getHandleNameFromAssetName } from '../../services/ogmios/utils';
 import { canonicalJsonStringify } from '../../utils/helpers';
 import { isChainVerifiedSnapshot, VerifiedHandleFileContent } from '../../utils/verifiedSnapshot';
-import { getApiCacheTag, getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey, getApiMptRootHashKey, getApiNamespaceScanPattern } from './keys';
+import { getApiCacheTag, getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey, getApiMptRootHashKey, getApiNamespaceScanPattern, getApiScannedBlocksKey } from './keys';
 
 // const glideClient = await GlideClient.createClient({
 //       addresses: [{ host: 'https://localhost', port: 6379 }],
@@ -237,7 +237,7 @@ export class RedisHandlesStore implements IApiStore {
             const text = result.toString('utf8');
             Logger.log(`Found ${url}`);
             const storedS3HandlesUTxOJson = JSON.parse(text) as VerifiedHandleFileContent;
-            const { utxos, slot: s3Slot, mintingData, hash: s3Hash, utxoSchemaVersion } = storedS3HandlesUTxOJson;
+            const { utxos, slot: s3Slot, mintingData, hash: s3Hash, utxoSchemaVersion, scannedBlocks } = storedS3HandlesUTxOJson;
 
             // Determine whether to resume or restart. Resuming requires both the schema version
             // and the snapshot hash to match what the progress marker was written against —
@@ -305,6 +305,19 @@ export class RedisHandlesStore implements IApiStore {
                 writeProgress(progress);
 
                 Logger.log(`Saved ${utxos.length.toLocaleString()} UTxOs from S3 snapshot`);
+
+                // Restore the scanned-blocks ledger in bulk so processRollback's missed-block
+                // drift detection is accurate immediately, rather than having to rebuild after
+                // ~20 blocks of forward scanning. Snapshots published before this field existed
+                // will simply have no entries; the scan loop populates going forward.
+                if (scannedBlocks?.length) {
+                    const scannedChunks = chunk(scannedBlocks, MAX_SETS_PER_PIPE);
+                    for (const scannedChunk of scannedChunks) {
+                        this.addScannedBlocks(scannedChunk);
+                    }
+                    Logger.log(`Restored ${scannedBlocks.length.toLocaleString()} scanned block hashes from S3 snapshot`);
+                }
+
                 id = s3Hash;
                 slot = s3Slot;
             } else if (utxoSchemaVersion != currentUTxOSchemaVersion) {
@@ -495,6 +508,43 @@ export class RedisHandlesStore implements IApiStore {
         }
         this.redisClientCall('zrem', getApiIndexRootKey(index), typeof keyOrOrdinal == 'string' ? keyOrOrdinal : JSON.stringify(keyOrOrdinal));
         return;
+    }
+
+    // Scanned-blocks ledger: one ZSET entry per canonical block the scanner has fully processed.
+    // score=slot, value=blockHash. Independent of IndexNames because it tracks "blocks seen"
+    // rather than "handles/UTxOs we derived from blocks", which is what the other indexes do.
+    public recordScannedBlock(slot: number, blockHash: string): void {
+        if (!blockHash) return;
+        this.redisClientCall('zadd', getApiScannedBlocksKey(), [{ element: blockHash, score: slot }]);
+    }
+
+    public addScannedBlocks(entries: { slot: number; hash: string }[]): void {
+        if (!entries.length) return;
+        this.redisClientCall(
+            'zadd',
+            getApiScannedBlocksKey(),
+            entries.filter(({ hash }) => !!hash).map(({ slot, hash }) => ({ element: hash, score: slot }))
+        );
+    }
+
+    public getScannedBlockHashesInRange(minSlot: number, maxSlot: number): Set<string> {
+        const results = this.redisClientCall('zrange', getApiScannedBlocksKey(), {
+            type: 'byScore',
+            start: { value: minSlot },
+            end: { value: maxSlot }
+        }) as GlideString[] | null;
+        return new Set((results ?? []).map((v) => v.toString()));
+    }
+
+    public listAllScannedBlocks(): { slot: number; hash: string }[] {
+        const results = this.redisClientCall('zrangeWithScores', getApiScannedBlocksKey(), { start: 0, end: -1 }) as { score: number; element: GlideString }[] | null;
+        return (results ?? []).map(({ score, element }) => ({ slot: Number(score), hash: element.toString() }));
+    }
+
+    public trimScannedBlocksToRecent(keep: number): void {
+        // Keep the top `keep` highest-score entries (most recent slots). ZREMRANGEBYRANK
+        // indices are 0-based; removing [0, -keep-1] leaves the last `keep` entries intact.
+        this.redisClientCall('zremRangeByRank', getApiScannedBlocksKey(), 0, -keep - 1);
     }
 
     public getScoresFromOrderedSet(index: IndexNames, values: string[]): number[] {

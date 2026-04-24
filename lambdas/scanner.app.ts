@@ -582,7 +582,14 @@ const getLatestChainTip = async () => {
     }
 };
 
-const processRollback = async ({ currentSlot, rollbackOffset = 2160, suppressNotify = false }: { currentSlot: number; rollbackOffset?: number; suppressNotify?: boolean }) => {
+// Cardano's protocol limit for chain rollbacks is 2160 blocks (k), but in practice the deepest
+// rollback ever observed is only a few blocks, and the scanner/API cannot meaningfully recover
+// from anything beyond ~20 blocks anyway. Scanning the full 2160-block window every periodic
+// rollback check costs tens of seconds in tx_info fetches across handle-free blocks for no real
+// benefit. 20 blocks matches the practical limit and keeps the periodic check sub-second.
+const DEFAULT_ROLLBACK_OFFSET = 20;
+
+const processRollback = async ({ currentSlot, rollbackOffset = DEFAULT_ROLLBACK_OFFSET, suppressNotify = false }: { currentSlot: number; rollbackOffset?: number; suppressNotify?: boolean }) => {
     const rbStartedAt = Date.now();
     const rbBreadcrumb = (step: string, extra = '') => Logger.log({
         message: `[rollback:breadcrumb] ${step} at +${Date.now() - rbStartedAt}ms${extra ? ` | ${extra}` : ''}`,
@@ -648,27 +655,75 @@ const processRollback = async ({ currentSlot, rollbackOffset = 2160, suppressNot
         return;
     }
 
-    // ===== PHASE 3: Gather ALL handle names in the window (for drift detection) =====
-    // We extract handles from every stored UTxO in the window, not just orphans.
-    // This lets Phase 4 catch canonical drift where the stored UTxO is canonical but stale.
-    const handleNames: Set<string> = new Set();
-    for (const utxo of utxos) {
-        for (const assets of utxo?.handles ?? []) {
+    // ===== PHASE 3: Compute drift candidates (delta only) =====
+    // A handle's stored state can diverge from canonical in exactly two ways within the window:
+    //   (a) ORPHANED — a stored UTxO's blockHash is no longer canonical.
+    //   (b) MISSED-BLOCK — a canonical block in the window has no stored UTxO from us AND
+    //                       contained a handle tx we never indexed.
+    // We do NOT broaden to every handle with stored state in the window. On mainnet, that set was
+    // ~2000 handles / ~1888 asset_utxos results and blew out the 12-min scanner hard deadline in
+    // a tight loop, holding the ROLLBACK lock and stalling the region.
+    const orphanedHandles = new Set<string>();
+    for (const utxo of orphanedUtxos) {
+        for (const assets of utxo.handles ?? []) {
             assets[1].forEach((assetName) => {
-                const { name } = getHandleNameFromAssetName(assetName);
-                handleNames.add(name);
+                orphanedHandles.add(getHandleNameFromAssetName(assetName).name);
             });
         }
     }
-    const handles = [...handleNames];
 
+    // "Blocks we have" is the authoritative scanned-blocks ledger — a record of every block the
+    // scan loop fully processed, including the majority that carry zero handle txs. Deriving this
+    // from stored UTxOs would falsely flag every handle-free canonical block as "missed" and
+    // trigger thousands of unnecessary tx_info fetches per check.
+    const scannedInWindow = store.getScannedBlockHashesInRange(firstBlock.slot, currentSlot);
+    const unseenCanonicalBlocks = providerBlocks.filter((b) => !scannedInWindow.has(b.hash));
+    rbBreadcrumb('unseen_blocks_scan', `canonical=${providerBlocks.length} scanned=${scannedInWindow.size} unseen=${unseenCanonicalBlocks.length}`);
+
+    const missedBlockHandles = new Set<string>();
+    if (unseenCanonicalBlocks.length) {
+        const missedTxHashes = [...new Set(await getBatchedTxHashesWithFallback(unseenCanonicalBlocks.map((b) => b.hash)))];
+        if (missedTxHashes.length) {
+            const missedTxInfo = await getBatchedTxInfoWithFallback(missedTxHashes);
+            const collectFromAssets = (assets: { policy_id: string; asset_name: string }[] | undefined) => {
+                for (const asset of assets ?? []) {
+                    if (HANDLE_POLICIES.contains(NETWORK as Network, asset.policy_id)) {
+                        missedBlockHandles.add(getHandleNameFromAssetName(asset.asset_name).name);
+                    }
+                }
+            };
+            for (const tx of missedTxInfo) {
+                collectFromAssets(tx.assets_minted);
+                for (const output of tx.outputs ?? []) {
+                    collectFromAssets(output.asset_list);
+                }
+            }
+            rbBreadcrumb('missed_block_handles_done', `txs=${missedTxHashes.length} handles=${missedBlockHandles.size}`);
+        }
+    }
+
+    const candidateHandles = new Set<string>([...orphanedHandles, ...missedBlockHandles]);
+
+    if (!candidateHandles.size) {
+        // No orphans, no missed-block activity — stored state matches canonical chain.
+        const recoveredHead = providerBlocks[providerBlocks.length - 1];
+        handlesRepo.setMetrics({
+            currentBlockHash: recoveredHead.hash,
+            currentSlot: recoveredHead.slot,
+            ...(latestBlock.hash ? { tipBlockHash: latestBlock.hash } : {}),
+            ...(latestBlock.slot > 0 ? { lastSlot: latestBlock.slot } : {})
+        });
+        return;
+    }
+
+    const candidateHandleList = [...candidateHandles];
     const storedHandles = store
         .pipeline(() => {
-            handles.forEach((handleName) => handlesRepo.getHandle(handleName));
+            candidateHandleList.forEach((handleName) => handlesRepo.getHandle(handleName));
         })
         .filter(Boolean) as StoredHandle[];
 
-    rbBreadcrumb('affected_handles', `orphanedUtxos=${orphanedUtxos.length} handles=${handles.length}`);
+    rbBreadcrumb('candidates_gathered', `orphaned=${orphanedHandles.size} missedBlock=${missedBlockHandles.size} candidates=${candidateHandles.size} stored=${storedHandles.length}`);
 
     // ===== PHASE 4: Query canonical state for all handles in the window =====
     // Build batched asset_utxos queries for all handles (LBL_222/100/001 for CIP67, raw hex for legacy)
@@ -711,14 +766,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 2160, suppressNot
     rbBreadcrumb('fetchAssetUtxos_done', `handleTxHashes=${handleTxHashes.length}`);
 
     // ===== PHASE 4b: Identify handles needing repair (orphaned OR drifted) =====
-    const orphanedHandles = new Set<string>();
-    for (const utxo of orphanedUtxos) {
-        for (const assets of utxo.handles ?? []) {
-            assets[1].forEach((assetName) => {
-                orphanedHandles.add(getHandleNameFromAssetName(assetName).name);
-            });
-        }
-    }
+    // orphanedHandles was computed in Phase 3 alongside the missed-block candidate set.
     const driftedHandles = new Set<string>();
     for (const storedHandle of storedHandles) {
         const storedTx = storedHandle.utxo?.split('#')[0];
@@ -1143,7 +1191,11 @@ const scan = async () => {
 
             if (latestSlot > currentSlot && metrics.currentBlockHash && currentSlot > 0) {
                 scanBreadcrumb('staleHead_rollback_start', `latestSlot=${latestSlot} currentSlot=${currentSlot} gap=${latestSlot - currentSlot}`);
-                await processRollback({ currentSlot, suppressNotify: true });
+                // Stale-head recovery: currentBlockHash is no longer on the canonical chain and
+                // forward scan returned nothing. We need a deeper sweep than the periodic check's
+                // default, because the canonical predecessor could be further back. 2160 is the
+                // Cardano protocol's rollback limit; anything deeper requires a full S3 reimport.
+                await processRollback({ currentSlot, rollbackOffset: 2160, suppressNotify: true });
                 scanBreadcrumb('staleHead_rollback_done');
                 return;
             }
@@ -1226,8 +1278,17 @@ const scan = async () => {
                     tipBlockHash,
                     lastSlot
                 });
+
+                // Record the block we just processed, independent of whether it had handle txs.
+                // processRollback's missed-block drift check relies on this ledger being a true
+                // record of what we've scanned — deriving it from stored UTxO blockHashes would
+                // miss the large fraction of blocks with zero handle activity.
+                store.recordScannedBlock(block.slot, block.id);
             }
         }
+        // Keep enough history to cover the deepest rollback check window with margin. 3000
+        // entries at ~20s/block is ~16 hours — safely larger than any practical rollback depth.
+        store.trimScannedBlocksToRecent(3000);
 
     } catch (error: any) {
         if (error instanceof ScannerDeadlineError) {
