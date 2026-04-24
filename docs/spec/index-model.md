@@ -50,6 +50,7 @@ All index keys are scoped under `{api:<network>}:<IndexName>` (e.g., `{api:mainn
 - `scanner:lease` — expiring SET NX lease for scanner concurrency
 - `scanner:recovery` — recovery flag for mid-phase interruption (`rollback` or `reindex`)
 - `mpt_root_hash` — cached MPT root computed from the current handle set
+- `scanned_blocks` — sorted set (score = slot, value = block hash) of every block the scanner has processed, including blocks that carried zero handle txs. `processRollback` relies on this ledger to distinguish "blocks canonical has that we genuinely missed" from "blocks we correctly scanned but stored nothing for because they had no handle activity." Deriving this from stored UTxO blockHashes would false-positive every handle-free canonical block as missed. Populated per-block inside `scan()` via `recordScannedBlock`, trimmed to the most recent 3000 entries (~16 hours of chain time) after each scan chunk loop, and restored in bulk from S3 snapshots during reimport.
 
 ## Consistency Invariants
 - Scanner/index writes are synchronous by block/UTxO ordering.
@@ -65,5 +66,6 @@ All index keys are scoped under `{api:<network>}:<IndexName>` (e.g., `{api:mainn
 ## Snapshot and Schema Behavior
 - Snapshot population can bootstrap UTxOs and minting data from S3 snapshot artifacts.
 - Snapshot artifacts are only considered valid when they carry chain-verification metadata from generation time; verification compares the indexed handle set to the indexed `handle_root@handle_settings` datum root hash, and unverified artifacts are ignored at bootstrap.
+- Snapshot artifacts also carry an optional `scannedBlocks` field (`{ slot, hash }[]` filtered to `<= lastSlot` at write time). On S3 reimport the scanner populates the `scanned_blocks` ZSET in bulk from this field before forward scanning resumes, so rollback-check drift detection is accurate immediately after reimport instead of having to rebuild the ledger through forward scanning. Snapshots published before this field existed simply skip the restore; the ledger gets repopulated as the scanner processes blocks forward.
 - `indexSchemaVersion` and `utxoSchemaVersion` metrics control reindex/bootstrap decisions at startup.
-- Reindex repopulates all non-UTxO/non-MINT indexes from stored UTxOs.
+- Reindex repopulates all non-UTxO/non-MINT indexes from stored UTxOs. `scanned_blocks` is preserved across reindex because it lives outside `IndexNames` — it tracks blocks-we-have-seen rather than derived-from-UTxOs state, and cannot be reconstructed from stored UTxOs (most canonical blocks carry no handle activity and therefore contribute no stored UTxO).

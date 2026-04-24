@@ -23,7 +23,7 @@
 
 **Root cause:** The scanner has a 12-minute hard deadline (`ScannerDeadlineError`) that should exit cleanly before the 15-minute Lambda timeout. If you see actual 15-minute timeouts, the deadline mechanism isn't firing — check breadcrumb logs (`scannerLambda.breadcrumb`, `scannerLambda.scan.breadcrumb`, `scannerLambda.rollback.breadcrumb`) to pinpoint where execution hangs.
 
-The scanner falls back to Blockfrost when Koios calls fail. If both providers are down or the head points to an orphaned block, the rollback hash-set detection identifies orphaned UTxOs and repairs only the affected handles.
+The scanner falls back to Blockfrost when Koios calls fail. If both providers are down or the head points to an orphaned block, `processRollback`'s hash-set orphan detection identifies orphaned UTxOs and repairs only the affected handles. Drift candidates are scoped via the `scanned_blocks` ZSET (blocks canonical has that we never processed); if that ledger is missing or incomplete (e.g., cold boot after a reimport from a pre-`scannedBlocks` snapshot), the rollback check may either false-positive (extra `tx_info` fetches for canonical blocks we correctly scanned as handle-free) or miss genuine missed-block drift for a few scan cycles until the ledger rebuilds. This is self-healing — the scan loop writes one ledger entry per processed block and the behavior converges quickly.
 
 **Recovery:**
 1. Check breadcrumb logs in CloudWatch — they show exactly which step hung
