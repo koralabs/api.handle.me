@@ -716,3 +716,21 @@ export class RedisHandlesStore implements IApiStore {
 
     // #endregion
 }
+
+// Shared factory for contexts without an Express `req.app` registry to reach
+// through (Lambda entrypoints, scripts, snapshot verification utilities).
+// Returns a fresh instance per call to preserve the original construction
+// semantics — heavy state (worker, pipeline) is class-static so multiple
+// instances coexist cheaply. Tests can swap the factory via
+// setHandlesStoreFactory.
+let _handlesStoreFactory: () => RedisHandlesStore = () => new RedisHandlesStore();
+
+export const getHandlesStore = (): RedisHandlesStore => _handlesStoreFactory();
+
+export const setHandlesStoreFactory = (factory: () => RedisHandlesStore): void => {
+    _handlesStoreFactory = factory;
+};
+
+export const resetHandlesStoreForTest = (): void => {
+    _handlesStoreFactory = () => new RedisHandlesStore();
+};

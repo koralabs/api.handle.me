@@ -1,7 +1,6 @@
 import serverlessExpress from '@vendia/serverless-express';
 import App from '../app';
-const app = new App();
-process.env.ENABLE_OGMIOS_SCANNING = 'false';
+const app = new App({ disableOgmios: true });
 let serverlessHandler: ReturnType<typeof serverlessExpress> | undefined;
 
 export const handler = async (event: AWSLambda.ALBEvent, context: AWSLambda.Context) => {

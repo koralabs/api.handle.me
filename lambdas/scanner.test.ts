@@ -1,7 +1,7 @@
 import { AssetNameLabel, IndexNames, LockedLambdaReason, UTxOFunctionName } from '@koralabs/kora-labs-common';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
-import { RedisHandlesStore } from '../stores/redis';
+import { getHandlesStore, RedisHandlesStore } from '../stores/redis';
 import { getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
 import * as helpers from '../utils/helpers';
 
@@ -176,6 +176,7 @@ const setup = ({ whitelistedApiKeys = 'allowed-key' }: { whitelistedApiKeys?: st
     };
 
     MockedStoreClass.mockImplementation(() => store);
+    (getHandlesStore as jest.Mock).mockImplementation(() => store);
     MockedRepoClass.mockImplementation(() => handlesRepo);
     mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ height: 5000 }) } as any);
     mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'provider_block', slot: 100 }] as never);

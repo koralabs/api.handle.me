@@ -13,9 +13,13 @@ const mockAwsSdk = () => {
 const loadSnapshotModule = async (storeFactory: () => any) => {
     jest.resetModules();
     mockAwsSdk();
-    jest.doMock('../stores/redis', () => ({
-        RedisHandlesStore: jest.fn().mockImplementation(storeFactory)
-    }));
+    jest.doMock('../stores/redis', () => {
+        const mockStore = storeFactory();
+        return {
+            RedisHandlesStore: jest.fn().mockImplementation(() => mockStore),
+            getHandlesStore: jest.fn(() => mockStore)
+        };
+    });
     jest.doMock('../repositories/handlesRepository', () => ({
         HandlesRepository: jest.fn().mockImplementation(() => ({
             initialize: jest.fn().mockResolvedValue(undefined),

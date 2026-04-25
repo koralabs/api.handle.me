@@ -1,8 +1,8 @@
 import { IndexNames } from '@koralabs/kora-labs-common';
-import { RedisHandlesStore } from '../stores/redis';
+import { getHandlesStore } from '../stores/redis';
 import { getApiIndexScanPattern } from '../stores/redis/keys';
 
-const redisHandleStore = new RedisHandlesStore();
+const redisHandleStore = getHandlesStore();
 await redisHandleStore.initialize();
 let cursor = '0';
 let deleted = 0;

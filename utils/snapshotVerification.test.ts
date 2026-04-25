@@ -6,15 +6,19 @@ const mockSetMptRootHash = jest.fn();
 const mockFetchKoios = jest.fn();
 const mockBlockfrostApiCall = jest.fn();
 
-jest.mock('../stores/redis', () => ({
-    RedisHandlesStore: jest.fn().mockImplementation(() => ({
+jest.mock('../stores/redis', () => {
+    const mockStore = {
         initialize: mockInitialize,
         getHashFromIndex: mockGetHashFromIndex,
         getKeysFromIndex: mockGetKeysFromIndex,
         getMptRootHash: mockGetMptRootHash,
         setMptRootHash: mockSetMptRootHash
-    }))
-}));
+    };
+    return {
+        RedisHandlesStore: jest.fn().mockImplementation(() => mockStore),
+        getHandlesStore: jest.fn(() => mockStore)
+    };
+});
 
 jest.mock('./helpers', () => {
     const actual = jest.requireActual('./helpers');

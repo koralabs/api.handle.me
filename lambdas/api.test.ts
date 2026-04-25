@@ -25,8 +25,8 @@ describe('API lambda handler', () => {
         const context = {} as any;
         const result = await lambdaModule.handler(event, context);
 
-        expect(process.env.ENABLE_OGMIOS_SCANNING).toBe('false');
         expect(AppMock).toHaveBeenCalledTimes(1);
+        expect(AppMock).toHaveBeenCalledWith({ disableOgmios: true });
         expect(appLambda).toHaveBeenCalledTimes(1);
         expect(serverlessExpress).toHaveBeenCalledWith({ app: appInstance.app });
         expect(lambdaModule.handler.length).toBe(2);

@@ -14,6 +14,10 @@ import { HandlesRepository } from './repositories/handlesRepository';
 import OgmiosService from './services/ogmios/ogmios.service';
 import { dynamicallyLoad } from './utils/util';
 
+export interface AppOptions {
+    disableOgmios?: boolean;
+}
+
 class App {
     public app: express.Application;
     public env: string;
@@ -21,13 +25,22 @@ class App {
     public startTimer: number;
     public registry: IRegistry;
     public handlesRepo: HandlesRepository | undefined;
+    public disableOgmios: boolean;
 
-    constructor() {
+    constructor(options: AppOptions = {}) {
         this.app = express();
         this.registry = {} as IRegistry;
         this.env = NODE_ENV || 'development';
         this.port = PORT || 3141;
         this.startTimer = Date.now();
+        this.disableOgmios = options.disableOgmios
+            ?? process.env.ENABLE_OGMIOS_SCANNING?.toLocaleLowerCase() === 'false';
+        // Sync env var so downstream readers (health controller, etc.) see the
+        // same flag the constructor was told. Centralizes the side effect
+        // here instead of letting each Lambda wrapper mutate at import time.
+        if (this.disableOgmios) {
+            process.env.ENABLE_OGMIOS_SCANNING = 'false';
+        }
     }
 
     private _getDynamicLoadDirectories(): string[] {
@@ -100,7 +113,7 @@ class App {
 
     private async initializeOgmios() {
         const handlesRepo = new HandlesRepository(new this.registry.handlesStore());
-        if (process.env.ENABLE_OGMIOS_SCANNING?.toLocaleLowerCase() == 'false' || this.env === 'test') {
+        if (this.disableOgmios || this.env === 'test') {
             await handlesRepo.initialize();
             
             // If we're running local we want the scanner to replace ogmios scanning

@@ -4,11 +4,10 @@ import fs from 'fs';
 import stdOut from 'node:readline';
 import zlib from 'zlib';
 import { HandlesRepository } from '../repositories/handlesRepository';
-import { RedisHandlesStore } from '../stores/redis';
+import { getHandlesStore } from '../stores/redis';
 import { extractApiIndexMember, getApiIndexScanPattern } from '../stores/redis/keys';
 import { buildSnapshotVerification } from '../utils/snapshotVerification';
 import { VerifiedHandleFileContent } from '../utils/verifiedSnapshot';
-process.env.ENABLE_OGMIOS_SCANNING = 'false';
 
 declare global {
     interface Console {
@@ -108,7 +107,7 @@ const getRedisItems = async () => {
     let utxoSchemaVersion = 0;
 
     try {
-        const redisHandleStore = new RedisHandlesStore();
+        const redisHandleStore = getHandlesStore();
         await redisHandleStore.initialize();
 
         let cursor = '0';
@@ -224,7 +223,7 @@ export const processSnapshot = async (_network: string) => {
 };
 
 export const handler = async (event: any) => {
-    const store = new RedisHandlesStore();
+    const store = getHandlesStore();
     const handlesRepo = new HandlesRepository(store);
     await handlesRepo.initialize();
     const { lockLambdas } = await waitForUnlockedLambdas(handlesRepo);

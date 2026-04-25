@@ -3,12 +3,12 @@ import { WHITELISTED_API_KEYS } from '../config';
 import { BlockfrostBlock, KoiosAssetUTxO, KoiosDatumInfo, KoiosTxInfo } from '../interfaces/provider.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
-import { RedisHandlesStore } from '../stores/redis';
+import { getHandlesStore } from '../stores/redis';
 import { getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
 import { blockfrostApiCall, buildUTxOsFromKoiosTxs, defaultKoiosSettings, fetchBlockfrostDatumCbor, fetchBlockfrostTxHashes, fetchBlockfrostTxInfo, fetchKoios, fetchPaginatedResults } from '../utils/helpers';
 import { buildAndStoreMptRootHash, getChainMintingDataRootHash } from '../utils/snapshotVerification';
 
-const store = new RedisHandlesStore(); // I hate this
+const store = getHandlesStore();
 const handlesRepo = new HandlesRepository(store);
 let initialized = false;
 
@@ -57,7 +57,6 @@ const checkDeadline = (step: string) => {
 const ROLLBACK_20_SLOT_WINDOW = 400; // 20 blocks * ~20 seconds per block
 const RECOVERY_REASON_ROLLBACK = 'rollback';
 const RECOVERY_REASON_REINDEX = 'reindex';
-process.env.ENABLE_OGMIOS_SCANNING = 'false';
 const LOCK_REASON_SNAPSHOT = 'SNAPSHOT' as LockedLambdaReason;
 
 const staleLockTimeouts: Partial<Record<LockedLambdaReason, number>> = {

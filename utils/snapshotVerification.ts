@@ -1,7 +1,7 @@
 import { Trie } from '@aiken-lang/merkle-patricia-forestry';
 import { decodeCborToJson } from '@koralabs/kora-labs-common/utils/cbor';
 import { AssetNameLabel, HANDLE_POLICIES, IndexNames, LogCategory, Logger, NETWORK, Network } from '@koralabs/kora-labs-common';
-import { RedisHandlesStore } from '../stores/redis';
+import { getHandlesStore, RedisHandlesStore } from '../stores/redis';
 import { SnapshotVerification } from './verifiedSnapshot';
 import { blockfrostApiCall, fetchKoios } from './helpers';
 
@@ -16,7 +16,7 @@ export const GHOST_HANDLES: Record<string, string[]> = {
 };
 
 const fetchCurrentMintingDataDatumCbor = async () => {
-    const redisHandleStore = new RedisHandlesStore();
+    const redisHandleStore = getHandlesStore();
     await redisHandleStore.initialize();
     const handle = redisHandleStore.getHashFromIndex(IndexNames.HANDLE, MINTING_DATA_HANDLE_NAME) as { datum?: string } | undefined;
     const datumCbor = `${handle?.datum ?? ''}`.trim();
@@ -169,7 +169,7 @@ export const buildAndStoreMptRootHash = async (store: RedisHandlesStore): Promis
 };
 
 export const buildSnapshotVerification = async (handleNames: string[]): Promise<SnapshotVerification> => {
-    const store = new RedisHandlesStore();
+    const store = getHandlesStore();
     store.initialize();
     const ghosts = GHOST_HANDLES[NETWORK.toLowerCase()] ?? [];
     const snapshotMptRootHash = store.getMptRootHash() ?? await buildHandleSetMptRootHash(handleNames, ghosts);

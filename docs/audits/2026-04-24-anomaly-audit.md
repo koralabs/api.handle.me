@@ -97,7 +97,11 @@ entry cites `file:line` so the doc doubles as a punch list.
 
 ## Tier 2 — Structural cleanup, 2–8 hrs each, scoped
 
-- **Hardcoded `GHOST_HANDLES` (known integrity gap)** —
+> **2026-04-24 follow-up status.** Tier 2 worked through directly after
+> the Tier 1 commit. Resolutions noted inline; deferrals carry an
+> explicit reason rather than a dangling owner.
+
+- **[FIXED 2026-04-24]** **Hardcoded `GHOST_HANDLES` (known integrity gap)** —
   [utils/snapshotVerification.ts:13-16](../../utils/snapshotVerification.ts#L13-L16)
   bakes in `mainnet: ['watchman@ngmerchs']`, `preview: ['dynamo2@ai']`.
   This is already tracked as a known drift-blind constant; the
@@ -106,13 +110,13 @@ entry cites `file:line` so the doc doubles as a punch list.
   **Fix direction:** move to config, sourced from env or a
   per-network JSON file loaded at boot. Allow runtime override.
 
-- **Hardcoded Cardano era boundaries per network** —
+- **[NON-ISSUE 2026-04-24 per owner]** **Hardcoded Cardano era boundaries per network** —
   [config/constants.ts:8-25](../../config/constants.ts#L8-L25)
   hardcodes mainnet slot 48194528, preview 1470343, preprod
   commented-out. Any network upgrade requires a code change.
   **Fix direction:** move to site.env or per-network config file.
 
-- **Lambda entrypoints mutate `process.env` as a side effect** —
+- **[FIXED 2026-04-24]** **Lambda entrypoints mutate `process.env` as a side effect** —
   [lambdas/api.app.ts:4](../../lambdas/api.app.ts#L4),
   [lambdas/scanner.app.ts:60](../../lambdas/scanner.app.ts#L60),
   [lambdas/snapshot.app.ts:11](../../lambdas/snapshot.app.ts#L11)
@@ -124,7 +128,7 @@ entry cites `file:line` so the doc doubles as a punch list.
   constructor or an `initialize(options)` method; stop using env-var
   assignment as a cross-module signal.
 
-- **Direct `new RedisHandlesStore()` in scripts, lambdas, and utils** —
+- **[FIXED 2026-04-24]** **Direct `new RedisHandlesStore()` in scripts, lambdas, and utils** —
   [scripts/deleteHandlesIndex.ts:5](../../scripts/deleteHandlesIndex.ts#L5),
   [lambdas/snapshot.app.ts:111](../../lambdas/snapshot.app.ts#L111),
   [lambdas/snapshot.app.ts:227](../../lambdas/snapshot.app.ts#L227),
@@ -138,7 +142,7 @@ entry cites `file:line` so the doc doubles as a punch list.
   [ioc/](../../ioc/) or attach store to a shared context object
   passed into script/lambda entry points.
 
-- **Per-request `HandlesRepository` instantiation in ~19 controller
+- **[DEFERRED 2026-04-24 — test-mock arch incompatible]** **Per-request `HandlesRepository` instantiation in ~19 controller
   methods** —
   [controllers/handles.controller.ts:59,124,145,164,209,232,262,308,360,404,428](../../controllers/handles.controller.ts)
   plus all other controllers. Identical
@@ -147,8 +151,17 @@ entry cites `file:line` so the doc doubles as a punch list.
   **Fix direction:** add a `handlesRepository()` factory to the
   registry (or a one-line middleware that attaches it to `req.locals`)
   and replace the inline construction.
+  **Why deferred:** attempted twice (registry-factory pattern and free-
+  helper pattern). Both broke ~160 tests across route + controller test
+  suites with empty assertion failures (jest reports the test as failed
+  with no failure message). Root cause appears to be ts-jest's mock
+  resolution interacting with the indirection layer — `MockedHandlesRepository.mockImplementation()`
+  doesn't propagate when the constructor is invoked through a wrapper
+  in another module. Reverted both attempts. **Trigger to revisit:**
+  next time the test mock architecture itself is being restructured,
+  or if a separate fix discovers why the indirection breaks the mock chain.
 
-- **`dotenv` hydration inconsistent** — jest configs use
+- **[DROPPED 2026-04-24 — test/script-only, non-runtime]** **`dotenv` hydration inconsistent** — jest configs use
   `dotenv.config({ path: '.env' })`
   ([jest.config.ts](../../jest.config.ts),
   [jest.e2e.config.ts](../../jest.e2e.config.ts),
@@ -157,8 +170,12 @@ entry cites `file:line` so the doc doubles as a punch list.
   bugs between test and script runs.
   **Fix direction:** standardize on `import 'dotenv/config'`
   everywhere.
+  **Why dropped:** confirmed scope is test/script-only — production
+  Lambda code receives env from the Lambda runtime; local API uses
+  `tsx -r dotenv/config` preload. No runtime path reads env via
+  dotenv. Cosmetic inconsistency only.
 
-- **`site.env` mixes runtime app vars with container/shell vars** —
+- **[FIXED 2026-04-24]** **`site.env` mixes runtime app vars with container/shell vars** —
   roughly 18 entries (`MODE`, `DISABLE_NODE_SNAPSHOT`, `NODE_DB`,
   `SOCKET_PATH`, `CARDANO_NODE_PATH`, `CARDANO_NODE_VER`, etc.) are
   only read by shell scripts; mixing them with app-runtime vars makes
@@ -167,7 +184,7 @@ entry cites `file:line` so the doc doubles as a punch list.
   `# --- container/shell only ---` banner), or separate
   `site.env.app` + `site.env.container`.
 
-- **`Router.ts` handler instantiates `HandlesController` directly** —
+- **[DEFERRED 2026-04-24 — same blocker as above]** **`Router.ts` handler instantiates `HandlesController` directly** —
   [routes/handles.route.ts:5](../../routes/handles.route.ts#L5) does
   `new HandlesController()`. Every other dependency in the project
   flows through the registry; this one bypasses it.
@@ -175,7 +192,15 @@ entry cites `file:line` so the doc doubles as a punch list.
 
 ## Tier 3 — Bigger refactors, 1–3 days each
 
-- **`lambdas/scanner.app.ts` re-declares 780+ lines of business
+> **2026-04-24 reframe.** Owner clarified that the two scanners
+> (`services/ogmios/` and `lambdas/scanner.app.ts`) are not duplicates
+> — they're parallel implementations for parallel deployment shapes.
+> Kora Labs production runs Lambda-only (no Ogmios). Community
+> Docker / `npm run ogmios` self-hosters use the Ogmios path. Both
+> coexist intentionally. This collapses most of Tier 3 to non-issues
+> or items already addressed.
+
+- **[ALREADY ADDRESSED — `Internal` export pattern]** **`lambdas/scanner.app.ts` re-declares 780+ lines of business
   logic** — state machine, lease management, rollback/reindex paths
   all live in the Lambda entrypoint, not in
   [services/ogmios/](../../services/ogmios/). The scanner can't be
@@ -184,8 +209,18 @@ entry cites `file:line` so the doc doubles as a punch list.
   **Fix direction:** extract a `services/scanner/` module that owns
   the state machine; reduce `lambdas/scanner.app.ts` to orchestration
   (init, handler shape, lifecycle glue).
+  **Resolution:** the "duplicate logic" framing was wrong — there's no
+  Ogmios scanner equivalent to dedupe with. The "untestable in
+  isolation" complaint is already resolved by the existing
+  [`Internal` export at scanner.app.ts:1536](../../lambdas/scanner.app.ts#L1536),
+  which exposes `checkRollback`, `processRollback`, `processReindex`,
+  `scan`, `acquireScannerLease`, `renewScannerLease`,
+  `releaseScannerLease` as the testing seam. `scanner.test.ts` already
+  uses it (~2300 lines of tests). No further architectural extraction
+  needed; the 10 pre-existing test failures are assertion-level bugs
+  in specific code paths, not architecture problems.
 
-- **Three TypeScript entry points with overlapping boot ceremony** —
+- **[COLLAPSED INTO 2.3 — now fixed]** **Three TypeScript entry points with overlapping boot ceremony** —
   [app.ts](../../app.ts), [express.ts](../../express.ts),
   [express.app.ts](../../express.app.ts) plus Lambda wrappers. Boot
   order and middleware registration differ across them; the dynamic
@@ -196,8 +231,14 @@ entry cites `file:line` so the doc doubles as a punch list.
   each entry point with different flags. Explicit middleware order
   (cors/compression/auth first, dynamic loader last, error middleware
   always last).
+  **Resolution:** with the dual-deployment-shape reframe, three entry
+  points isn't overlap — it's deliberate (Express for community
+  Docker, Lambda for Kora prod, `app.ts` shared). Once 2.3 landed
+  (explicit `disableOgmios: true` constructor option), the
+  "fragile import-order dance" smell is gone — the boot ceremony
+  divergence is now principled configuration, not an accident.
 
-- **`OgmiosService` constructed in `app.ts` but never bound to the
+- **[NON-ISSUE — Ogmios is community-only per owner]** **`OgmiosService` constructed in `app.ts` but never bound to the
   registry** —
   [app.ts:121-122](../../app.ts#L121-L122) creates it and hangs on to
   the instance locally. Services that need scanner state have no
@@ -205,6 +246,12 @@ entry cites `file:line` so the doc doubles as a punch list.
   shape.
   **Fix direction:** register into the IoC after init; fold into the
   `bootstrap()` refactor above.
+  **Resolution:** Ogmios is never invoked from Kora Labs' Lambda
+  deployment — it exists for community self-hosters. No consumer
+  needs to inject `OgmiosService` via IoC because the path that uses
+  it (Express community Docker) already has a direct reference. The
+  "IoC contract being violated" framing assumed a non-existent
+  consumer.
 
 ---
 
@@ -267,20 +314,28 @@ Documenting these so the next sweep doesn't waste dispatches:
 
 ## Next moves
 
-- **Tier 1 is done** (2026-04-24). All seven items applied; `npm run
-  build:lambda` produces `dist/express.js` cleanly, unit tests
-  unchanged (10 pre-existing `lambdas/scanner.test.ts` failures on
-  `release/1.14.0` remain; same count before and after). See commit
-  for exact diff.
-- **Tier 2 deferred until triggered.** Pick up the Lambda env-var
-  side-effect cleanup next time anything in `lambdas/` is being
-  touched. GHOST_HANDLES moves out of the hardcoded set the next
-  time a ghost is discovered or when
-  [project_known_integrity_gaps.md](../../../../.claude/projects/-home-jesse-src-koralabs-api-handle-me/memory/project_known_integrity_gaps.md)
-  is opened as part of a correctness pass.
-- **Tier 3 is refactor-season work.** Don't do it piecemeal; the
-  three items are one coherent bootstrap/scanner-service refactor
-  and should land together or not at all.
+**As of 2026-04-24, the sweep is closed.** The full status:
+
+- **Tier 1 — done.** All seven items shipped in commit `cb905e1`
+  ("removing the ghost"). `npm run build:lambda` produces
+  `dist/express.js` cleanly. Pre-existing `lambdas/scanner.test.ts`
+  failures (10) are unrelated to sweep work.
+- **Tier 2 — done or accounted for.** Five items fixed (GHOST_HANDLES,
+  Lambda env mutation, direct-store instantiations, site.env section
+  labels, NETWORK default unification). Two items dropped (era
+  boundaries, dotenv inconsistency). Two items deferred (per-request
+  HandlesRepository / route controller instantiation) — both with the
+  same blocker noted inline: ts-jest mock chain breaks under any
+  indirection layer, attempted twice and reverted both times.
+- **Tier 3 — closed.** All three items resolved without a refactor
+  sprint, primarily because the owner's clarification reframed the
+  dual-scanner architecture as deliberate (not duplicate). The
+  scanner extraction work was already done via the existing
+  `Internal` export pattern; the entry-point divergence collapsed
+  into the now-fixed 2.3 work; the OgmiosService IoC concern
+  evaporates when there's no consumer needing IoC injection.
+
+There is no pending refactor season required from this sweep.
 
 ---
 
