@@ -1,0 +1,1059 @@
+import 'dotenv/config';
+import fs from 'fs';
+import zlib from 'zlib';
+import { Trie } from '@aiken-lang/merkle-patricia-forestry';
+import { AssetNameLabel, HANDLE_POLICIES, MintingData, Network, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { checkNameLabel } from '@koralabs/kora-labs-common/utils/crypto';
+import { decodeCborToJson } from '@koralabs/kora-labs-common/utils/cbor';
+import { GHOST_HANDLES } from '../utils/snapshotVerification';
+import { SnapshotVerification, VerifiedHandleFileContent } from '../utils/verifiedSnapshot';
+
+// ---------- config ----------
+
+const NETWORK = ((process.env.NETWORK || 'preview').toLowerCase()) as Network;
+
+const KOIOS_HIGH = (process.env.KOIOS_API_BEARER_TOKEN ?? '').replace(/^['"]|['"]$/g, '');
+const KOIOS_LOW = (process.env.KOIOS_API_BEARER_TOKEN_LOW ?? '').replace(/^['"]|['"]$/g, '');
+const BF_HIGH = process.env.BLOCKFROST_API_KEY ?? '';
+const BF_LOW = process.env.BLOCKFROST_API_KEY_LOW ?? '';
+
+if (!KOIOS_HIGH) throw new Error('KOIOS_API_BEARER_TOKEN is required');
+if (!BF_HIGH) throw new Error('BLOCKFROST_API_KEY is required');
+
+const KOIOS_HIGH_RPS = Number(process.env.KOIOS_HIGH_RPS ?? 8);
+const KOIOS_LOW_RPS = Number(process.env.KOIOS_LOW_RPS ?? 3);
+const BF_HIGH_RPS = Number(process.env.BF_HIGH_RPS ?? 10);
+const BF_LOW_RPS = Number(process.env.BF_LOW_RPS ?? 10);
+
+const KOIOS_BASE = `https://${NETWORK === 'mainnet' ? 'api' : NETWORK}.koios.rest/api/v1`;
+const BF_BASE = `https://cardano-${NETWORK}.blockfrost.io/api/v0`;
+
+const MINTING_DATA_HANDLE_NAME = 'handle_root@handle_settings';
+const MINTING_DATA_ASSET_HEX = `${AssetNameLabel.LBL_222}${Buffer.from(MINTING_DATA_HANDLE_NAME, 'utf8').toString('hex')}`;
+
+const KOIOS_PAGE_SIZE = 1000;
+const KOIOS_STAGGER_MS = 170;
+const KOIOS_PARALLEL_PAGES = 16;
+
+const KOIOS_ASSET_BATCH = 50;
+const BF_ASSET_BATCH = 1;
+const KOIOS_TX_INFO_BATCH = 35;
+
+const SNAPSHOT_UTXO_SCHEMA_VERSION = Number(process.env.UTXO_SCHEMA_VERSION ?? 1);
+
+// ---------- helpers ----------
+
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const MAX_NETWORK_RETRIES = 5;
+const isTransientError = (e: any): boolean => {
+    const code = e?.cause?.code ?? e?.code;
+    if (code === 'UND_ERR_SOCKET' || code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'ENOTFOUND' || code === 'EAI_AGAIN') return true;
+    const name = e?.name ?? e?.cause?.name;
+    if (name === 'AbortError' || name === 'TimeoutError') return true;
+    // Retriable HTTP errors: 5xx upstream problems + 429 rate limit.
+    const msg = String(e?.message ?? '');
+    if (/\b(429|500|502|503|504)\b/.test(msg)) return true;
+    return false;
+};
+
+const withNetworkRetry = async <T>(_label: string, fn: () => Promise<T>): Promise<T> => {
+    let attempt = 0;
+    while (true) {
+        try {
+            return await fn();
+        } catch (e: any) {
+            if (!isTransientError(e) || attempt >= MAX_NETWORK_RETRIES) throw e;
+            const backoff = 750 * Math.pow(2, attempt);
+            await delay(backoff);
+            attempt++;
+        }
+    }
+};
+
+const koiosFetch = async (path: string, init: { method?: string; body?: string; token?: string; timeoutMs?: number } = {}) => {
+    const { method = 'GET', body, token = KOIOS_HIGH, timeoutMs = 60_000 } = init;
+    return withNetworkRetry(`koios ${path}`, async () => {
+        const r = await fetch(`${KOIOS_BASE}/${path}`, {
+            method,
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`
+            },
+            body,
+            signal: AbortSignal.timeout(timeoutMs)
+        });
+        if (!r.ok) {
+            throw new Error(`koios ${path} ${r.status}: ${(await r.text()).slice(0, 512)}`);
+        }
+        return r.json();
+    });
+};
+
+const blockfrostFetch = async (path: string, token: string = BF_HIGH): Promise<any> => {
+    return withNetworkRetry(`blockfrost ${path}`, async () => {
+        const r = await fetch(`${BF_BASE}/${path}`, {
+            headers: { project_id: token },
+            signal: AbortSignal.timeout(30_000)
+        });
+        if (!r.ok) {
+            throw new Error(`blockfrost ${path} ${r.status}: ${(await r.text()).slice(0, 512)}`);
+        }
+        return r.json();
+    });
+};
+
+const listPolicies = (network: Network): string[] =>
+    Object.entries(HANDLE_POLICIES[network])
+        .filter(([, v]) => v && typeof v === 'object' && 'firstMintingSlot' in v)
+        .map(([k]) => k);
+
+// HANDLE_POLICIES.getActivePolicy(net, false) is broken upstream (undefined == false
+// mismatch). Pick the non-DeMi policy directly.
+const getMainPolicy = (network: Network): string => {
+    const entry = Object.entries(HANDLE_POLICIES[network]).find(
+        ([, v]) => v && typeof v === 'object' && 'firstMintingSlot' in v && !(v as { isDeMi?: boolean }).isDeMi
+    );
+    if (!entry) throw new Error(`No main (non-DeMi) policy configured for network ${network}`);
+    return entry[0];
+};
+
+const extractMptRootFromConstructor0 = (decoded: any): string | undefined => {
+    const raw = decoded?.constructor_0?.[0];
+    if (typeof raw !== 'string') return undefined;
+    const cleaned = raw.replace(/^0x/i, '').toLowerCase();
+    return /^[0-9a-f]{64}$/.test(cleaned) ? cleaned : undefined;
+};
+
+// ---------- phase 1: start tips + on-chain MPT root ----------
+
+interface StartTips {
+    koiosTipSlot: number;
+    koiosTipHash: string;
+    blockfrostTipSlot: number;
+    blockfrostTipHash: string;
+    tStart: number;
+    tStartHash: string;
+    chainRootHash: string;
+    chainRootTipSlot: number;
+    chainRootProvider: 'koios' | 'blockfrost';
+}
+
+const fetchStartTips = async (): Promise<StartTips> => {
+    const activePolicy = getMainPolicy(NETWORK);
+
+    const [koiosTip, koiosProbe, bfTip] = await Promise.all([
+        koiosFetch('tip') as Promise<any[]>,
+        koiosFetch('asset_utxos', {
+            method: 'POST',
+            body: JSON.stringify({ _asset_list: [[activePolicy, MINTING_DATA_ASSET_HEX]], _extended: true })
+        }) as Promise<any[]>,
+        blockfrostFetch('blocks/latest')
+    ]);
+
+    const koiosTipEntry = Array.isArray(koiosTip) ? koiosTip[0] : koiosTip;
+    const koiosTipSlot = Number(koiosTipEntry?.abs_slot);
+    const koiosTipHash: string = koiosTipEntry?.hash ?? '';
+    const blockfrostTipSlot = Number(bfTip?.slot);
+    const blockfrostTipHash: string = bfTip?.hash ?? '';
+    if (!Number.isFinite(koiosTipSlot) || !Number.isFinite(blockfrostTipSlot)) {
+        throw new Error(`Tip fetch failed: koios=${koiosTipSlot} blockfrost=${blockfrostTipSlot}`);
+    }
+
+    // Koios returns inline_datum as { bytes: <cbor-hex>, value: { constructor, fields } }.
+    // Use the raw bytes and decode via decodeCborToJson so the extractor sees the
+    // same shape as Blockfrost's path.
+    const koiosInlineCbor: string | undefined = koiosProbe?.[0]?.inline_datum?.bytes;
+    const koiosDecoded = koiosInlineCbor ? decodeCborToJson({ cborString: koiosInlineCbor, schema: {} }) : undefined;
+    let chainRootHash: string | undefined = extractMptRootFromConstructor0(koiosDecoded);
+    let chainRootProvider: 'koios' | 'blockfrost' = 'koios';
+    let chainRootTipSlot = koiosTipSlot;
+
+    if (!chainRootHash) {
+        // Blockfrost fallback: find the minting-data UTxO via /assets/{asset}/addresses
+        // then read the tx's outputs and pull the inline_datum.
+        const assetId = `${activePolicy}${MINTING_DATA_ASSET_HEX}`;
+        const holders = await blockfrostFetch(`assets/${assetId}/addresses?count=1`) as { address: string }[];
+        const holder = holders?.[0];
+        if (!holder?.address) throw new Error('minting-data holder not found on Blockfrost');
+        const utxos = await blockfrostFetch(`addresses/${encodeURIComponent(holder.address)}/utxos/${assetId}?count=1`) as any[];
+        const u = utxos?.[0];
+        if (!u) throw new Error('minting-data UTxO not found on Blockfrost');
+        const inlineDatum: string | undefined = u.inline_datum;
+        if (!inlineDatum) throw new Error('minting-data UTxO has no inline datum');
+        const decoded = decodeCborToJson({ cborString: inlineDatum, schema: {} });
+        chainRootHash = extractMptRootFromConstructor0(decoded);
+        chainRootProvider = 'blockfrost';
+        chainRootTipSlot = blockfrostTipSlot;
+    }
+
+    if (!chainRootHash) throw new Error('Could not extract MPT root from minting-data datum');
+
+    const tStart = Math.min(koiosTipSlot, blockfrostTipSlot);
+    const tStartHash = koiosTipSlot <= blockfrostTipSlot ? koiosTipHash : blockfrostTipHash;
+
+    return {
+        koiosTipSlot, koiosTipHash,
+        blockfrostTipSlot, blockfrostTipHash,
+        tStart, tStartHash,
+        chainRootHash, chainRootTipSlot, chainRootProvider
+    };
+};
+
+// ---------- phase 2: enumerate handle set (policy_asset_list, supply>0) ----------
+
+interface PolicyAssetListRow { asset_name: string; total_supply: string }
+
+const enumerateKoiosPolicy = async (policy: string): Promise<string[]> => {
+    const fetchPage = (offset: number): Promise<PolicyAssetListRow[]> =>
+        koiosFetch(`policy_asset_list?_asset_policy=${policy}&order=asset_name.asc&limit=${KOIOS_PAGE_SIZE}&offset=${offset}`) as Promise<PolicyAssetListRow[]>;
+
+    const keep = (r: PolicyAssetListRow): boolean => BigInt(r.total_supply ?? '0') > 0n;
+
+    const all: PolicyAssetListRow[] = [];
+    const first = await fetchPage(0);
+    all.push(...first);
+    if (first.length < KOIOS_PAGE_SIZE) return all.filter(keep).map((r) => r.asset_name);
+
+    let offset = KOIOS_PAGE_SIZE;
+    let done = false;
+    while (!done) {
+        const promises: Promise<PolicyAssetListRow[]>[] = [];
+        for (let i = 0; i < KOIOS_PARALLEL_PAGES; i++) {
+            const o = offset + i * KOIOS_PAGE_SIZE;
+            promises.push(delay(i * KOIOS_STAGGER_MS).then(() => fetchPage(o)));
+        }
+        const pages = await Promise.all(promises);
+        for (const p of pages) {
+            all.push(...p);
+            if (p.length < KOIOS_PAGE_SIZE) done = true;
+        }
+        offset += KOIOS_PARALLEL_PAGES * KOIOS_PAGE_SIZE;
+        process.stderr.write(`\r  koios ${policy.slice(0, 10)}… fetched ${all.length} assets`);
+    }
+    process.stderr.write('\n');
+    return all.filter(keep).map((r) => r.asset_name);
+};
+
+// ---------- phase 2b: per-asset first-mint-tx (policy_asset_mints) ----------
+
+interface PolicyAssetMintsRow {
+    asset_name: string;
+    minting_tx_hash: string;
+    total_supply: string;
+    mint_cnt: number;
+    burn_cnt: number;
+    creation_time: number;
+}
+
+const enumeratePolicyAssetMints = async (policy: string): Promise<PolicyAssetMintsRow[]> => {
+    const fetchPage = (offset: number): Promise<PolicyAssetMintsRow[]> =>
+        koiosFetch(`policy_asset_mints?_asset_policy=${policy}&order=asset_name.asc&limit=${KOIOS_PAGE_SIZE}&offset=${offset}`) as Promise<PolicyAssetMintsRow[]>;
+
+    const all: PolicyAssetMintsRow[] = [];
+    const first = await fetchPage(0);
+    all.push(...first);
+    if (first.length < KOIOS_PAGE_SIZE) return all;
+
+    let offset = KOIOS_PAGE_SIZE;
+    let done = false;
+    while (!done) {
+        const promises: Promise<PolicyAssetMintsRow[]>[] = [];
+        for (let i = 0; i < KOIOS_PARALLEL_PAGES; i++) {
+            const o = offset + i * KOIOS_PAGE_SIZE;
+            promises.push(delay(i * KOIOS_STAGGER_MS).then(() => fetchPage(o)));
+        }
+        const pages = await Promise.all(promises);
+        for (const p of pages) {
+            all.push(...p);
+            if (p.length < KOIOS_PAGE_SIZE) done = true;
+        }
+        offset += KOIOS_PARALLEL_PAGES * KOIOS_PAGE_SIZE;
+        process.stderr.write(`\r  koios mints ${policy.slice(0, 10)}… fetched ${all.length} assets`);
+    }
+    process.stderr.write('\n');
+    return all;
+};
+
+// ---------- phase 2c: asset_history fallback for multi-mint assets ----------
+
+interface AssetHistoryMintTx { tx_hash: string; block_time: number; quantity: string }
+const fetchAssetHistoryOne = async (policy: string, assetNameHex: string): Promise<AssetHistoryMintTx[]> => {
+    const rows = await koiosFetch(`asset_history?_asset_policy=${policy}&_asset_name=${assetNameHex}`) as Array<{ minting_txs: AssetHistoryMintTx[] }>;
+    return rows?.[0]?.minting_txs ?? [];
+};
+
+// ---------- phase 4: per-handle UTxO fetch across pools ----------
+
+interface Pool {
+    name: string;
+    kind: 'koios' | 'blockfrost';
+    token: string;
+    rps: number;
+    batchSize: number;
+}
+
+class RateLimiter {
+    private nextStart = 0;
+    constructor(private readonly intervalMs: number) {}
+    async acquire() {
+        const now = Date.now();
+        const start = Math.max(now, this.nextStart);
+        this.nextStart = start + this.intervalMs;
+        const wait = start - now;
+        if (wait > 0) await delay(wait);
+    }
+}
+
+interface WorkItem {
+    policy: string;
+    assetNameHex: string;
+    handleName: string;
+    labelKey: 'lbl222' | 'lbl100' | 'lbl000' | 'lbl001' | 'legacy';
+}
+
+interface UtxoRecord {
+    handleName: string;
+    policy: string;
+    assetNameHex: string;
+    labelKey: WorkItem['labelKey'];
+    txHash: string;
+    txIndex: number;
+    address: string;
+    lovelace: string;
+    blockHeight?: number;
+    blockTime?: number;
+    inlineDatumCbor?: string;
+    referenceScriptHash?: string;
+    referenceScriptCbor?: string;
+    fetchedVia: 'koios' | 'blockfrost';
+    poolName: string;
+}
+
+interface PoolStats {
+    assetsAttempted: number;
+    assetsFound: number;
+    assetsMissing: number;
+    calls: number;
+    failures: number;
+    notFound404s: number;
+    elapsedMs: number;
+}
+
+const buildPools = (): Pool[] => {
+    const pools: Pool[] = [];
+    pools.push({ name: 'koios-high', kind: 'koios', token: KOIOS_HIGH, rps: KOIOS_HIGH_RPS, batchSize: KOIOS_ASSET_BATCH });
+    if (KOIOS_LOW) pools.push({ name: 'koios-low', kind: 'koios', token: KOIOS_LOW, rps: KOIOS_LOW_RPS, batchSize: KOIOS_ASSET_BATCH });
+    pools.push({ name: 'bf-high', kind: 'blockfrost', token: BF_HIGH, rps: BF_HIGH_RPS, batchSize: BF_ASSET_BATCH });
+    if (BF_LOW) pools.push({ name: 'bf-low', kind: 'blockfrost', token: BF_LOW, rps: BF_LOW_RPS, batchSize: BF_ASSET_BATCH });
+    return pools;
+};
+
+const workItemsFromAssets = (assetsByPolicy: Record<string, string[]>): WorkItem[] => {
+    const items: WorkItem[] = [];
+    for (const [policy, assets] of Object.entries(assetsByPolicy)) {
+        for (const hex of assets) {
+            if (!hex) continue;
+            const { isCip67, assetLabel, name } = checkNameLabel(hex);
+            if (isCip67) {
+                if (assetLabel === AssetNameLabel.LBL_222) items.push({ policy, assetNameHex: hex, handleName: name, labelKey: 'lbl222' });
+                else if (assetLabel === AssetNameLabel.LBL_100) items.push({ policy, assetNameHex: hex, handleName: name, labelKey: 'lbl100' });
+                // LBL_000 (virtual subhandles) and LBL_001 (subhandle settings)
+                // DO live in dedicated on-chain UTxOs — must fetch for parity.
+                // They're Koios-only; Blockfrost 404s on these labels.
+                else if (assetLabel === AssetNameLabel.LBL_000) items.push({ policy, assetNameHex: hex, handleName: name, labelKey: 'lbl000' });
+                else if (assetLabel === AssetNameLabel.LBL_001) items.push({ policy, assetNameHex: hex, handleName: name, labelKey: 'lbl001' });
+            } else {
+                items.push({ policy, assetNameHex: hex, handleName: name, labelKey: 'legacy' });
+            }
+        }
+    }
+    return items;
+};
+
+const toKoiosRecords = (rows: any[], batch: WorkItem[], poolName: string): UtxoRecord[] => {
+    const byAsset = new Map<string, WorkItem>();
+    for (const w of batch) byAsset.set(`${w.policy}/${w.assetNameHex}`, w);
+
+    const records: UtxoRecord[] = [];
+    for (const r of rows ?? []) {
+        if (r?.is_spent === true) continue;
+        for (const a of (r.asset_list ?? [])) {
+            const w = byAsset.get(`${a.policy_id}/${a.asset_name}`);
+            if (!w) continue;
+            records.push({
+                handleName: w.handleName,
+                policy: w.policy,
+                assetNameHex: w.assetNameHex,
+                labelKey: w.labelKey,
+                txHash: r.tx_hash,
+                txIndex: r.tx_index,
+                address: r.address,
+                lovelace: String(r.value ?? ''),
+                blockHeight: r.block_height,
+                blockTime: r.block_time,
+                inlineDatumCbor: r.inline_datum?.bytes,
+                referenceScriptHash: r.reference_script?.hash,
+                referenceScriptCbor: r.reference_script?.bytes,
+                fetchedVia: 'koios',
+                poolName
+            });
+        }
+    }
+    return records;
+};
+
+const fetchUtxoBatchKoios = async (pool: Pool, batch: WorkItem[]): Promise<UtxoRecord[]> => {
+    const body = JSON.stringify({
+        _asset_list: batch.map((w) => [w.policy, w.assetNameHex]),
+        _extended: true
+    });
+    const rows = await koiosFetch('asset_utxos', { method: 'POST', body, token: pool.token }) as any[];
+    return toKoiosRecords(rows, batch, pool.name);
+};
+
+// Blockfrost has no /assets/{id}/utxos endpoint (confirmed against its OpenAPI
+// spec). Two-call path: /assets/{asset}/addresses → /addresses/{addr}/utxos/{asset}.
+const fetchUtxoBlockfrost = async (pool: Pool, work: WorkItem): Promise<UtxoRecord | null> => {
+    const assetId = `${work.policy}${work.assetNameHex}`;
+    const holders = await blockfrostFetch(`assets/${assetId}/addresses?count=1`, pool.token) as { address: string; quantity: string }[];
+    const holder = holders?.[0];
+    if (!holder?.address) return null;
+    const utxos = await blockfrostFetch(`addresses/${encodeURIComponent(holder.address)}/utxos/${assetId}?count=1`, pool.token) as any[];
+    const u = utxos?.[0];
+    if (!u) return null;
+    return {
+        handleName: work.handleName,
+        policy: work.policy,
+        assetNameHex: work.assetNameHex,
+        labelKey: work.labelKey,
+        txHash: u.tx_hash,
+        txIndex: Number(u.tx_index ?? u.output_index),
+        address: holder.address,
+        lovelace: (u.amount ?? []).find((x: any) => x.unit === 'lovelace')?.quantity ?? '',
+        blockHeight: u.block_height,
+        inlineDatumCbor: u.inline_datum,
+        referenceScriptHash: u.reference_script_hash,
+        fetchedVia: 'blockfrost',
+        poolName: pool.name
+    };
+};
+
+// LBL_000/001 live in script UTxOs that Blockfrost's /assets/{id}/addresses
+// doesn't index; Koios handles them fine. Split the queue.
+const isBfCompatible = (w: WorkItem) => w.labelKey === 'lbl222' || w.labelKey === 'lbl100' || w.labelKey === 'legacy';
+
+const runPhase4 = async (work: WorkItem[]): Promise<{ results: UtxoRecord[]; stats: Record<string, PoolStats>; pools: Pool[] }> => {
+    const pools = buildPools();
+
+    const sharedQueue = work.filter(isBfCompatible);
+    const koiosOnlyQueue = work.filter((w) => !isBfCompatible(w));
+    let sharedCursor = 0;
+    let koiosOnlyCursor = 0;
+    const takeBatch = (size: number, koiosOnly: boolean): WorkItem[] => {
+        if (sharedCursor < sharedQueue.length) {
+            const start = sharedCursor;
+            const end = Math.min(start + size, sharedQueue.length);
+            sharedCursor = end;
+            return sharedQueue.slice(start, end);
+        }
+        if (!koiosOnly || koiosOnlyCursor >= koiosOnlyQueue.length) return [];
+        const start = koiosOnlyCursor;
+        const end = Math.min(start + size, koiosOnlyQueue.length);
+        koiosOnlyCursor = end;
+        return koiosOnlyQueue.slice(start, end);
+    };
+    const totalWork = work.length;
+    const cursorDisplay = () => `shared ${sharedCursor}/${sharedQueue.length}, koios-only ${koiosOnlyCursor}/${koiosOnlyQueue.length}`;
+
+    const results: UtxoRecord[] = [];
+    const stats: Record<string, PoolStats> = {};
+
+    const runPool = async (pool: Pool) => {
+        const limiter = new RateLimiter(Math.ceil(1000 / pool.rps));
+        const st: PoolStats = stats[pool.name] = { assetsAttempted: 0, assetsFound: 0, assetsMissing: 0, calls: 0, failures: 0, notFound404s: 0, elapsedMs: 0 };
+        const poolStart = Date.now();
+        const workerCount = Math.max(1, Math.min(16, pool.rps * 2));
+
+        const runWorker = async () => {
+            while (true) {
+                const batch = takeBatch(pool.batchSize, pool.kind === 'koios');
+                if (batch.length === 0) break;
+                await limiter.acquire();
+                st.calls++;
+                st.assetsAttempted += batch.length;
+                try {
+                    if (pool.kind === 'koios') {
+                        const recs = await fetchUtxoBatchKoios(pool, batch);
+                        results.push(...recs);
+                        st.assetsFound += recs.length;
+                        st.assetsMissing += Math.max(0, batch.length - recs.length);
+                    } else {
+                        for (const w of batch) {
+                            try {
+                                const rec = await fetchUtxoBlockfrost(pool, w);
+                                if (rec) {
+                                    results.push(rec);
+                                    st.assetsFound++;
+                                } else {
+                                    st.assetsMissing++;
+                                }
+                            } catch (inner: any) {
+                                if (/\b404\b/.test(String(inner?.message ?? ''))) {
+                                    st.notFound404s++;
+                                } else {
+                                    st.failures++;
+                                    console.error(`  ${pool.name} asset ${w.assetNameHex.slice(0, 16)}… failed: ${inner?.message ?? inner}`);
+                                }
+                            }
+                        }
+                    }
+                } catch (e: any) {
+                    st.failures++;
+                    console.error(`  ${pool.name} batch(${batch.length}) failed: ${e?.message ?? e}`);
+                }
+                if (st.calls % 10 === 0) {
+                    process.stderr.write(
+                        `\r  [phase4] ${cursorDisplay()} (total ${totalWork})  ` +
+                        pools.map((p) => `${p.name}=${stats[p.name]?.assetsFound ?? 0}`).join(' ')
+                    );
+                }
+            }
+        };
+
+        await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+        st.elapsedMs = Date.now() - poolStart;
+    };
+
+    await Promise.all(pools.map(runPool));
+    process.stderr.write('\n');
+    return { results, stats, pools };
+};
+
+// ---------- phase 4c: tx_info fetch ----------
+
+interface TxInfoAssetMinted { policy_id: string; asset_name: string; quantity: string; fingerprint?: string }
+interface TxInfoRow {
+    tx_hash: string;
+    absolute_slot: number;
+    block_hash?: string;
+    block_height?: number;
+    block_time?: number;
+    assets_minted?: TxInfoAssetMinted[];
+    metadata?: Record<string, any> | null;
+}
+
+type TxInfoMap = Map<string, TxInfoRow>;
+
+const fetchTxInfoBatchKoios = async (pool: Pool, hashes: string[]): Promise<TxInfoRow[]> => {
+    // Koios tx_info defaults to _metadata=false and _assets=false. Must enable
+    // both for snapshot parity.
+    const body = JSON.stringify({
+        _tx_hashes: hashes,
+        _metadata: true,
+        _assets: true,
+        _inputs: false,
+        _withdrawals: false,
+        _certs: false,
+        _scripts: false,
+        _bytecode: false,
+        _governance: false
+    });
+    return (await koiosFetch('tx_info', { method: 'POST', body, token: pool.token })) as TxInfoRow[];
+};
+
+const runPhase4c = async (txHashes: string[]): Promise<{ txInfo: TxInfoMap; stats: Record<string, PoolStats>; pools: Pool[] }> => {
+    const pools: Pool[] = [{ name: 'koios-high', kind: 'koios', token: KOIOS_HIGH, rps: KOIOS_HIGH_RPS, batchSize: KOIOS_TX_INFO_BATCH }];
+    if (KOIOS_LOW) pools.push({ name: 'koios-low', kind: 'koios', token: KOIOS_LOW, rps: KOIOS_LOW_RPS, batchSize: KOIOS_TX_INFO_BATCH });
+
+    const queue = txHashes;
+    let cursor = 0;
+    const takeBatch = (size: number): string[] => {
+        const start = cursor;
+        const end = Math.min(cursor + size, queue.length);
+        cursor = end;
+        return start < end ? queue.slice(start, end) : [];
+    };
+
+    const txInfo: TxInfoMap = new Map();
+    const stats: Record<string, PoolStats> = {};
+
+    const runPool = async (pool: Pool) => {
+        const limiter = new RateLimiter(Math.ceil(1000 / pool.rps));
+        const st: PoolStats = stats[pool.name] = { assetsAttempted: 0, assetsFound: 0, assetsMissing: 0, calls: 0, failures: 0, notFound404s: 0, elapsedMs: 0 };
+        const poolStart = Date.now();
+        const workerCount = Math.max(1, Math.min(16, pool.rps * 2));
+
+        const runWorker = async () => {
+            while (true) {
+                const batch = takeBatch(pool.batchSize);
+                if (batch.length === 0) break;
+                await limiter.acquire();
+                st.calls++;
+                st.assetsAttempted += batch.length;
+                try {
+                    const rows = await fetchTxInfoBatchKoios(pool, batch);
+                    for (const row of rows ?? []) {
+                        if (row?.tx_hash) txInfo.set(row.tx_hash, row);
+                    }
+                    st.assetsFound += rows?.length ?? 0;
+                    st.assetsMissing += Math.max(0, batch.length - (rows?.length ?? 0));
+                } catch (e: any) {
+                    st.failures++;
+                    console.error(`  ${pool.name} tx_info batch(${batch.length}) failed: ${e?.message ?? e}`);
+                }
+                if (st.calls % 10 === 0) {
+                    process.stderr.write(
+                        `\r  [phase4c] queue ${cursor}/${queue.length}  ` +
+                        pools.map((p) => `${p.name}=${stats[p.name]?.assetsFound ?? 0}`).join(' ')
+                    );
+                }
+            }
+        };
+
+        await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+        st.elapsedMs = Date.now() - poolStart;
+    };
+
+    await Promise.all(pools.map(runPool));
+    process.stderr.write('\n');
+    return { txInfo, stats, pools };
+};
+
+// ---------- phase 3: MPT build ----------
+
+const buildRoot = async (names: Iterable<string>): Promise<string> => {
+    const sorted = [...new Set([...names].map((h) => h.trim()).filter(Boolean))].sort();
+    const trie = await Trie.fromList(sorted.map((h) => ({ key: h, value: '' })));
+    return trie.hash?.toString('hex') ?? Buffer.alloc(32).toString('hex');
+};
+
+// ---------- phase 5: build snapshot ----------
+
+interface MintSource {
+    policy: string;
+    assetNameHex: string;
+    mintTxHash: string;
+    mintCnt: number;
+}
+
+const extract721FromTxInfoMetadata = (metadata: Record<string, any> | null | undefined): any => {
+    if (!metadata || typeof metadata !== 'object') return {};
+    return metadata['721'] ?? {};
+};
+
+const filter721ForUtxo = (metadata721: any, policiesSet: Set<string>, utxoHandleNames: Set<string>): any => {
+    if (!metadata721 || typeof metadata721 !== 'object') return {};
+    const { version, ...policies } = metadata721;
+    const filteredPolicies: Record<string, any> = {};
+    for (const [policyId, assets] of Object.entries(policies ?? {})) {
+        if (!policiesSet.has(policyId)) continue;
+        if (!assets || typeof assets !== 'object') continue;
+        const filteredAssets: Record<string, any> = {};
+        for (const [assetName, value] of Object.entries(assets as any)) {
+            const asUtf8 = assetName;
+            const asFromHex = (() => { try { return Buffer.from(assetName, 'hex').toString('utf8'); } catch { return ''; } })();
+            if (utxoHandleNames.has(asUtf8) || (asFromHex && utxoHandleNames.has(asFromHex))) {
+                filteredAssets[assetName] = value;
+            }
+        }
+        if (Object.keys(filteredAssets).length > 0) filteredPolicies[policyId] = filteredAssets;
+    }
+    if (Object.keys(filteredPolicies).length === 0) return {};
+    return { '721': { ...filteredPolicies, ...(version && { version }) } };
+};
+
+const expandMultiMintSources = async (multiMintSources: MintSource[], existing: MintSource[]): Promise<MintSource[]> => {
+    if (multiMintSources.length === 0) return [];
+    const existingByAsset = new Map<string, Set<string>>();
+    for (const s of existing) {
+        const key = `${s.policy}/${s.assetNameHex}`;
+        if (!existingByAsset.has(key)) existingByAsset.set(key, new Set());
+        existingByAsset.get(key)!.add(s.mintTxHash);
+    }
+    const added: MintSource[] = [];
+    for (const src of multiMintSources) {
+        const events = await fetchAssetHistoryOne(src.policy, src.assetNameHex);
+        const alreadyHave = existingByAsset.get(`${src.policy}/${src.assetNameHex}`) ?? new Set();
+        for (const ev of events) {
+            if (BigInt(ev.quantity ?? '0') <= 0n) continue;
+            if (alreadyHave.has(ev.tx_hash)) continue;
+            added.push({ policy: src.policy, assetNameHex: src.assetNameHex, mintTxHash: ev.tx_hash, mintCnt: src.mintCnt });
+        }
+    }
+    return added;
+};
+
+const buildMintingData = (
+    mintSources: MintSource[],
+    handleNamesInSet: Set<string>,
+    txInfo: TxInfoMap,
+    policiesSet: Set<string>
+): { [handle: string]: MintingData[] } => {
+    // Null-prototype object so "constructor" / "__proto__" handle names don't
+    // collide with Object.prototype members.
+    const out: { [handle: string]: MintingData[] } = Object.create(null);
+    for (const src of mintSources) {
+        const { isCip67, assetLabel, name } = checkNameLabel(src.assetNameHex);
+        const shouldIndexMint = isCip67
+            ? assetLabel === AssetNameLabel.LBL_222 || assetLabel === AssetNameLabel.LBL_000
+            : true;
+        if (!shouldIndexMint) continue;
+        if (!handleNamesInSet.has(name)) continue;
+
+        const tx = txInfo.get(src.mintTxHash);
+        if (!tx) continue;
+        const metadata721 = extract721FromTxInfoMetadata(tx.metadata);
+        const filtered = filter721ForUtxo(metadata721, policiesSet, new Set([name]));
+        const md: MintingData = {
+            created_slot: Number(tx.absolute_slot),
+            metadata: filtered,
+            txHash: src.mintTxHash
+        };
+        (out[name] ??= []).push(md);
+    }
+    // Sort each handle's mint events by created_slot ascending for parity with
+    // the existing snapshot's chronological ordering.
+    for (const name of Object.keys(out)) {
+        out[name].sort((a, b) => a.created_slot - b.created_slot);
+    }
+    return out;
+};
+
+interface GroupedUtxo {
+    txHash: string;
+    txIndex: number;
+    address: string;
+    lovelace: string;
+    blockHeight?: number;
+    inlineDatumCbor?: string;
+    referenceScriptCbor?: string;
+    handlesByPolicy: Map<string, Set<string>>;
+}
+
+const groupUtxosByOutput = (records: UtxoRecord[]): GroupedUtxo[] => {
+    const byKey = new Map<string, GroupedUtxo>();
+    for (const r of records) {
+        const key = `${r.txHash}#${r.txIndex}`;
+        let g = byKey.get(key);
+        if (!g) {
+            g = {
+                txHash: r.txHash,
+                txIndex: r.txIndex,
+                address: r.address,
+                lovelace: r.lovelace,
+                blockHeight: r.blockHeight,
+                inlineDatumCbor: r.inlineDatumCbor,
+                referenceScriptCbor: r.referenceScriptCbor,
+                handlesByPolicy: new Map()
+            };
+            byKey.set(key, g);
+        }
+        let set = g.handlesByPolicy.get(r.policy);
+        if (!set) { set = new Set(); g.handlesByPolicy.set(r.policy, set); }
+        set.add(r.assetNameHex);
+    }
+    return Array.from(byKey.values());
+};
+
+const buildUtxosWithTxInfo = (
+    grouped: GroupedUtxo[],
+    txInfo: TxInfoMap,
+    policiesSet: Set<string>
+): UTxOWithTxInfo[] => {
+    return grouped.map((g) => {
+        const tx = txInfo.get(g.txHash);
+        const assetsInUtxo = new Set<string>();
+        for (const assets of g.handlesByPolicy.values()) for (const a of assets) assetsInUtxo.add(a);
+
+        const mintByPolicy = new Map<string, string[]>();
+        const burnByPolicy = new Map<string, string[]>();
+        if (tx?.assets_minted) {
+            for (const a of tx.assets_minted) {
+                if (!policiesSet.has(a.policy_id)) continue;
+                const q = BigInt(a.quantity ?? '0');
+                if (q > 0n) {
+                    if (!assetsInUtxo.has(a.asset_name)) continue;
+                    const list = mintByPolicy.get(a.policy_id) ?? mintByPolicy.set(a.policy_id, []).get(a.policy_id)!;
+                    list.push(a.asset_name);
+                } else if (q < 0n) {
+                    if (!g.handlesByPolicy.has(a.policy_id)) continue;
+                    const list = burnByPolicy.get(a.policy_id) ?? burnByPolicy.set(a.policy_id, []).get(a.policy_id)!;
+                    list.push(a.asset_name);
+                }
+            }
+        }
+
+        const utxoHandleNamesUtf8 = new Set<string>();
+        for (const assets of g.handlesByPolicy.values()) {
+            for (const hex of assets) {
+                const { name } = checkNameLabel(hex);
+                utxoHandleNamesUtf8.add(name);
+            }
+        }
+        const metadata = tx
+            ? filter721ForUtxo(extract721FromTxInfoMetadata(tx.metadata), policiesSet, utxoHandleNamesUtf8)
+            : {};
+
+        const utxo: UTxOWithTxInfo = {
+            id: `${g.txHash}#${g.txIndex}`,
+            tx_id: g.txHash,
+            index: g.txIndex,
+            blockHash: tx?.block_hash ?? '',
+            blockNum: tx?.block_height ?? g.blockHeight ?? 0,
+            slot: Number(tx?.absolute_slot ?? 0),
+            address: g.address,
+            lovelace: Number(g.lovelace || 0),
+            datum: g.inlineDatumCbor,
+            script: g.referenceScriptCbor ? { type: 'plutus', cbor: g.referenceScriptCbor } : undefined,
+            handles: Array.from(g.handlesByPolicy.entries()).map(([p, set]) => [p, Array.from(set)]),
+            mint: Array.from(mintByPolicy.entries()).map(([p, arr]) => [p, arr]),
+            metadata
+        };
+        if (burnByPolicy.size > 0) {
+            utxo.burn = Array.from(burnByPolicy.entries()).map(([p, arr]) => [p, arr]);
+        }
+        return utxo;
+    });
+};
+
+interface BuildSnapshotArgs {
+    computedRoot: string;
+    tips: StartTips;
+    utxoRecords: UtxoRecord[];
+    mintSources: MintSource[];
+    handleNamesInSet: Set<string>;
+    txInfo: TxInfoMap;
+    policiesSet: Set<string>;
+}
+
+const buildSnapshotFile = (args: BuildSnapshotArgs): VerifiedHandleFileContent => {
+    const verification: SnapshotVerification = {
+        verifiedAgainstChain: args.computedRoot === args.tips.chainRootHash,
+        snapshotMptRootHash: args.computedRoot,
+        chainMptRootHash: args.tips.chainRootHash,
+        network: NETWORK,
+        verifiedAtUtc: new Date().toISOString()
+    };
+    const grouped = groupUtxosByOutput(args.utxoRecords);
+    const utxos = buildUtxosWithTxInfo(grouped, args.txInfo, args.policiesSet);
+    const mintingData = buildMintingData(args.mintSources, args.handleNamesInSet, args.txInfo, args.policiesSet);
+
+    return {
+        slot: args.tips.tStart,
+        hash: args.tips.tStartHash,
+        utxoSchemaVersion: SNAPSHOT_UTXO_SCHEMA_VERSION,
+        utxos,
+        mintingData,
+        verification
+    };
+};
+
+const writeSnapshotGz = (snapshot: VerifiedHandleFileContent, outPath: string) => {
+    const json = JSON.stringify(snapshot);
+    fs.mkdirSync(outPath.replace(/\/[^/]+$/, ''), { recursive: true });
+    fs.writeFileSync(outPath, zlib.deflateSync(json));
+    fs.writeFileSync(outPath.replace(/\.gz$/, '.json'), json);
+    return { bytes: json.length, gzBytes: fs.statSync(outPath).size };
+};
+
+// ---------- classification ----------
+
+interface ClassifyBuckets {
+    handleNames: Set<string>;
+    keptLabel222: number;
+    keptLabel000: number;
+    keptLegacy: number;
+    droppedLabel100: number;
+    droppedLabel001: number;
+    droppedOther: number;
+}
+
+const classifyAssetNames = (assetNames: Iterable<string>): ClassifyBuckets => {
+    const b: ClassifyBuckets = {
+        handleNames: new Set<string>(),
+        keptLabel222: 0, keptLabel000: 0, keptLegacy: 0,
+        droppedLabel100: 0, droppedLabel001: 0, droppedOther: 0
+    };
+    for (const hex of assetNames) {
+        if (!hex) continue;
+        const { isCip67, assetLabel, name } = checkNameLabel(hex);
+        if (isCip67) {
+            if (assetLabel === AssetNameLabel.LBL_222) { b.handleNames.add(name); b.keptLabel222++; }
+            else if (assetLabel === AssetNameLabel.LBL_000) { b.handleNames.add(name); b.keptLabel000++; }
+            else if (assetLabel === AssetNameLabel.LBL_100) b.droppedLabel100++;
+            else if (assetLabel === AssetNameLabel.LBL_001) b.droppedLabel001++;
+            else b.droppedOther++;
+        } else {
+            b.handleNames.add(name);
+            b.keptLegacy++;
+        }
+    }
+    return b;
+};
+
+// ---------- main ----------
+
+const fmtMs = (ms: number) => `${(ms / 1000).toFixed(2)}s`;
+
+(async () => {
+    console.log(`Bootstrap from APIs — NETWORK=${NETWORK}`);
+    const policies = listPolicies(NETWORK);
+    console.log(`Policies: ${policies.join(', ')}`);
+
+    // Phase 1
+    const t1 = Date.now();
+    console.log('\nPhase 1: start tips + on-chain MPT root');
+    const tips = await fetchStartTips();
+    console.log(`  Koios tip slot:       ${tips.koiosTipSlot}`);
+    console.log(`  Blockfrost tip slot:  ${tips.blockfrostTipSlot}`);
+    console.log(`  T_start:              ${tips.tStart} (${tips.koiosTipSlot <= tips.blockfrostTipSlot ? 'koios' : 'blockfrost'})`);
+    console.log(`  On-chain MPT root:    ${tips.chainRootHash} (via ${tips.chainRootProvider} @ slot ${tips.chainRootTipSlot})`);
+    console.log(`  [elapsed ${fmtMs(Date.now() - t1)}]`);
+
+    // Phase 2
+    const t2 = Date.now();
+    console.log('\nPhase 2: enumerate handle set (Koios policy_asset_list)');
+    const assetsByPolicy: Record<string, string[]> = {};
+    const assetNames = new Set<string>();
+    for (const p of policies) {
+        const names = await enumerateKoiosPolicy(p);
+        console.log(`  ${p.slice(0, 10)}…  ${names.length} assets`);
+        assetsByPolicy[p] = names;
+        for (const n of names) assetNames.add(n);
+    }
+    const classified = classifyAssetNames(assetNames);
+    console.log(`  Classified: 222=${classified.keptLabel222} 000=${classified.keptLabel000} legacy=${classified.keptLegacy} | dropped 100=${classified.droppedLabel100} 001=${classified.droppedLabel001} other=${classified.droppedOther}`);
+    console.log(`  Unique handle names (pre-ghost): ${classified.handleNames.size}`);
+    console.log(`  [elapsed ${fmtMs(Date.now() - t2)}]`);
+
+    // Phase 3
+    const t3 = Date.now();
+    console.log('\nPhase 3: build MPT + verify against on-chain root');
+    const ghosts = GHOST_HANDLES[NETWORK] ?? [];
+    console.log(`  Ghost handles (${ghosts.length}): ${ghosts.join(', ') || '<none>'}`);
+    for (const g of ghosts) classified.handleNames.add(g);
+    const computedRoot = await buildRoot(classified.handleNames);
+    const match = computedRoot === tips.chainRootHash;
+    console.log(`  Computed root: ${computedRoot}  handles=${classified.handleNames.size}`);
+    console.log(`  On-chain root: ${tips.chainRootHash}`);
+    console.log(`  ${match ? 'MATCH' : 'MISMATCH'}`);
+    console.log(`  [elapsed ${fmtMs(Date.now() - t3)}]`);
+
+    if (!match) {
+        console.error('\nMPT root mismatch. Aborting.');
+        console.log(`\nTotal: ${fmtMs(Date.now() - t1)}`);
+        process.exit(2);
+    }
+
+    if (process.env.PHASE4 === '0') {
+        console.log('\nPhase 4 skipped (PHASE4=0).');
+        console.log(`\nTotal: ${fmtMs(Date.now() - t1)}`);
+        return;
+    }
+
+    // Phase 4: per-handle UTxO fetch
+    const t4 = Date.now();
+    console.log('\nPhase 4: per-handle UTxO fetch (4-pool dispatch)');
+    let work = workItemsFromAssets(assetsByPolicy);
+    const maxItems = Number(process.env.PHASE4_MAX_ITEMS ?? 0);
+    if (maxItems > 0 && work.length > maxItems) {
+        console.log(`  PHASE4_MAX_ITEMS=${maxItems} — truncating from ${work.length}`);
+        work = work.slice(0, maxItems);
+    }
+    console.log(`  Work items: ${work.length} (222=${work.filter((w) => w.labelKey === 'lbl222').length} 100=${work.filter((w) => w.labelKey === 'lbl100').length} 000=${work.filter((w) => w.labelKey === 'lbl000').length} 001=${work.filter((w) => w.labelKey === 'lbl001').length} legacy=${work.filter((w) => w.labelKey === 'legacy').length})`);
+    const { results, stats, pools } = await runPhase4(work);
+    console.log('\n  Per-pool stats:');
+    for (const p of pools) {
+        const s = stats[p.name];
+        const effRps = s.calls > 0 ? (s.calls / (s.elapsedMs / 1000)).toFixed(2) : '0';
+        console.log(`    ${p.name.padEnd(12)} rps=${p.rps} batch=${p.batchSize}  attempted=${s.assetsAttempted} found=${s.assetsFound} missing=${s.assetsMissing} 404s=${s.notFound404s} calls=${s.calls} fails=${s.failures} elapsed=${fmtMs(s.elapsedMs)} effRps=${effRps}`);
+    }
+    console.log(`  Total UTxO records: ${results.length}`);
+    console.log(`  [elapsed ${fmtMs(Date.now() - t4)}]`);
+
+    // Phase 2b: per-asset first-mint-tx
+    const t2b = Date.now();
+    console.log('\nPhase 2b: per-asset first-mint-tx (Koios policy_asset_mints)');
+    const mintSourcesAll: MintSource[] = [];
+    let multiMintCount = 0;
+    for (const p of policies) {
+        const rows = await enumeratePolicyAssetMints(p);
+        for (const r of rows) {
+            if (r.mint_cnt > 1) multiMintCount++;
+            mintSourcesAll.push({ policy: p, assetNameHex: r.asset_name, mintTxHash: r.minting_tx_hash, mintCnt: r.mint_cnt });
+        }
+        console.log(`  ${p.slice(0, 10)}…  ${rows.length} assets`);
+    }
+    const mintSourcesIndexed = mintSourcesAll.filter((s) => {
+        const { isCip67, assetLabel, name } = checkNameLabel(s.assetNameHex);
+        const shouldIndex = isCip67
+            ? assetLabel === AssetNameLabel.LBL_222 || assetLabel === AssetNameLabel.LBL_000
+            : true;
+        return shouldIndex && classified.handleNames.has(name);
+    });
+    console.log(`  Mint sources total=${mintSourcesAll.length} indexed=${mintSourcesIndexed.length} multi-mint(>1)=${multiMintCount}`);
+
+    // Phase 2c: asset_history for multi-mint assets
+    const multiMintSources = mintSourcesIndexed.filter((s) => s.mintCnt > 1);
+    if (multiMintSources.length > 0) {
+        console.log(`  Phase 2c: fetching asset_history for ${multiMintSources.length} multi-mint assets`);
+        const extraSources = await expandMultiMintSources(multiMintSources, mintSourcesIndexed);
+        console.log(`  Recovered ${extraSources.length} additional mint events`);
+        mintSourcesIndexed.push(...extraSources);
+    }
+
+    let mintSourcesForFetch = mintSourcesIndexed;
+    if (maxItems > 0 && mintSourcesIndexed.length > maxItems) {
+        console.log(`  PHASE4_MAX_ITEMS=${maxItems} — sampling mint sources from ${mintSourcesIndexed.length}`);
+        const copy = [...mintSourcesIndexed];
+        for (let i = copy.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [copy[i], copy[j]] = [copy[j], copy[i]];
+        }
+        mintSourcesForFetch = copy.slice(0, maxItems);
+    }
+    console.log(`  [elapsed ${fmtMs(Date.now() - t2b)}]`);
+
+    // Phase 4c: tx_info
+    const t4c = Date.now();
+    console.log('\nPhase 4c: tx_info fetch for unique tx hashes');
+    const uniqueTxHashes = new Set<string>();
+    for (const r of results) if (r.txHash) uniqueTxHashes.add(r.txHash);
+    for (const s of mintSourcesForFetch) if (s.mintTxHash) uniqueTxHashes.add(s.mintTxHash);
+    console.log(`  Unique tx hashes: ${uniqueTxHashes.size}`);
+    const txInfoRun = await runPhase4c(Array.from(uniqueTxHashes));
+    console.log('\n  Per-pool stats:');
+    for (const p of txInfoRun.pools) {
+        const s = txInfoRun.stats[p.name];
+        const effRps = s.calls > 0 ? (s.calls / (s.elapsedMs / 1000)).toFixed(2) : '0';
+        console.log(`    ${p.name.padEnd(12)} rps=${p.rps} batch=${p.batchSize}  attempted=${s.assetsAttempted} found=${s.assetsFound} missing=${s.assetsMissing} calls=${s.calls} fails=${s.failures} elapsed=${fmtMs(s.elapsedMs)} effRps=${effRps}`);
+    }
+    console.log(`  TxInfo rows collected: ${txInfoRun.txInfo.size}`);
+    console.log(`  [elapsed ${fmtMs(Date.now() - t4c)}]`);
+
+    // Phase 5: snapshot
+    const t5 = Date.now();
+    console.log('\nPhase 5: build snapshot + gzip');
+    const outPath = process.env.SNAPSHOT_OUT ?? 'tmp/handles_utxos.gz';
+    const policiesSet = new Set(policies);
+    const snapshot = buildSnapshotFile({
+        computedRoot,
+        tips,
+        utxoRecords: results,
+        mintSources: mintSourcesForFetch,
+        handleNamesInSet: classified.handleNames,
+        txInfo: txInfoRun.txInfo,
+        policiesSet
+    });
+    const { bytes, gzBytes } = writeSnapshotGz(snapshot, outPath);
+    const mintCount = Object.values(snapshot.mintingData).reduce((a, b) => a + b.length, 0);
+    console.log(`  Wrote ${outPath} (${(gzBytes / 1024 / 1024).toFixed(2)} MB gz, ${(bytes / 1024 / 1024).toFixed(2)} MB json)`);
+    console.log(`  Snapshot: slot=${snapshot.slot} hash=${snapshot.hash} utxos=${snapshot.utxos.length} mintingData handles=${Object.keys(snapshot.mintingData).length} mint events=${mintCount} verified=${snapshot.verification?.verifiedAgainstChain}`);
+    console.log(`  [elapsed ${fmtMs(Date.now() - t5)}]`);
+
+    console.log(`\nTotal: ${fmtMs(Date.now() - t1)}`);
+})().catch((e) => {
+    console.error(e);
+    process.exit(1);
+});
