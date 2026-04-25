@@ -9,10 +9,12 @@ const MINTING_DATA_HANDLE_NAME = 'handle_root@handle_settings';
 const EMPTY_MPT_ROOT_HASH = Buffer.alloc(32).toString('hex');
 
 // Virtual subhandle burns that remain in the on-chain MPT because the
-// current validator doesn't know how to remove them.
+// current validator doesn't know how to remove them. As of 2026-04-25 all
+// known ghosts have been resolved and removed; the structure stays in place
+// so a new ghost can be added quickly if one ever surfaces again.
 export const GHOST_HANDLES: Record<string, string[]> = {
     mainnet: [],
-    preview: ['dynamo2@ai']
+    preview: []
 };
 
 const fetchCurrentMintingDataDatumCbor = async () => {

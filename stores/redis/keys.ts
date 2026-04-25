@@ -28,6 +28,11 @@ export const getApiScannerRecoveryKey = (network = NETWORK) => getApiCacheKey('s
 
 export const getApiMptRootHashKey = (network = NETWORK) => getApiCacheKey('mpt_root_hash', network);
 
+// Set when the scan-finally MPT rebuild throws (Valkey blip, deadline overshoot, etc.). The
+// next scanner invocation runs the rebuild even if currentSlot did not advance, so a stale
+// stored mpt_root_hash doesn't persist past one transient failure.
+export const getApiMptRebuildPendingKey = (network = NETWORK) => getApiCacheKey('mpt_rebuild_pending', network);
+
 // Sorted set: score=slot, value=blockHash. One entry per block the scanner has processed,
 // whether or not that block contained handle txs. Enables processRollback to identify
 // truly-missed canonical blocks (vs. blocks we correctly scanned but that had no handle

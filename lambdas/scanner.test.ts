@@ -2,7 +2,7 @@ import { AssetNameLabel, IndexNames, LockedLambdaReason, UTxOFunctionName } from
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { getHandlesStore, RedisHandlesStore } from '../stores/redis';
-import { getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
+import { getApiMptRebuildPendingKey, getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
 import * as helpers from '../utils/helpers';
 
 jest.mock('../utils/helpers');
@@ -885,6 +885,57 @@ describe('Scanner lambda unit tests', () => {
         // through getBatchedTxHashesWithFallback, calling fetchKoios('block_txs', ...).
         const blockTxsCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'block_txs');
         expect(blockTxsCalls).toHaveLength(0);
+    });
+
+    it('flags MPT rebuild pending when buildAndStoreMptRootHash throws in scan finally', async () => {
+        // Regression: previously the catch block only logged and the stale stored hash stayed
+        // pinned until a future slot-advancing scan happened to succeed. /mpt-root would report
+        // calc≠datum drift in the meantime with no operator-actionable signal beyond the log.
+        const { handlesRepo, scannerModule, store } = setup();
+        // Slot advances within this scan: getMetrics returns 100 at scan_start (line 1153) and
+        // 105 in the finally block — that asymmetry is what triggers buildAndStoreMptRootHash
+        // pre-fix as well.
+        handlesRepo.getMetrics
+            .mockReturnValueOnce({ currentSlot: 100, currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED })
+            .mockReturnValue({ currentSlot: 105, currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.SCANNING });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ slot: 105, height: 5000, hash: 'tip_hash' }) } as never);
+        store.setMptRootHash.mockImplementation(() => {
+            throw new Error('valkey blip');
+        });
+
+        await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+        // Externally visible outcome: pending flag set in Valkey for next invocation.
+        // Negative control: without `setMptRebuildPending()` in the catch block, the kvStore
+        // would not contain MPT_REBUILD_PENDING_KEY and a stale hash could pin indefinitely.
+        const pendingKey = getApiMptRebuildPendingKey();
+        const pendingFlag = store.redisClientCall('get', pendingKey);
+        expect(pendingFlag).toBe('1');
+    });
+
+    it('retries MPT rebuild on next invocation when pending flag is set, even with no slot advance', async () => {
+        // Regression: the rebuild used to gate strictly on (endingCurrentSlot !== startingCurrentSlot).
+        // A failure that flagged for retry would only get retried on the next slot-advancing scan.
+        // On a quiet network this could leave the stale hash pinned for minutes-to-hours. The
+        // retry path must fire on any invocation while the flag is set.
+        const { handlesRepo, scannerModule, store } = setup();
+        // Pre-set the pending flag — simulating a previous invocation's failure.
+        const pendingKey = getApiMptRebuildPendingKey();
+        store.redisClientCall('set', pendingKey, '1');
+        // Slot does NOT advance: same currentSlot at scan_start and at finally.
+        handlesRepo.getMetrics.mockReturnValue({ currentSlot: 100, currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ slot: 100, height: 5000, hash: 'tip_hash' }) } as never);
+
+        await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+        // Externally visible outcome 1: the rebuild ran (store.setMptRootHash was called).
+        // Negative control: without the `|| rebuildPending` clause in the finally guard, no slot
+        // change means no rebuild attempt and setMptRootHash stays uncalled.
+        expect(store.setMptRootHash).toHaveBeenCalledTimes(1);
+        // Externally visible outcome 2: flag cleared after successful rebuild.
+        expect(store.redisClientCall('get', pendingKey)).toBeUndefined();
     });
 
     it('scan runs rollback when stale head is far behind tip', async () => {

@@ -4,7 +4,7 @@ import { BlockfrostBlock, KoiosAssetUTxO, KoiosDatumInfo, KoiosTxInfo } from '..
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { getHandlesStore } from '../stores/redis';
-import { getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
+import { getApiMptRebuildPendingKey, getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
 import { blockfrostApiCall, buildUTxOsFromKoiosTxs, defaultKoiosSettings, fetchBlockfrostDatumCbor, fetchBlockfrostTxHashes, fetchBlockfrostTxInfo, fetchKoios, fetchPaginatedResults } from '../utils/helpers';
 import { buildAndStoreMptRootHash, getChainMintingDataRootHash } from '../utils/snapshotVerification';
 
@@ -14,6 +14,7 @@ let initialized = false;
 
 const SCANNER_LEASE_KEY = getApiScannerLeaseKey();
 const SCANNER_RECOVERY_KEY = getApiScannerRecoveryKey();
+const MPT_REBUILD_PENDING_KEY = getApiMptRebuildPendingKey();
 const SCANNER_LEASE_TTL_MS = 60_000;
 const SCANNER_LEASE_HEARTBEAT_MS = 20_000;
 const KOIOS_RETRY_DELAYS_MS = [500, 1_500, 4_000];
@@ -113,6 +114,18 @@ const getKoiosRetryDelay = (attempt: number): number => KOIOS_RETRY_DELAYS_MS[at
 
 const clearRecoveryFlag = (): void => {
     store.redisClientCall('del', [SCANNER_RECOVERY_KEY]);
+};
+
+const setMptRebuildPending = (): void => {
+    store.redisClientCall('set', MPT_REBUILD_PENDING_KEY, '1');
+};
+
+const isMptRebuildPending = (): boolean => {
+    return !!store.redisClientCall('get', MPT_REBUILD_PENDING_KEY);
+};
+
+const clearMptRebuildPending = (): void => {
+    store.redisClientCall('del', [MPT_REBUILD_PENDING_KEY]);
 };
 
 const getUTxOIndexHandlers = () => ({
@@ -1333,16 +1346,23 @@ const scan = async () => {
         // advances currentSlot and IndexNames.HANDLE per-block, so any exit
         // path (including a deadline-terminated one) that committed blocks
         // must refresh stored mpt_root_hash, or /mpt-root will report a hash
-        // from an earlier handle-set state.
+        // from an earlier handle-set state. Also rebuild when a previous
+        // invocation flagged a failed rebuild — retry across invocations until
+        // it succeeds, so a transient Valkey blip can't leave a stale hash
+        // pinned indefinitely.
         const endingCurrentSlot = Number(handlesRepo.getMetrics().currentSlot ?? 0);
-        if (endingCurrentSlot !== startingCurrentSlot) {
+        const slotChanged = endingCurrentSlot !== startingCurrentSlot;
+        const rebuildPending = isMptRebuildPending();
+        if (slotChanged || rebuildPending) {
             try {
-                scanBreadcrumb('buildMptRootHash_start');
+                scanBreadcrumb('buildMptRootHash_start', rebuildPending ? 'retryPending=true' : '');
                 await buildAndStoreMptRootHash(store);
                 scanBreadcrumb('buildMptRootHash_done');
+                if (rebuildPending) clearMptRebuildPending();
             } catch (mptError: any) {
+                setMptRebuildPending();
                 Logger.log({
-                    message: `Failed to rebuild mpt_root_hash in scan finally: ${mptError?.message ?? mptError}`,
+                    message: `Failed to rebuild mpt_root_hash in scan finally: ${mptError?.message ?? mptError}. Flagged for retry on next invocation.`,
                     category: LogCategory.ERROR,
                     event: 'scannerLambda.buildMptRootHash.error'
                 });
