@@ -155,11 +155,12 @@ export const probeProviderMptRootHash = async (): Promise<ProviderMptProbe | nul
 
 export const buildHandleSetMptRootHash = async (handleNames: string[], ghostHandles: string[] = []) => {
     const normalizedHandleNames = [...new Set([...handleNames, ...ghostHandles].map((handle) => `${handle}`.trim()).filter(Boolean))].sort();
-    const trie = new Trie();
-    for (const handleName of normalizedHandleNames) {
-        await trie.insert(handleName, '');
-    }
-
+    // Bulk constructor instead of N serial `await trie.insert(...)` calls.
+    // The per-insert loop re-hashed intermediate state on every step, costing
+    // ~1.5ms × ~300k handles = ~8 minutes per scan tick on mainnet. fromList
+    // builds the structure in one pass with the same final hash; bootstrap +
+    // build-true-root + build-api-root all use it and verify against on-chain.
+    const trie = await Trie.fromList(normalizedHandleNames.map((key) => ({ key, value: '' })));
     return trie.hash?.toString('hex') ?? EMPTY_MPT_ROOT_HASH;
 };
 
