@@ -1,3 +1,4 @@
+#!/bin/bash
 set -eu
 
 CARDANO_NODE_VER=${CARDANO_NODE_VER:-10.5.3}

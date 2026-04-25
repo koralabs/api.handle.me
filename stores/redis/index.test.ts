@@ -20,7 +20,7 @@ jest.mock('worker_threads', () => {
 describe('RedisHandlesStore critical path tests', () => {
     const originalFetch = global.fetch;
     const originalOrderedSlots = [...ORDERED_SLOTS];
-    const network = `${process.env.NETWORK ?? 'mainnet'}`.toLowerCase();
+    const network = `${process.env.NETWORK ?? 'preview'}`.toLowerCase();
     const rootKey = (suffix: string) => getApiCacheKey(suffix);
 
     afterEach(() => {

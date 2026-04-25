@@ -98,7 +98,7 @@ describe('Snapshot lambda e2e', () => {
 
     it('creates and uploads a snapshot for the configured network only', async () => {
         const sendSpy = jest.spyOn(mockedS3Instance, 'send');
-        const network = `${process.env.NETWORK ?? 'mainnet'}`.toLowerCase();
+        const network = `${process.env.NETWORK ?? 'preview'}`.toLowerCase();
         const ghosts = GHOST_HANDLES[network] ?? [];
         const rootHash = await buildHandleSetMptRootHash(['papagoose', mintingDataHandleName], ghosts);
 
@@ -144,7 +144,7 @@ describe('Snapshot lambda e2e', () => {
     it('publishes snapshot with verifiedAgainstChain=false when MPT roots mismatch', async () => {
         const loggerSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
         const sendSpy = jest.spyOn(mockedS3Instance, 'send');
-        const network = `${process.env.NETWORK ?? 'mainnet'}`.toLowerCase();
+        const network = `${process.env.NETWORK ?? 'preview'}`.toLowerCase();
         store.setHashOnIndex(IndexNames.HANDLE, mintingDataHandleName, {
             name: mintingDataHandleName,
             datum: `d8799f5820${'00'.repeat(32)}ff`,
@@ -215,7 +215,7 @@ describe('Snapshot lambda e2e', () => {
 
     it('deletes archived snapshots older than 5 days', async () => {
         const sendSpy = jest.spyOn(mockedS3Instance, 'send');
-        const network = `${process.env.NETWORK ?? 'mainnet'}`.toLowerCase();
+        const network = `${process.env.NETWORK ?? 'preview'}`.toLowerCase();
 
         sendSpy
             .mockResolvedValueOnce('latest-upload')

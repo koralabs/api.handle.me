@@ -19,8 +19,6 @@ import { Trie } from '@aiken-lang/merkle-patricia-forestry';
     process.stderr.write('\n');
 
     const unique = [...new Set(names)].sort();
-    // Ghost
-    unique.push('watchman@ngmerchs');
 
     const trie = await Trie.fromList(unique.map((h) => ({ key: h, value: '' })));
     console.log('API_TRIE_ROOT:', trie.hash!.toString('hex').toLowerCase());

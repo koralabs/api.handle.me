@@ -32,7 +32,7 @@ interface StaleHandle {
     canonical_block: number;
 }
 
-const NETWORK = (process.env.NETWORK ?? 'mainnet').toLowerCase();
+const NETWORK = (process.env.NETWORK ?? 'preview').toLowerCase();
 const API_BASE = process.env.API_BASE
     ?? (NETWORK === 'mainnet' ? 'https://api.handle.me'
         : `https://${NETWORK}.api.handle.me`);

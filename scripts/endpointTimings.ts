@@ -1,7 +1,7 @@
 
 import http, { OutgoingHttpHeaders } from 'http';
 import https from 'https';
-const NETWORK = 'mainnet';
+const NETWORK = process.env.NETWORK ?? 'preview';
 
 const apiRequest = async (url: string, accept = 'application/json', method = 'GET', body = '' ): Promise<{ statusCode?: number; body?: string; error?: string, headers?: OutgoingHttpHeaders }> => {
     const client = url.startsWith('http:') ? http : https;

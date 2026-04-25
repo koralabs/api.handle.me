@@ -11,7 +11,7 @@ const EMPTY_MPT_ROOT_HASH = Buffer.alloc(32).toString('hex');
 // Virtual subhandle burns that remain in the on-chain MPT because the
 // current validator doesn't know how to remove them.
 export const GHOST_HANDLES: Record<string, string[]> = {
-    mainnet: ['watchman@ngmerchs'],
+    mainnet: [],
     preview: ['dynamo2@ai']
 };
 
