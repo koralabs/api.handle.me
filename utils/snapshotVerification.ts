@@ -9,12 +9,13 @@ const MINTING_DATA_HANDLE_NAME = 'handle_root@handle_settings';
 const EMPTY_MPT_ROOT_HASH = Buffer.alloc(32).toString('hex');
 
 // Virtual subhandle burns that remain in the on-chain MPT because the
-// current validator doesn't know how to remove them. As of 2026-04-25 all
-// known ghosts have been resolved and removed; the structure stays in place
-// so a new ghost can be added quickly if one ever surfaces again.
+// current validator doesn't know how to remove them. Mainnet's set was
+// emptied 2026-04-24 after demi v2 redeployed the on-chain trie without
+// the prior ghost. Preview still carries `dynamo2@ai` — verified
+// empirically against the preview chain root on 2026-04-25.
 export const GHOST_HANDLES: Record<string, string[]> = {
     mainnet: [],
-    preview: []
+    preview: ['dynamo2@ai']
 };
 
 const fetchCurrentMintingDataDatumCbor = async () => {
