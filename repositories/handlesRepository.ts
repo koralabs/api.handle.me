@@ -59,8 +59,17 @@ export class HandlesRepository {
     }
 
     public isCaughtUp(): boolean {
-        const { lastSlot = 1, currentSlot = 0, currentBlockHash = '0', tipBlockHash = '1' } = this.store.getMetrics();
-        return lastSlot - currentSlot < 240 && currentBlockHash == tipBlockHash;
+        // Slot tolerance only — the previous `currentBlockHash == tipBlockHash` clause
+        // flipped status to storage_behind every ~20s as new blocks landed before the
+        // scanner caught the new tip, even when we were seconds away from current.
+        // Mainnet scans aggressively (5 min budget); testnets scan less often (10 min).
+        const { lastSlot = 0, currentSlot = 0 } = this.store.getMetrics();
+        // Fail closed when metrics aren't populated yet (cold start before first scan):
+        // claiming "caught up" with an uninitialized state would let the lambda serve
+        // 200 OK while actually serving stale/empty data.
+        if (!lastSlot || !currentSlot) return false;
+        const tolerance = isTestnet ? 600 : 300;
+        return lastSlot - currentSlot < tolerance;
     }
     
     public getHandle(key: string): StoredHandle | null {
