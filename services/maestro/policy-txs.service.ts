@@ -1,7 +1,10 @@
 import { LogCategory, Logger, Network } from '@koralabs/kora-labs-common';
 import { getHandlesStore } from '../../stores/redis';
 
-const MAESTRO_API_KEY = (process.env.MAESTRO_API_KEY ?? '').trim();
+// Lazy: lambda entrypoints call hydrateKmsEnvironment() at handler-start to
+// decrypt the MAESTRO_API_KEY_ENC GitHub secret into process.env.MAESTRO_API_KEY.
+// A module-level `const` would capture the pre-hydrate (empty) value. Read per-call.
+const getMaestroApiKey = (): string => (process.env.MAESTRO_API_KEY ?? '').trim();
 const MAESTRO_HIGH_RPS = Math.max(1, Number(process.env.MAESTRO_HIGH_RPS ?? 8));
 const MAESTRO_PAGE_INTERVAL_MS = Math.ceil(1000 / MAESTRO_HIGH_RPS);
 const MAESTRO_RETRY_DELAYS_MS = [500, 1500, 4000];
@@ -20,7 +23,7 @@ const maestroBase = (network: Network) => `https://${String(network).toLowerCase
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-export const isMaestroConfigured = (): boolean => MAESTRO_API_KEY.length > 0;
+export const isMaestroConfigured = (): boolean => getMaestroApiKey().length > 0;
 
 const isInCooldown = (): boolean => {
     try {
@@ -68,7 +71,7 @@ const fetchPage = async (network: Network, policy: string, opts: FetchPageOpts):
     else if (typeof opts.from === 'number') qs.push(`from=${opts.from}`);
     const url = `${maestroBase(network)}/policy/${policy}/transactions?${qs.join('&')}`;
     const response = await fetch(url, {
-        headers: { 'api-key': MAESTRO_API_KEY },
+        headers: { 'api-key': getMaestroApiKey() },
         signal: AbortSignal.timeout(MAESTRO_TIMEOUT_MS)
     });
     handleCreditsHeader(response);
@@ -131,7 +134,7 @@ export const discoverHandleTxsBySlotRange = async (
     fromSlot: number,
     toSlot: number
 ): Promise<MaestroDiscoveryResult | null> => {
-    if (!MAESTRO_API_KEY) return null;
+    if (!isMaestroConfigured()) return null;
     if (isInCooldown()) {
         Logger.local('Maestro discovery skipped (cool-down active)');
         return null;
