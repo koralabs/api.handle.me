@@ -5,6 +5,7 @@ import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { getHandlesStore } from '../stores/redis';
 import { getApiMptRebuildPendingKey, getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
+import { discoverHandleTxsBySlotRange, isMaestroConfigured, MaestroDiscoveryResult } from '../services/maestro/policy-txs.service';
 import { blockfrostApiCall, buildUTxOsFromKoiosTxs, defaultKoiosSettings, fetchBlockfrostDatumCbor, fetchBlockfrostTxHashes, fetchBlockfrostTxInfo, fetchKoios, fetchPaginatedResults } from '../utils/helpers';
 import { buildAndStoreMptRootHash, getChainMintingDataRootHash } from '../utils/snapshotVerification';
 
@@ -1242,13 +1243,49 @@ const scan = async () => {
                 event: 'scannerLambda.latestBlockUnavailable'
             });
         }
+        // Maestro discovery: pre-compute the set of handle-touching tx_hashes for the
+        // entire window in one cheap pass, replacing the bulk block_txs+filter work in
+        // each chunk. Returns null (caller falls back to block_txs + tx_info filter)
+        // when MAESTRO_API_KEY is unset, when a Redis cool-down is active (after a 429
+        // or low-credits warning), or when the underlying call fails after retries.
+        let maestroDiscovery: MaestroDiscoveryResult | null = null;
+        if (isMaestroConfigured()) {
+            const policiesForNetwork = Object.keys(HANDLE_POLICIES[NETWORK.toLowerCase() as Network] ?? {});
+            const windowFromSlot = bResp[0].slot;
+            const windowToSlot = bResp[bResp.length - 1].slot;
+            scanBreadcrumb('maestroDiscovery_start', `from=${windowFromSlot} to=${windowToSlot} policies=${policiesForNetwork.length}`);
+            maestroDiscovery = await discoverHandleTxsBySlotRange(NETWORK.toLowerCase() as Network, policiesForNetwork, windowFromSlot, windowToSlot);
+            scanBreadcrumb('maestroDiscovery_done', maestroDiscovery ? `txCount=${maestroDiscovery.txHashes.length}` : 'fallback');
+        }
+        // Bucket Maestro tx hashes by block hash so each chunk gets only its slice.
+        // bResp slots are unique per Cardano consensus, so slot → blockHash is 1:1.
+        const maestroHashesByBlock = maestroDiscovery
+            ? (() => {
+                  const slotToHash = new Map<number, string>();
+                  for (const b of bResp) slotToHash.set(b.slot, b.hash);
+                  const byBlock = new Map<string, string[]>();
+                  for (const txHash of maestroDiscovery.txHashes) {
+                      const slot = maestroDiscovery.slotByTx.get(txHash);
+                      if (slot === undefined) continue;
+                      const blockHash = slotToHash.get(slot);
+                      if (!blockHash) continue;
+                      const list = byBlock.get(blockHash) ?? [];
+                      list.push(txHash);
+                      byBlock.set(blockHash, list);
+                  }
+                  return byBlock;
+              })()
+            : null;
+
         for (let blockIndex = 0; blockIndex < bResp.length; blockIndex += SCANNER_BLOCK_PREFETCH_CHUNK_SIZE) {
             checkDeadline(`scan_chunk offset=${blockIndex}/${bResp.length}`);
             const blockChunk = bResp.slice(blockIndex, blockIndex + SCANNER_BLOCK_PREFETCH_CHUNK_SIZE);
             scanBreadcrumb('chunk_start', `offset=${blockIndex}/${bResp.length} chunkSize=${blockChunk.length}`);
             scanBreadcrumb('getBatchedTxHashes_start');
-            const txHashes = [...new Set(await getBatchedTxHashesWithFallback(blockChunk.map((block) => block.hash)))];
-            scanBreadcrumb('getBatchedTxHashes_done', `txCount=${txHashes.length}`);
+            const txHashes = maestroHashesByBlock
+                ? [...new Set(blockChunk.flatMap((block) => maestroHashesByBlock.get(block.hash) ?? []))]
+                : [...new Set(await getBatchedTxHashesWithFallback(blockChunk.map((block) => block.hash)))];
+            scanBreadcrumb('getBatchedTxHashes_done', `txCount=${txHashes.length} source=${maestroHashesByBlock ? 'maestro' : 'block_txs'}`);
             scanBreadcrumb('getBatchedTxInfo_start');
             const txList = await getBatchedTxInfoWithFallback(txHashes);
             scanBreadcrumb('getBatchedTxInfo_done', `txInfoCount=${txList.length}`);
