@@ -679,8 +679,20 @@ const processRollback = async ({ currentSlot, rollbackOffset = DEFAULT_ROLLBACK_
     const unseenCanonicalBlocks = providerBlocks.filter((b) => !scannedInWindow.has(b.hash));
     rbBreadcrumb('unseen_blocks_scan', `canonical=${providerBlocks.length} scanned=${scannedInWindow.size} unseen=${unseenCanonicalBlocks.length}`);
 
+    // If our currentBlockHash itself is off-canonical, the chain rolled back through a block we
+    // were anchored to. The Phase 2 stored-UTxO orphan check can't see this when the orphaned
+    // anchor block carried no handle txs (no stored UTxOs reference it). Skip the missed-handles
+    // probe in that case — it can fan out to hundreds of tx_info fetches on a deep gap and burn
+    // the Lambda deadline. Forward-scan from the snapped canonical predecessor will naturally
+    // re-apply any handle activity in the window.
+    const anchorBlockHash = `${handlesRepo.getMetrics().currentBlockHash ?? ''}`;
+    const anchorOrphaned = anchorBlockHash !== '' && !canonicalBlockHashes.has(anchorBlockHash);
+    if (anchorOrphaned) {
+        rbBreadcrumb('anchor_orphaned', `anchor=${anchorBlockHash} skipMissedHandlesProbe=true`);
+    }
+
     const missedBlockHandles = new Set<string>();
-    if (unseenCanonicalBlocks.length) {
+    if (!anchorOrphaned && unseenCanonicalBlocks.length) {
         const missedTxHashes = [...new Set(await getBatchedTxHashesWithFallback(unseenCanonicalBlocks.map((b) => b.hash)))];
         if (missedTxHashes.length) {
             const missedTxInfo = await getBatchedTxInfoWithFallback(missedTxHashes);

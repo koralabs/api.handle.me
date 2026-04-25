@@ -260,7 +260,10 @@ describe('Scanner lambda unit tests', () => {
     });
 
     it('ignores future provider blocks when comparing hashes', async () => {
-        const { pipelineResponses, scannerModule, store } = setup();
+        const { handlesRepo, pipelineResponses, scannerModule, store } = setup();
+        // Anchor must be canonical for the missed-handles probe to run; an off-canonical anchor
+        // triggers the anchor-orphaned short-circuit added to processRollback and skips block_txs.
+        handlesRepo.getMetrics.mockReturnValue({ currentSlot: 130, currentBlockHash: 'provider_block', lockLambdas: LockedLambdaReason.UNLOCKED });
         store.getValuesFromOrderedSet.mockReturnValue(['utxo#0']);
         mockedHelpers.fetchPaginatedResults.mockResolvedValue([
             { hash: 'provider_block', slot: 100 },
@@ -838,6 +841,50 @@ describe('Scanner lambda unit tests', () => {
                 lastSlot: 103
             })
         );
+    });
+
+    it('skips missed-handles probe and snaps head when currentBlockHash is off-canonical', async () => {
+        // Regression: the rollback recovery used to fan out to a block_txs probe over every
+        // unseen canonical block in the window when stored UTxOs all had canonical blockHashes
+        // — even when our anchor itself was off-canonical (Phase 2 orphan check on stored UTxOs
+        // can't see this case because a handle-free orphaned anchor block leaves no stored
+        // refs). On a deep gap that probe burned the Lambda deadline and west mainnet looped on
+        // recovery for hours without persisting progress. Forward-scan from the snapped
+        // canonical predecessor is sufficient — skip the probe.
+        const { handlesRepo, pipelineResponses, scannerModule, store } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'orphaned_anchor', currentSlot: 100, lockLambdas: LockedLambdaReason.UNLOCKED });
+        store.getValuesFromOrderedSet.mockReturnValue(['u1']);
+        // 1279 in-window canonical blocks already scanned, 1 unseen → would trigger the
+        // expensive missed-handles probe in the pre-fix path.
+        store.getScannedBlockHashesInRange.mockReturnValue(new Set(['canonical_at_100']));
+
+        mockedHelpers.fetchPaginatedResults
+            .mockResolvedValueOnce([] as never)
+            .mockResolvedValueOnce([
+                { hash: 'unseen_canonical', slot: 90 },
+                { hash: 'canonical_at_100', slot: 100 }
+            ] as never);
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ slot: 103, height: 5000, hash: 'tip_hash' }) } as never);
+
+        // Stored UTxOs all carry canonical blockHashes → orphanedUtxos is empty, so the only
+        // path that would have triggered the probe pre-fix was the unseen-canonical-blocks
+        // branch. Post-fix that branch is gated on !anchorOrphaned and stays cold.
+        pipelineResponses.push([buildUtxo({ id: 'u1', slot: 100, blockHash: 'canonical_at_100', assetName: 'asset-a' })]);
+
+        await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+        // Externally visible outcome 1: head snapped to the latest canonical predecessor in-window.
+        expect(handlesRepo.setMetrics).toHaveBeenCalledWith(
+            expect.objectContaining({
+                currentBlockHash: 'canonical_at_100',
+                currentSlot: 100
+            })
+        );
+        // Externally visible outcome 2: missed-handles probe (block_txs) was NOT issued.
+        // Negative control: removing the !anchorOrphaned guard in processRollback would route
+        // through getBatchedTxHashesWithFallback, calling fetchKoios('block_txs', ...).
+        const blockTxsCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'block_txs');
+        expect(blockTxsCalls).toHaveLength(0);
     });
 
     it('scan runs rollback when stale head is far behind tip', async () => {
