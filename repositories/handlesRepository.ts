@@ -49,16 +49,16 @@ export class HandlesRepository {
         return this.store.destroy();
     }
 
-    public currentHttpStatus(): number {
-        const { lockLambdas } = this.store.getMetrics();
+    public currentHttpStatus(metrics: IApiMetrics = this.store.getMetrics()): number {
+        const { lockLambdas } = metrics;
         if ([LockedLambdaReason.ROLLBACK_2160, LockedLambdaReason.REINDEX].includes(lockLambdas as LockedLambdaReason)) {
             return 202;
         }
-        return this.isCaughtUp() ? 200 : 202        
+        return this.isCaughtUp(metrics) ? 200 : 202        
     }
 
-    public isCaughtUp(): boolean {
-        const { lastSlot = 1, currentSlot = 0, currentBlockHash = '0', tipBlockHash = '1' } = this.store.getMetrics();
+    public isCaughtUp(metrics: IApiMetrics = this.store.getMetrics()): boolean {
+        const { lastSlot = 1, currentSlot = 0, currentBlockHash = '0', tipBlockHash = '1' } = metrics;
         return lastSlot - currentSlot < 240 && currentBlockHash == tipBlockHash;
     }
     
@@ -604,6 +604,13 @@ export class HandlesRepository {
         return this.store.getMetrics();
     }
 
+    public refreshMetricCounts(): IApiMetrics {
+        const handleCount = Number((this.store as any).count?.() ?? 0);
+        const holderCount = Number((this.store as any).holderCount?.() ?? 0);
+        this.setMetrics({ handleCount, holderCount });
+        return this.getMetrics();
+    }
+
     public getHandlesByHolderAddresses = (addresses: string[]): string[]  => {
         return addresses.map((address) => {
             const array = Array.from((this.store.getValuesFromIndexedSet(IndexNames.HOLDER, address) as HolderHandleNames) ?? new Set());
@@ -1129,7 +1136,19 @@ export class HandlesRepository {
     }
     
     public async getStartingPoint(utxoFunctions: UTxOFunctions, failed = false): Promise<Point | null> {
-        return this.store.getStartingPoint(utxoFunctions , failed);
+        const metrics = this.store.getMetrics();
+        const shouldRefreshMetricCounts =
+            failed ||
+            Number(process.env.UTXO_SCHEMA_VERSION) > Number(metrics.utxoSchemaVersion ?? 0) ||
+            Number(process.env.INDEX_SCHEMA_VERSION) > Number(metrics.indexSchemaVersion ?? 0) ||
+            !metrics.currentBlockHash ||
+            !metrics.currentSlot;
+
+        const point = await this.store.getStartingPoint(utxoFunctions , failed);
+        if (shouldRefreshMetricCounts && point) {
+            this.refreshMetricCounts();
+        }
+        return point;
     }
 
     public getUTxO(utxoId: string): UTxOWithTxInfo | null {

@@ -625,6 +625,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = 20, suppressNotif
     if (latestBlock?.hash) recoveredMetrics.tipBlockHash = latestBlock.hash;
     if (latestSlot > 0) recoveredMetrics.lastSlot = latestSlot;
     handlesRepo.setMetrics(recoveredMetrics);
+    handlesRepo.refreshMetricCounts();
 };
 
 const checkRollback = async () => {
@@ -669,6 +670,7 @@ const processReindex = async () => {
             [UTxOFunctionName.ADD_UTXO]: handlesRepo.addUTxO.bind(handlesRepo),
             [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: handlesRepo.updateHandleIndexes.bind(handlesRepo)
         });
+        handlesRepo.refreshMetricCounts();
         handlesRepo.setMetrics({ indexSchemaVersion: store.getIndexSchemaVersion() });
         clearRecoveryFlag();
     } finally {
@@ -859,6 +861,7 @@ const scan = async () => {
         Logger.log({ message: `Error in scanner lambda: ${error.message}`, category: LogCategory.ERROR, event: 'scannerLambda.error' });
         throw error;
     } finally {
+        handlesRepo.refreshMetricCounts();
         handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
     }
 };

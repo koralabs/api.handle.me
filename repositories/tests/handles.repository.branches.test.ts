@@ -951,6 +951,19 @@ describe('HandlesRepository branch tests', () => {
         expect(store.getStartingPoint).toHaveBeenCalledWith({}, false);
     });
 
+    it('refreshes cached metric counts from the store indexes', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        store.count.mockReturnValue(9);
+        store.holderCount = jest.fn().mockReturnValue(4);
+        store.getMetrics.mockReturnValue({ handleCount: 9, holderCount: 4 });
+
+        expect(repo.refreshMetricCounts()).toEqual({ handleCount: 9, holderCount: 4 });
+        expect(store.count).toHaveBeenCalledTimes(1);
+        expect(store.holderCount).toHaveBeenCalledTimes(1);
+        expect(store.setMetrics).toHaveBeenCalledWith({ handleCount: 9, holderCount: 4 });
+    });
+
     it('builds personalization from datum links and preserves defaults when datum is missing', async () => {
         const repo = new HandlesRepository(buildStoreMock());
         const decodeSpy = jest.spyOn(ipfs, 'decodeCborFromIPFSFile').mockImplementation(async (cid: string) => {
