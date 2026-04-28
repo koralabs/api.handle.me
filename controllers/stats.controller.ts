@@ -11,7 +11,7 @@ class StatsController {
                 total_handles: metrics.handleCount ?? 0,
                 total_holders: metrics.holderCount ?? 0
             }
-            res.status(handleRepo.currentHttpStatus()).json(stats);
+            res.status(handleRepo.currentHttpStatus(metrics)).json(stats);
         } catch (error) {
             next(error);
         }

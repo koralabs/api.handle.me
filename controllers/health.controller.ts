@@ -26,7 +26,8 @@ class HealthController {
     public async index (req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
             const handleRepo = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
-            const { firstSlot = 0, lastSlot = 0, currentSlot = 0, firstMemoryUsage = 0, currentBlockHash = '', tipBlockHash = '', memorySize = 0, utxoSchemaVersion = 0, indexSchemaVersion = 0, handleCount = 0, holderCount = 0, startTimestamp = 0, lockLambdas } = handleRepo.getMetrics();
+            const metrics = handleRepo.getMetrics();
+            const { firstSlot = 0, lastSlot = 0, currentSlot = 0, firstMemoryUsage = 0, currentBlockHash = '', tipBlockHash = '', memorySize = 0, utxoSchemaVersion = 0, indexSchemaVersion = 0, handleCount = 0, holderCount = 0, startTimestamp = 0, lockLambdas } = metrics;
             const handleSlotRange = lastSlot - firstSlot;
             const currentSlotInRange = currentSlot - firstSlot;
             const transpiredMs = Date.now() - startTimestamp;
@@ -53,7 +54,7 @@ class HealthController {
             };
 
             let status = HealthStatus.CURRENT;
-            if (!handleRepo.isCaughtUp()) {
+            if (!handleRepo.isCaughtUp(metrics)) {
                 status = HealthStatus.STORAGE_BEHIND;
             }
             const ogmiosScanningEnabled = process.env.ENABLE_OGMIOS_SCANNING?.toLocaleLowerCase() !== 'false';

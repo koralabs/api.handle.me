@@ -1,11 +1,13 @@
 import { AssetNameLabel, delay, HANDLE_POLICIES, LogCategory, Logger, Network, NETWORK, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { KoiosTxInfo } from '../interfaces/provider.interface';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
+import { hydrateKmsKeysIfNeeded } from './kms';
 
 export const defaultKoiosSettings = { _inputs: true, _withdrawals: false, _certs: false, _governance: false, _scripts: true, _bytecode: true, _metadata: true, _assets: true };
 const KOIOS_REQUEST_TIMEOUT_MS = 20_000;
 
 export const blockfrostApiCall = async (endpointSegment: string) => {
+    await hydrateKmsKeysIfNeeded(['BLOCKFROST_API_KEY']);
     const headers = {
         project_id: process.env.BLOCKFROST_API_KEY ?? '',
         'Content-Type': 'application/json'
@@ -59,6 +61,7 @@ export const fetchTxList = async (block: string) => {
 };
 
 export const fetchKoios = async (path: string, method = 'GET', body?: string) => {
+    await hydrateKmsKeysIfNeeded(['KOIOS_API_BEARER_TOKEN']);
     const url = `https://${NETWORK.toLowerCase() === 'mainnet' ? 'api' : NETWORK.toLowerCase()}.koios.rest/api/v1/${path}`;
     const koiosToken = process.env.KOIOS_API_BEARER_TOKEN?.trim();
     const headers: Record<string, string> = {

@@ -43,9 +43,12 @@ This document maps the code entrypoints, what they start, and which environment 
 ## Lambda Runtime
 
 ### API Lambda
-- `lambdas/api.ts` hydrates KMS environment variables, then loads `lambdas/api.app.ts`.
+- `lambdas/api.ts` identifies whether the invocation came from ALB or a Lambda Function URL (`requestContext.elb` vs `requestContext.http`), rejects unsupported event shapes, and only hydrates `WHITELISTED_API_KEYS` before boot when API rate limiting is enabled.
 - `lambdas/api.app.ts` forces `ENABLE_OGMIOS_SCANNING=false` and serves the Express API through `@vendia/serverless-express`.
+- The API Lambda caches separate `@vendia/serverless-express` adapters for `AWS_ALB` and `AWS_API_GATEWAY_V2` so warm invocations do not reuse the wrong event-source translation path.
 - This Lambda serves API traffic only. It does not run the Ogmios WebSocket scanner.
+- Function URL traffic uses the same read API routes as ALB traffic. Scanner-only shortcuts remain on `lambdas/scanner.ts`.
+- Provider secrets such as Koios, Blockfrost, and Pinata gateway tokens hydrate lazily at their request call sites instead of during API cold start.
 
 ### Scanner Lambda
 - `lambdas/scanner.ts` hydrates env and delegates to `lambdas/scanner.app.ts`.

@@ -1,16 +1,50 @@
 import { Logger, NETWORK } from '@koralabs/kora-labs-common';
+import * as kms from './kms';
 import { blockfrostApiCall, fetchKoios, fetchPaginatedResults, fetchTxList } from './helpers';
+
+jest.mock('./kms', () => ({
+    hydrateKmsKeysIfNeeded: jest.fn()
+}));
 
 describe('helpers pagination tests', () => {
     const originalFetch = global.fetch;
     const originalBlockfrostApiKey = process.env.BLOCKFROST_API_KEY;
+    const originalBlockfrostApiKeyEnc = process.env.BLOCKFROST_API_KEY_ENC;
     const originalKoiosToken = process.env.KOIOS_API_BEARER_TOKEN;
+    const originalKoiosTokenEnc = process.env.KOIOS_API_BEARER_TOKEN_ENC;
 
     afterEach(() => {
         process.env.BLOCKFROST_API_KEY = originalBlockfrostApiKey;
+        process.env.BLOCKFROST_API_KEY_ENC = originalBlockfrostApiKeyEnc;
         process.env.KOIOS_API_BEARER_TOKEN = originalKoiosToken;
+        process.env.KOIOS_API_BEARER_TOKEN_ENC = originalKoiosTokenEnc;
         global.fetch = originalFetch;
         jest.restoreAllMocks();
+        (kms.hydrateKmsKeysIfNeeded as jest.Mock).mockReset();
+    });
+
+    it('blockfrostApiCall hydrates the API key lazily when only ciphertext is configured', async () => {
+        delete process.env.BLOCKFROST_API_KEY;
+        process.env.BLOCKFROST_API_KEY_ENC = 'ciphertext';
+        const hydrateSpy = kms.hydrateKmsKeysIfNeeded as jest.MockedFunction<typeof kms.hydrateKmsKeysIfNeeded>;
+        hydrateSpy.mockImplementation(async () => {
+            process.env.BLOCKFROST_API_KEY = 'lazy-key';
+        });
+        const fetchMock = jest.fn().mockResolvedValue({ status: 200, json: async () => ({}) });
+        global.fetch = fetchMock as any;
+
+        await blockfrostApiCall('blocks/latest');
+
+        expect(hydrateSpy).toHaveBeenCalledWith(['BLOCKFROST_API_KEY']);
+        expect(fetchMock).toHaveBeenCalledWith(
+            `https://cardano-${NETWORK.toLowerCase()}.blockfrost.io/api/v0/blocks/latest`,
+            {
+                headers: {
+                    project_id: 'lazy-key',
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
     });
 
     it('blockfrostApiCall should call expected endpoint and headers', async () => {
@@ -123,6 +157,33 @@ describe('helpers pagination tests', () => {
                 }),
                 body: '{"_tx_hashes":["abc"]}',
                 signal: expect.anything()
+            })
+        );
+    });
+
+    it('fetchKoios hydrates the bearer token lazily when only ciphertext is configured', async () => {
+        delete process.env.KOIOS_API_BEARER_TOKEN;
+        process.env.KOIOS_API_BEARER_TOKEN_ENC = 'ciphertext';
+        const hydrateSpy = kms.hydrateKmsKeysIfNeeded as jest.MockedFunction<typeof kms.hydrateKmsKeysIfNeeded>;
+        hydrateSpy.mockImplementation(async () => {
+            process.env.KOIOS_API_BEARER_TOKEN = 'lazy-koios-token';
+        });
+        const koiosResponse = [{ tx_hash: 'abc' }];
+        const fetchMock = jest.fn().mockResolvedValue({
+            ok: true,
+            text: async () => JSON.stringify(koiosResponse)
+        });
+        global.fetch = fetchMock as any;
+
+        await fetchKoios('tx_info', 'POST', '{"_tx_hashes":["abc"]}');
+
+        expect(hydrateSpy).toHaveBeenCalledWith(['KOIOS_API_BEARER_TOKEN']);
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringMatching(/koios\.rest\/api\/v1\/tx_info$/),
+            expect.objectContaining({
+                headers: expect.objectContaining({
+                    Authorization: 'Bearer lazy-koios-token'
+                })
             })
         );
     });

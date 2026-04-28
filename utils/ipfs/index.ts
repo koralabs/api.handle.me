@@ -1,6 +1,7 @@
 import { LogCategory, Logger } from '@koralabs/kora-labs-common';
 import { decodeCborToJson } from '@koralabs/kora-labs-common/utils/cbor';
 import { getIpfsGateway } from '../../config';
+import { hydrateKmsKeysIfNeeded } from '../kms';
 import { requestIpfs } from './requestIpfs';
 
 export const decodeCborFromIPFSFile = async (cid: string, schema?: any): Promise<any> => {
@@ -16,7 +17,12 @@ export const decodeCborFromIPFSFile = async (cid: string, schema?: any): Promise
         if (result.statusCode !== 200) {
             ipfsGateway = getIpfsGateway(true);
             if (ipfsGateway.length > 12) {
-                result = await requestIpfs(`${ipfsGateway}${cid}?pinataGatewayToken=${process.env.PINATA_GATEWAY_TOKEN}`).catch((error: any) => {return {
+                await hydrateKmsKeysIfNeeded(['PINATA_GATEWAY_TOKEN']);
+                const pinataGatewayToken = process.env.PINATA_GATEWAY_TOKEN?.trim();
+                const backupGatewayUrl = pinataGatewayToken
+                    ? `${ipfsGateway}${cid}?pinataGatewayToken=${pinataGatewayToken}`
+                    : `${ipfsGateway}${cid}`;
+                result = await requestIpfs(backupGatewayUrl).catch((error: any) => {return {
                     statusCode: 500,
                     error: error.message,
                     cbor: undefined

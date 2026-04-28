@@ -29,7 +29,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - Scanning mode:
   - Default: Ogmios WebSocket scanner (`services/ogmios/ogmios.service.ts`)
   - Optional local fallback in dev/test: scanner lambda loop (`USE_LAMBDA_SCANNER=true`)
-- Lambda mode (`lambdas/api.ts`) forces `ENABLE_OGMIOS_SCANNING=false` and serves API only.
+- Lambda mode (`lambdas/api.ts`) forces `ENABLE_OGMIOS_SCANNING=false`, serves API only, explicitly routes ALB versus Lambda Function URL events through the matching serverless adapter, and avoids decrypting unrelated provider secrets during API cold start.
 
 ## Data Freshness Contract
 - API returns `200` when store is caught up.

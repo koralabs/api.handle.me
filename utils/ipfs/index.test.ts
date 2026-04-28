@@ -1,14 +1,23 @@
 import * as cbor from '@koralabs/kora-labs-common/utils/cbor';
 import { Logger } from '@koralabs/kora-labs-common';
 import * as config from '../../config';
+import * as kms from '../kms';
 import { decodeCborFromIPFSFile } from './index';
 import * as ipfs from './requestIpfs';
 
 jest.mock('../../config');
+jest.mock('../kms', () => ({
+    hydrateKmsKeysIfNeeded: jest.fn()
+}));
 jest.mock('./requestIpfs');
 
 describe('decodeCborFromIPFSFile tests', () => {
+    const originalPinataGatewayToken = process.env.PINATA_GATEWAY_TOKEN;
+    const originalPinataGatewayTokenEnc = process.env.PINATA_GATEWAY_TOKEN_ENC;
+
     afterEach(() => {
+        process.env.PINATA_GATEWAY_TOKEN = originalPinataGatewayToken;
+        process.env.PINATA_GATEWAY_TOKEN_ENC = originalPinataGatewayTokenEnc;
         jest.clearAllMocks();
     });
 
@@ -26,6 +35,7 @@ describe('decodeCborFromIPFSFile tests', () => {
 
     it('should return hit the backup if first ipfs link was unsuccessful', async () => {
         jest.spyOn(config, 'getIpfsGateway').mockReturnValue('https://ipfs.io/ipfs/');
+        process.env.PINATA_GATEWAY_TOKEN = 'backup-token';
         const requestIpfsSpy = jest
             .spyOn(ipfs, 'requestIpfs')
             .mockResolvedValueOnce({
@@ -42,7 +52,35 @@ describe('decodeCborFromIPFSFile tests', () => {
         const result = await decodeCborFromIPFSFile(cid);
         expect(result).toEqual({ test: 'test' });
         expect(requestIpfsSpy).toBeCalledTimes(2);
-        expect(requestIpfsSpy).nthCalledWith(2, expect.stringMatching(new RegExp(`https://ipfs\\.io/ipfs/${cid}\\?pinataGatewayToken=`)));
+        expect(requestIpfsSpy).nthCalledWith(2, `https://ipfs.io/ipfs/${cid}?pinataGatewayToken=backup-token`);
+    });
+
+    it('hydrates the pinata token lazily before calling the backup gateway', async () => {
+        jest.spyOn(config, 'getIpfsGateway').mockReturnValue('https://ipfs.io/ipfs/');
+        delete process.env.PINATA_GATEWAY_TOKEN;
+        process.env.PINATA_GATEWAY_TOKEN_ENC = 'ciphertext';
+        const hydrateSpy = kms.hydrateKmsKeysIfNeeded as jest.MockedFunction<typeof kms.hydrateKmsKeysIfNeeded>;
+        hydrateSpy.mockImplementation(async () => {
+            process.env.PINATA_GATEWAY_TOKEN = 'lazy-backup-token';
+        });
+        const requestIpfsSpy = jest
+            .spyOn(ipfs, 'requestIpfs')
+            .mockResolvedValueOnce({
+                statusCode: 500,
+                cbor: undefined
+            })
+            .mockResolvedValueOnce({
+                statusCode: 200,
+                cbor: 'd879'
+            });
+        jest.spyOn(cbor, 'decodeCborToJson').mockResolvedValue({ test: 'test' });
+
+        const cid = 'zb2lazybackup';
+        const result = await decodeCborFromIPFSFile(cid);
+
+        expect(result).toEqual({ test: 'test' });
+        expect(hydrateSpy).toHaveBeenCalledWith(['PINATA_GATEWAY_TOKEN']);
+        expect(requestIpfsSpy).toHaveBeenLastCalledWith(`https://ipfs.io/ipfs/${cid}?pinataGatewayToken=lazy-backup-token`);
     });
 
     it('should unwrap constructor_0 encoded payloads', async () => {

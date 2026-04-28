@@ -137,6 +137,7 @@ const setup = ({ whitelistedApiKeys = 'allowed-key' }: { whitelistedApiKeys?: st
         getUTxO: jest.fn(),
         removeHandle: jest.fn(),
         removeUTxOs: jest.fn(),
+        refreshMetricCounts: jest.fn().mockReturnValue({}),
         setMetrics: jest.fn(),
         updateHandleIndexes: jest.fn(),
         updateHolder: jest.fn()
@@ -549,6 +550,7 @@ describe('Scanner lambda unit tests', () => {
 
         await scannerModule.Internal.processReindex();
 
+        expect(handlesRepo.refreshMetricCounts).toHaveBeenCalledTimes(1);
         expect(handlesRepo.setMetrics).toHaveBeenCalledWith({ indexSchemaVersion: 3 });
         expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
     });
