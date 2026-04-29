@@ -178,7 +178,7 @@ class MCPController {
         if (name === 'get_stats') {
             const metrics = handleRepo.getMetrics();
             return {
-                status: handleRepo.currentHttpStatus(),
+                status: handleRepo.currentHttpStatus(metrics),
                 total_handles: metrics.handleCount ?? 0,
                 total_holders: metrics.holderCount ?? 0
             };

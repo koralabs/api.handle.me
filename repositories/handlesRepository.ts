@@ -50,20 +50,20 @@ export class HandlesRepository {
         return this.store.destroy();
     }
 
-    public currentHttpStatus(): number {
-        const { lockLambdas } = this.store.getMetrics();
+    public currentHttpStatus(metrics: IApiMetrics = this.store.getMetrics()): number {
+        const { lockLambdas } = metrics;
         if ([LockedLambdaReason.ROLLBACK, LockedLambdaReason.REINDEX].includes(lockLambdas as LockedLambdaReason)) {
             return 202;
         }
-        return this.isCaughtUp() ? 200 : 202        
+        return this.isCaughtUp(metrics) ? 200 : 202
     }
 
-    public isCaughtUp(): boolean {
+    public isCaughtUp(metrics: IApiMetrics = this.store.getMetrics()): boolean {
         // Slot tolerance only — the previous `currentBlockHash == tipBlockHash` clause
         // flipped status to storage_behind every ~20s as new blocks landed before the
         // scanner caught the new tip, even when we were seconds away from current.
         // Mainnet scans aggressively (5 min budget); testnets scan less often (10 min).
-        const { lastSlot = 0, currentSlot = 0 } = this.store.getMetrics();
+        const { lastSlot = 0, currentSlot = 0 } = metrics;
         // Fail closed when metrics aren't populated yet (cold start before first scan):
         // claiming "caught up" with an uninitialized state would let the lambda serve
         // 200 OK while actually serving stale/empty data.
@@ -612,6 +612,21 @@ export class HandlesRepository {
 
     public getMetrics(): IApiMetrics {  
         return this.store.getMetrics();
+    }
+
+    public refreshMetricCounts(): IApiMetrics {
+        const holderCountingStore = this.store as IApiStore & { holderCount?: () => number };
+        const handleCount = Number(this.store.count());
+        const holderCount = Number(
+            holderCountingStore.holderCount?.() ?? this.store.getKeysFromIndex(IndexNames.HOLDER).length
+        );
+
+        this.setMetrics({ handleCount, holderCount });
+        return {
+            ...this.getMetrics(),
+            handleCount,
+            holderCount
+        };
     }
 
     public getHandlesByHolderAddresses = (addresses: string[]): string[]  => {
@@ -1180,7 +1195,19 @@ export class HandlesRepository {
     }
     
     public async getStartingPoint(utxoFunctions: UTxOFunctions, failed = false): Promise<Point | null> {
-        return this.store.getStartingPoint(utxoFunctions , failed);
+        const metrics = this.store.getMetrics();
+        const shouldRefreshMetricCounts =
+            failed ||
+            Number(process.env.UTXO_SCHEMA_VERSION) > Number(metrics.utxoSchemaVersion ?? 0) ||
+            Number(process.env.INDEX_SCHEMA_VERSION) > Number(metrics.indexSchemaVersion ?? 0) ||
+            !metrics.currentBlockHash ||
+            !metrics.currentSlot;
+
+        const point = await this.store.getStartingPoint(utxoFunctions , failed);
+        if (shouldRefreshMetricCounts && point) {
+            this.refreshMetricCounts();
+        }
+        return point;
     }
 
     public getUTxO(utxoId: string): UTxOWithTxInfo | null {
