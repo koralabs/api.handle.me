@@ -4,7 +4,19 @@ import { RedisHandlesStore } from '../stores/redis';
 import { getApiScannerRecoveryKey } from '../stores/redis/keys';
 import * as helpers from '../utils/helpers';
 
-jest.mock('../utils/helpers');
+jest.mock('../utils/helpers', () => {
+    const actual = jest.requireActual('../utils/helpers');
+    return {
+        ...actual,
+        blockfrostApiCall: jest.fn(),
+        fetchBlockfrostDatumCbor: jest.fn(),
+        fetchBlockfrostTxHashes: jest.fn(),
+        fetchBlockfrostTxInfo: jest.fn(),
+        fetchPaginatedResults: jest.fn(),
+        buildUTxOsFromKoiosTxs: jest.fn(),
+        fetchKoios: jest.fn()
+    };
+});
 process.env.WHITELISTED_API_KEYS = 'scanner-e2e-key';
 
 const scanner = require('./scanner');
@@ -118,17 +130,26 @@ describe('Scanner lambda e2e', () => {
             lockLambdas: LockedLambdaReason.UNLOCKED
         });
         jest.clearAllMocks();
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ hash: 'provider_block', slot: 140, height: 5000 }) } as never);
+        mockedHelpers.fetchBlockfrostDatumCbor.mockResolvedValue(undefined as never);
+        mockedHelpers.fetchBlockfrostTxHashes.mockResolvedValue([] as never);
+        mockedHelpers.fetchBlockfrostTxInfo.mockResolvedValue({} as never);
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+        mockedHelpers.fetchKoios.mockResolvedValue([] as never);
     });
 
     it('scans block updates and persists handle + metrics', async () => {
         const handleName = `scanner-${Date.now()}`;
 
-        mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ height: 5000 }) } as never);
-        mockedHelpers.fetchPaginatedResults
-            .mockResolvedValueOnce([{ hash: 'ignored_future', slot: 999 }] as never)
-            .mockResolvedValueOnce([{ hash: 'next_hash', slot: 101, confirmations: 21 }] as never);
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ hash: 'tip_hash', slot: 1000, height: 5000 }) } as never);
+        mockedHelpers.fetchPaginatedResults.mockResolvedValueOnce([{ hash: 'next_hash', slot: 101, confirmations: 21 }] as never);
         mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([buildMintedUTxO(handleName)]);
-        mockedHelpers.fetchKoios.mockResolvedValue([] as never);
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'scan_tx' }] as never;
+            if (path === 'tx_info') return [{ tx_hash: 'scan_tx', block_hash: 'next_hash', inputs: [] }] as never;
+            return [] as never;
+        });
 
         const result = await lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
 
@@ -205,7 +226,7 @@ describe('Scanner lambda e2e', () => {
         expect(finalMetrics.indexSchemaVersion).toBeDefined();
     });
 
-    it('runs recovery reindex when recovery flag is set', async () => {
+    it('clears a stale rollback recovery flag and continues the normal scan path', async () => {
         store.redisClientCall('set', getApiScannerRecoveryKey(), 'rollback');
         repo.setMetrics({
             lockLambdas: LockedLambdaReason.UNLOCKED,
@@ -216,7 +237,7 @@ describe('Scanner lambda e2e', () => {
 
         const result = await lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
 
-        expect(result).toBeUndefined();
+        expect(result).toEqual({ isBase64Encoded: false, statusCode: 200, body: '' });
         expect(store.redisClientCall('get', getApiScannerRecoveryKey())).toBeFalsy();
     });
 
