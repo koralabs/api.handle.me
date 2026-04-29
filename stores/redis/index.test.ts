@@ -1042,13 +1042,15 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(redisSpy).toHaveBeenCalledWith('zmscore', rootKey('holdercount'), ['holder_a', 'holder_b', 'holder_c']);
     });
 
-    it('builds metrics from defaults when cache is empty', () => {
+    it('returns empty metrics when cache is empty', () => {
         const store = new RedisHandlesStore();
         jest.spyOn(store as any, 'rehydrateObjectFromCache').mockReturnValue(undefined);
-        jest.spyOn(store, 'count').mockReturnValue(9);
-        jest.spyOn(store, 'holderCount').mockReturnValue(4);
+        const countSpy = jest.spyOn(store, 'count').mockReturnValue(9);
+        const holderCountSpy = jest.spyOn(store, 'holderCount').mockReturnValue(4);
 
-        expect(store.getMetrics()).toEqual({ handleCount: 9, holderCount: 4 });
+        expect(store.getMetrics()).toEqual({});
+        expect(countSpy).not.toHaveBeenCalled();
+        expect(holderCountSpy).not.toHaveBeenCalled();
     });
 
     it('rehydrates nested references stored as key pointers', () => {

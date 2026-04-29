@@ -913,6 +913,7 @@ const processRollback = async ({ currentSlot, rollbackOffset = DEFAULT_ROLLBACK_
         ...(latestBlock.hash ? { tipBlockHash: latestBlock.hash } : {}),
         ...(latestBlock.slot > 0 ? { lastSlot: latestBlock.slot } : {})
     });
+    handlesRepo.refreshMetricCounts();
 };
 
 const checkRollback = async () => {
@@ -954,6 +955,7 @@ const processReindex = async () => {
     try {
         // This function already chunks at a rate of about 20K every 10 seconds. 300K handles should take about 5 minutes
         store.repopulateIndexesFromUTxOs(getUTxOIndexHandlers());
+        handlesRepo.refreshMetricCounts();
         await buildAndStoreMptRootHash(store);
         handlesRepo.setMetrics({ indexSchemaVersion: store.getIndexSchemaVersion() });
         clearRecoveryFlag();
@@ -1153,6 +1155,7 @@ const repairHandles = async (handleNames: string[]): Promise<{ checked: number; 
         category: LogCategory.NOTIFY,
         event: 'scannerLambda.repairHandles'
     });
+    handlesRepo.refreshMetricCounts();
 
     return {
         checked: handleNames.length,
@@ -1390,6 +1393,19 @@ const scan = async () => {
         const endingCurrentSlot = Number(handlesRepo.getMetrics().currentSlot ?? 0);
         const slotChanged = endingCurrentSlot !== startingCurrentSlot;
         const rebuildPending = isMptRebuildPending();
+        if (slotChanged) {
+            try {
+                scanBreadcrumb('refreshMetricCounts_start');
+                handlesRepo.refreshMetricCounts();
+                scanBreadcrumb('refreshMetricCounts_done');
+            } catch (metricsError: any) {
+                Logger.log({
+                    message: `Failed to refresh cached metric counts in scan finally: ${metricsError?.message ?? metricsError}`,
+                    category: LogCategory.ERROR,
+                    event: 'scannerLambda.refreshMetricCounts.error'
+                });
+            }
+        }
         if (slotChanged || rebuildPending) {
             try {
                 scanBreadcrumb('buildMptRootHash_start', rebuildPending ? 'retryPending=true' : '');
