@@ -951,6 +951,36 @@ describe('HandlesRepository branch tests', () => {
         expect(store.getStartingPoint).toHaveBeenCalledWith({}, false);
     });
 
+    it('refreshes cached metric counts from store indexes', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        store.count.mockReturnValue(9);
+        store.holderCount = jest.fn().mockReturnValue(4);
+
+        expect(repo.refreshMetricCounts()).toEqual(expect.objectContaining({ handleCount: 9, holderCount: 4 }));
+        expect(store.count).toHaveBeenCalledTimes(1);
+        expect(store.holderCount).toHaveBeenCalledTimes(1);
+        expect(store.setMetrics).toHaveBeenCalledWith({ handleCount: 9, holderCount: 4 });
+    });
+
+    it('refreshes cached metric counts after store rebootstrap paths', async () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        const point = { slot: 456, id: 'hash_456' };
+        store.getMetrics.mockReturnValue({
+            currentSlot: 0,
+            currentBlockHash: '',
+            utxoSchemaVersion: 0,
+            indexSchemaVersion: 0
+        });
+        store.getStartingPoint = jest.fn().mockResolvedValue(point);
+        store.holderCount = jest.fn().mockReturnValue(2);
+        store.count.mockReturnValue(5);
+
+        await expect(repo.getStartingPoint({} as any)).resolves.toEqual(point);
+        expect(store.setMetrics).toHaveBeenCalledWith({ handleCount: 5, holderCount: 2 });
+    });
+
     it('builds personalization from datum links and preserves defaults when datum is missing', async () => {
         const repo = new HandlesRepository(buildStoreMock());
         const decodeSpy = jest.spyOn(ipfs, 'decodeCborFromIPFSFile').mockImplementation(async (cid: string) => {

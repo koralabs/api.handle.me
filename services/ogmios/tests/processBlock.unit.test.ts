@@ -12,7 +12,8 @@ const createRepoMock = () =>
         removeHandle: jest.fn(),
         addUTxOAndMintData: jest.fn(),
         addUTxOsWithMintDataAndUpdateIndexes: jest.fn(),
-        removeUTxOs: jest.fn()
+        removeUTxOs: jest.fn(),
+        refreshMetricCounts: jest.fn()
     }) as any;
 
 const createBlock = (transactions: any[], slot = 100) =>
@@ -107,6 +108,7 @@ describe('OgmiosService processBlock unit tests', () => {
             preloadedMintingData
         );
         expect(repo.removeUTxOs).toHaveBeenCalledWith(['spent_tx#0']);
+        expect(repo.refreshMetricCounts).toHaveBeenCalledTimes(1);
     });
 
     it('removes handle on non-CIP67 burn', () => {

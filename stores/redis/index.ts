@@ -560,10 +560,7 @@ export class RedisHandlesStore implements IApiStore {
 
     // #region METRICS *****************************
     public getMetrics(): IApiMetrics {
-        const metrics = this.rehydrateObjectFromCache(getApiMetricsKey()) || ({} as IApiMetrics);
-        metrics.handleCount = this.count();
-        metrics.holderCount = this.holderCount();
-        return metrics;
+        return this.rehydrateObjectFromCache(getApiMetricsKey()) || ({} as IApiMetrics);
     }
 
     public setMetrics(metrics: Partial<IApiMetrics>): void {
