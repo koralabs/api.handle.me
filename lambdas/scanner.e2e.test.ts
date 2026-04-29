@@ -10,6 +10,9 @@ process.env.WHITELISTED_API_KEYS = 'scanner-e2e-key';
 const scanner = require('./scanner');
 const { lambdaHandler } = scanner;
 const mockedHelpers = helpers as jest.Mocked<typeof helpers>;
+const actualHelpers = jest.requireActual('../utils/helpers') as typeof import('../utils/helpers');
+
+mockedHelpers.canonicalJsonStringify.mockImplementation((value: unknown) => actualHelpers.canonicalJsonStringify(value));
 
 const policy = 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a';
 const handleHex = '000de140726f6c6c6261636b';
@@ -118,6 +121,13 @@ describe('Scanner lambda e2e', () => {
             lockLambdas: LockedLambdaReason.UNLOCKED
         });
         jest.clearAllMocks();
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({
+            ok: true,
+            json: async () => ({ hash: 'provider_block', slot: 200, height: 5000 })
+        } as never);
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+        mockedHelpers.fetchKoios.mockResolvedValue([] as never);
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
     });
 
     it('scans block updates and persists handle + metrics', async () => {
@@ -205,7 +215,7 @@ describe('Scanner lambda e2e', () => {
         expect(finalMetrics.indexSchemaVersion).toBeDefined();
     });
 
-    it('runs recovery reindex when recovery flag is set', async () => {
+    it('clears a stale rollback recovery flag and continues the normal scan path', async () => {
         store.redisClientCall('set', getApiScannerRecoveryKey(), 'rollback');
         repo.setMetrics({
             lockLambdas: LockedLambdaReason.UNLOCKED,
@@ -216,7 +226,7 @@ describe('Scanner lambda e2e', () => {
 
         const result = await lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
 
-        expect(result).toBeUndefined();
+        expect(result).toEqual({ isBase64Encoded: false, statusCode: 200, body: '' });
         expect(store.redisClientCall('get', getApiScannerRecoveryKey())).toBeFalsy();
     });
 

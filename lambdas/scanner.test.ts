@@ -2168,7 +2168,58 @@ describe('Scanner lambda unit tests', () => {
         }
     });
 
+    it('exits cleanly when tx_info hits the scanner deadline before Blockfrost fallback', async () => {
+        // Validates: a tx_info deadline is treated as a terminal stop condition, so scan()
+        // exits cleanly and does not convert that stop into per-transaction Blockfrost work.
+        // Failure mode caught: swallowing ScannerDeadlineError here would continue into
+        // sequential Blockfrost fallback and risk running the Lambda to its platform timeout.
+        // Negative control: removing the ScannerDeadlineError rethrow in
+        // getBatchedTxInfoWithFallback() makes fetchBlockfrostTxInfo get called in this test.
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([
+            { hash: 'block_a', slot: 100, confirmations: 5 }
+        ] as never);
+
+        const baseNow = 1_000_000;
+        let currentNow = baseNow;
+        const dateNowSpy = jest.spyOn(Date, 'now').mockImplementation(() => currentNow);
+
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') {
+                currentNow = baseNow + (12 * 60_000) + 1;
+                return [{ tx_hash: 'tx_a' }] as never;
+            }
+            if (path === 'tx_info') {
+                throw new Error('tx_info should not be fetched after the scanner deadline is reached');
+            }
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        try {
+            await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+            expect(mockedHelpers.fetchBlockfrostTxInfo).not.toHaveBeenCalled();
+            expect(mockedHelpers.buildUTxOsFromKoiosTxs).not.toHaveBeenCalled();
+            const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
+            expect(txInfoCalls).toHaveLength(0);
+        } finally {
+            dateNowSpy.mockRestore();
+            logSpy.mockRestore();
+            warnSpy.mockRestore();
+        }
+    });
+
     it('scan falls back to Blockfrost when Koios tx_info fails with non-retriable error', async () => {
+        // Validates: ordinary non-deadline Koios tx_info failures still fall back to Blockfrost.
+        // Failure mode caught: an over-broad deadline guard here would suppress the fallback
+        // and drop scan progress on provider errors that should still be recoverable.
+        // Negative control: if getBatchedTxInfoWithFallback() rethrew every tx_info error,
+        // scan() would exit before fetchBlockfrostTxInfo is called in this test.
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
 
@@ -2191,7 +2242,10 @@ describe('Scanner lambda unit tests', () => {
         try {
             await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
 
+            const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
+            expect(txInfoCalls).toHaveLength(1);
             expect(mockedHelpers.fetchBlockfrostTxInfo).toHaveBeenCalledWith('tx_a');
+            expect(mockedHelpers.fetchBlockfrostTxInfo).toHaveBeenCalledTimes(1);
         } finally {
             logSpy.mockRestore();
             warnSpy.mockRestore();
