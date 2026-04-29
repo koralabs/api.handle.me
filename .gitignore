@@ -117,6 +117,13 @@ workers/apiStore.worker.js
 mainnet
 preprod
 preview
+!config/script-artifacts/
+!config/script-artifacts/mainnet/
+!config/script-artifacts/preprod/
+!config/script-artifacts/preview/
+!config/script-artifacts/mainnet/**
+!config/script-artifacts/preprod/**
+!config/script-artifacts/preview/**
 mainnet-node.ip
 preprod-node.ip
 preview-node.ip

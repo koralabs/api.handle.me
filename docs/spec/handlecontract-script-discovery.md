@@ -14,6 +14,7 @@ This repo documents:
 - Support legacy handles such as `@handle_settings` while repos are still migrating.
 - Treat `<slug><ordinal>@handlecontract` as the canonical deployment-handle shape for new automated deployments.
 - `latest=true` should resolve the latest assigned deployment handle for each contract family.
+- Request-path `/scripts` resolution must read bundled deployment metadata and unoptimized CBOR from local artifacts, not live GitHub fetches.
 - During the personalization migration gap, if a canonical `pers<ordinal>@handlecontract` handle exists without an attached script, `/scripts` may temporarily borrow the still-live legacy `pz_contract*` script UTxO for that same ordinal while keeping the canonical `pers` slot ordering.
 
 ## Tooling

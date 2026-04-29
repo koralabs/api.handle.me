@@ -1,52 +1,13 @@
 import { bech32AddressFromHashes, blake2b, HandleSearchModel, ScriptDetails, ScriptType, StoredHandle } from '@koralabs/kora-labs-common';
 import { Request } from 'express';
-import { parse as parseYaml } from 'yaml';
+import { LEGACY_SCRIPT_TYPE_ALIASES, resolveScriptArtifactNetwork, SCRIPT_SOURCES, SCRIPT_TYPES_BY_SLUG, SCRIPT_TYPE_BY_QUERY } from '../config/script-sources';
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
+import { getBundledScriptArtifact } from './scriptArtifacts.service';
 
 const SCRIPT_ROOT_HANDLE = 'handlecontract';
 const MAX_SCRIPT_RESULTS = '50000';
 const HANDLE_SUFFIX = `@${SCRIPT_ROOT_HANDLE}`;
-const DEFAULT_NETWORK = 'preview';
-const GITHUB_RAW_BASE_URL = 'https://raw.githubusercontent.com/koralabs';
-const SCRIPT_SOURCES: Record<ScriptType, { slug: string; repo: string; deploymentStatePath?: string }> = {
-    [ScriptType.PZ_CONTRACT]: { slug: 'pers', repo: 'handles-personalization', deploymentStatePath: 'deploy/${network}/personalization.yaml' },
-    [ScriptType.SUB_HANDLE_SETTINGS]: { slug: 'subh', repo: 'handles-subhandle-settings' },
-    [ScriptType.MARKETPLACE_CONTRACT]: { slug: 'mkpl', repo: 'handles-marketplace-contracts' },
-    [ScriptType.DEMI_MINT_PROXY]: { slug: 'demimntprx', repo: 'decentralized-minting' },
-    [ScriptType.DEMI_MINT]: { slug: 'demimnt', repo: 'decentralized-minting' },
-    [ScriptType.DEMI_MINTING_DATA]: { slug: 'demimntmpt', repo: 'decentralized-minting' },
-    [ScriptType.DEMI_ORDERS]: { slug: 'demiord', repo: 'decentralized-minting' },
-    [ScriptType.HAL_MINT_PROXY]: { slug: 'halmntprx', repo: 'hal-minting-contracts' },
-    [ScriptType.HAL_MINT]: { slug: 'halmnt', repo: 'hal-minting-contracts' },
-    [ScriptType.HAL_MINTING_DATA]: { slug: 'halmntmpt', repo: 'hal-minting-contracts' },
-    [ScriptType.HAL_ORDERS_SPEND]: { slug: 'halord', repo: 'hal-minting-contracts' },
-    [ScriptType.HAL_REF_SPEND_PROXY]: { slug: 'halrefprx', repo: 'hal-minting-contracts' },
-    [ScriptType.HAL_REF_SPEND]: { slug: 'halref', repo: 'hal-minting-contracts' },
-    [ScriptType.HAL_ROYALTY_SPEND]: { slug: 'halroy', repo: 'hal-minting-contracts' }
-};
-const SCRIPT_TYPES_BY_SLUG = Object.entries(SCRIPT_SOURCES)
-    .sort(([, left], [, right]) => right.slug.length - left.slug.length)
-    .map(([type, source]) => [source.slug, type as ScriptType] as const);
-const LEGACY_SCRIPT_TYPE_ALIASES: Record<string, ScriptType> = {
-    pz_contract: ScriptType.PZ_CONTRACT,
-    sub_handle_settings: ScriptType.SUB_HANDLE_SETTINGS,
-    marketplace_contract: ScriptType.MARKETPLACE_CONTRACT,
-    demi_mint_proxy: ScriptType.DEMI_MINT_PROXY,
-    demi_mint: ScriptType.DEMI_MINT,
-    demi_minting_data: ScriptType.DEMI_MINTING_DATA,
-    demi_orders: ScriptType.DEMI_ORDERS,
-    hal_mint_proxy: ScriptType.HAL_MINT_PROXY,
-    hal_mint: ScriptType.HAL_MINT,
-    hal_minting_data: ScriptType.HAL_MINTING_DATA,
-    hal_orders_spend: ScriptType.HAL_ORDERS_SPEND,
-    hal_ref_spend_proxy: ScriptType.HAL_REF_SPEND_PROXY,
-    hal_ref_spend: ScriptType.HAL_REF_SPEND,
-    hal_royalty_spend: ScriptType.HAL_ROYALTY_SPEND
-};
-const SCRIPT_TYPE_BY_QUERY = Object.fromEntries(
-    Object.entries(SCRIPT_SOURCES).flatMap(([type, source]) => [[source.slug, type as ScriptType]])
-) as Record<string, ScriptType>;
 
 const createRepo = (req: Request<any>): HandlesRepository | null => {
     const registry = req.app?.get?.('registry') as IRegistry | undefined;
@@ -83,29 +44,6 @@ const parseScriptHandle = (handleName: string): { type: ScriptType; ordinal: num
     return null;
 };
 
-const getNetwork = () => {
-    const network = process.env.NETWORK?.toLowerCase();
-    return network === 'mainnet' || network === 'preprod' ? network : DEFAULT_NETWORK;
-};
-
-const getUnoptimizedCborUrl = (type: ScriptType) => {
-    const source = SCRIPT_SOURCES[type];
-    if (!source) {
-        return null;
-    }
-
-    return `${GITHUB_RAW_BASE_URL}/${source.repo}/master/deploy/${getNetwork()}/${source.slug}.unoptimized.cbor`;
-};
-
-const getDeploymentStateUrl = (type: ScriptType) => {
-    const source = SCRIPT_SOURCES[type];
-    if (!source?.deploymentStatePath) {
-        return null;
-    }
-
-    return `${GITHUB_RAW_BASE_URL}/${source.repo}/master/${source.deploymentStatePath.replace('${network}', getNetwork())}`;
-};
-
 export const resolveScriptTypeQuery = (type?: string): ScriptType | undefined => {
     if (!type) {
         return;
@@ -135,74 +73,6 @@ export const resolvePreferredScriptTypeForHandleName = (handleName?: string): Sc
     }
 
     return ScriptType.PZ_CONTRACT;
-};
-
-const fetchUnoptimizedCbor = async (type: ScriptType, cache: Map<ScriptType, Promise<string | undefined>>) => {
-    const cached = cache.get(type);
-    if (cached) {
-        return cached;
-    }
-
-    const url = getUnoptimizedCborUrl(type);
-    const request = (async () => {
-        if (!url) {
-            return;
-        }
-
-        try {
-            const response = await fetch(url);
-            if (!response.ok) {
-                return;
-            }
-
-            const unoptimizedCbor = (await response.text()).trim();
-            return unoptimizedCbor || undefined;
-        } catch {
-            return;
-        }
-    })();
-
-    cache.set(type, request);
-    return request;
-};
-
-const fetchAssignedScriptHandles = async (type: ScriptType, cache: Map<ScriptType, Promise<string[] | undefined>>) => {
-    const cached = cache.get(type);
-    if (cached) {
-        return cached;
-    }
-
-    const url = getDeploymentStateUrl(type);
-    const request = (async () => {
-        if (!url) {
-            return;
-        }
-
-        try {
-            const response = await fetch(url);
-            if (!response.ok) {
-                return;
-            }
-
-            const payload = parseYaml(await response.text()) as {
-                assigned_handles?: { scripts?: unknown };
-            } | null;
-            const handles = payload?.assigned_handles?.scripts;
-            if (!Array.isArray(handles)) {
-                return;
-            }
-
-            const normalizedHandles = handles
-                .map((handle) => `${handle}`.trim())
-                .filter((handle) => handle.length > 0);
-            return normalizedHandles.length > 0 ? normalizedHandles : undefined;
-        } catch {
-            return;
-        }
-    })();
-
-    cache.set(type, request);
-    return request;
 };
 
 export const getScriptSlug = (type: ScriptType) => SCRIPT_SOURCES[type]?.slug ?? type;
@@ -290,16 +160,14 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
     }
 
     const scripts: { [scriptAddress: string]: ScriptDetails } = {};
-    const unoptimizedCborCache = new Map<ScriptType, Promise<string | undefined>>();
-    const assignedScriptHandlesCache = new Map<ScriptType, Promise<string[] | undefined>>();
+    const artifactNetwork = resolveScriptArtifactNetwork();
 
     for (const [scriptType, matches] of matchesByType.entries()) {
         const matchesWithScript = matches.filter(({ handle }) => !!handle.script?.cbor);
         const latestOrdinal = matchesWithScript.length > 0
             ? Math.max(...matchesWithScript.map(({ ordinal }) => ordinal))
             : Math.max(...matches.map(({ ordinal }) => ordinal));
-        const unoptimizedCbor = await fetchUnoptimizedCbor(scriptType, unoptimizedCborCache);
-        const assignedScriptHandles = await fetchAssignedScriptHandles(scriptType, assignedScriptHandlesCache);
+        const { unoptimizedCbor, assignedHandles: assignedScriptHandles } = getBundledScriptArtifact(scriptType, artifactNetwork);
         const activeAssignedHandleName = assignedScriptHandles
             ?.map((handleName) => handleRepo.getHandle(handleName))
             .find((handle): handle is StoredHandle => !!handle?.script?.cbor)

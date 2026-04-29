@@ -962,7 +962,7 @@ paths:
         Returns script metadata derived from subhandles under `@handlecontract`.
         Response object keys are the script addresses derived from each validator hash.
         `refScriptAddress` is the on-chain address of the handle that holds the reference script UTxO.
-        When available, `unoptimizedCbor` is fetched from the owning contract repo at `deploy/<network>/<slug>.unoptimized.cbor`.
+        When available, `unoptimizedCbor` is served from the local build-bundled `config/script-artifacts/<network>/<slug>.unoptimized.cbor` file refreshed from the owning contract repo during build/deploy.
       parameters:
       - name: latest
         in: query

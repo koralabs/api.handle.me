@@ -1,4 +1,6 @@
 import { bech32AddressFromHashes, blake2b, IndexNames, ScriptType } from '@koralabs/kora-labs-common';
+import { SCRIPT_SOURCES } from '../config/script-sources';
+import * as scriptArtifacts from '../services/scriptArtifacts.service';
 import ScriptsController from './scripts.controller';
 
 const mockResponse = () => {
@@ -36,17 +38,11 @@ const buildHandle = (name: string, refScriptAddress: string, cbor = '4e4d0100') 
     script: { cbor, type: 'plutus_v2' }
 });
 
-const mockFetch = (cbors: Record<string, string>) => jest.spyOn(global, 'fetch').mockImplementation(async (input: any) => {
-    const url = `${input}`;
-    const match = url.match(/\/([^/]+)\.unoptimized\.cbor$/);
-    const slug = match?.[1];
-    const cbor = slug ? cbors[slug] : undefined;
-
-    return {
-        ok: typeof cbor === 'string',
-        text: async () => cbor ?? ''
-    } as Response;
-});
+const mockBundledScriptArtifacts = (artifacts: Record<string, scriptArtifacts.BundledScriptArtifact>) =>
+    jest.spyOn(scriptArtifacts, 'getBundledScriptArtifact').mockImplementation((type) => {
+        const slug = SCRIPT_SOURCES[type]?.slug ?? `${type}`;
+        return artifacts[slug] ?? {};
+    });
 
 const mockRegistry = (handles: Record<string, any>) => ({
     handlesStore: class {
@@ -121,7 +117,7 @@ describe('Scripts Routes Test', () => {
             // Feature: `/scripts` should derive the response key from the validator hash while keeping the ref script UTxO address in `refScriptAddress`.
             // Failure mode: using the handle ADA address as the key would break the contract and conflate script and reference addresses.
             // Negative control: if the controller keyed by `resolved_addresses.ada`, the object keys asserted below would not match.
-            mockFetch({ pers: 'unp1', subh: 'unp3' });
+            mockBundledScriptArtifacts({ pers: { unoptimizedCbor: 'unp1' }, subh: { unoptimizedCbor: 'unp3' } });
             const handles = {
                 'pers1@handlecontract': buildHandle('pers1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0001'),
                 'pers2@handlecontract': buildHandle('pers2@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', '4e4d0002'),
@@ -167,7 +163,7 @@ describe('Scripts Routes Test', () => {
             // Feature: `/scripts?latest=true` should return the latest entry for every discovered script family.
             // Failure mode: callers would only see one legacy default script instead of the full current latest set.
             // Negative control: lowering `subh3` below `subh2` would change the expected `subh` result key below.
-            mockFetch({ pers: 'unp2', subh: 'subh-unp3' });
+            mockBundledScriptArtifacts({ pers: { unoptimizedCbor: 'unp2' }, subh: { unoptimizedCbor: 'subh-unp3' } });
             const handles = {
                 'pers1@handlecontract': buildHandle('pers1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0101'),
                 'pers2@handlecontract': buildHandle('pers2@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', '4e4d0102'),
@@ -206,7 +202,7 @@ describe('Scripts Routes Test', () => {
             // Feature: `/scripts?latest=true&type=<slug>` should use canonical slug names by default and return the highest ordinal only within that script family.
             // Failure mode: the endpoint could keep requiring legacy aliases or leak a different type such as `demi_mint_proxy` when `demimnt` is requested.
             // Negative control: if slug normalization were removed, this request would return 404 instead of the asserted script.
-            mockFetch({ demimnt: 'mint-unoptimized', demimntprx: 'proxy-unoptimized' });
+            mockBundledScriptArtifacts({ demimnt: { unoptimizedCbor: 'mint-unoptimized' }, demimntprx: { unoptimizedCbor: 'proxy-unoptimized' } });
             const handles = {
                 'demimnt1@handlecontract': buildHandle('demimnt1@handlecontract', 'addr_test1wqufkpfr0cfg9k430terz8gl0yqv8r8gep82tv9086yv3cck0h26m', '4e4d0111'),
                 'demimnt2@handlecontract': buildHandle('demimnt2@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', '4e4d0112'),
@@ -230,12 +226,37 @@ describe('Scripts Routes Test', () => {
             }));
         });
 
+        it('prefers the bundled assigned handle over the highest ordinal when it is scripted', async () => {
+            // Feature: local deployment metadata should mark the assigned deployment handle as latest even when a higher ordinal also exists.
+            // Failure mode: dropping the assigned-handle override would make `/scripts?latest=true&type=pers` drift to the highest ordinal.
+            // Negative control: removing the assigned handle from the bundled artifact would make `pers3@handlecontract` latest instead.
+            mockBundledScriptArtifacts({ pers: { unoptimizedCbor: 'pers-unoptimized', assignedHandles: ['pers1@handlecontract'] } });
+            const handles = {
+                'pers1@handlecontract': buildHandle('pers1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0191'),
+                'pers3@handlecontract': buildHandle('pers3@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', '4e4d0193')
+            };
+
+            const response = mockResponse();
+            await new ScriptsController().index(
+                mockRequest({ latest: true, type: 'pers' }, { get: () => mockRegistry(handles) }),
+                response as any,
+                () => {}
+            );
+
+            expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+                handle: 'pers1@handlecontract',
+                type: 'pers',
+                latest: true,
+                unoptimizedCbor: 'pers-unoptimized'
+            }));
+        });
+
         it('falls back to previous deployment when latest ordinal handle lacks inline script', async () => {
             // Feature: when a newer deployment subhandle exists but has no script yet (minted but not deployed),
             // the previous working deployment should serve as latest instead of returning 404.
             // Failure mode: minting a new deployment subhandle before deploying the reference script
             // would break all script lookups until the new script is deployed.
-            mockFetch({ pers: 'pers-unoptimized' });
+            mockBundledScriptArtifacts({ pers: { unoptimizedCbor: 'pers-unoptimized' } });
             const handles = {
                 'pers1@handlecontract': buildHandle('pers1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0201'),
                 'pers2@handlecontract': {
@@ -265,7 +286,7 @@ describe('Scripts Routes Test', () => {
             // Feature: legacy `type` aliases should continue to work during the deprecation window while callers migrate to slug names.
             // Failure mode: switching the public query contract to slugs could break existing clients immediately.
             // Negative control: if alias normalization were removed, this request would return 404 instead of the asserted script.
-            mockFetch({ halmntprx: 'proxy-unoptimized' });
+            mockBundledScriptArtifacts({ halmntprx: { unoptimizedCbor: 'proxy-unoptimized' } });
             const handles = {
                 'halmntprx1@handlecontract': buildHandle('halmntprx1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0121')
             };
@@ -307,7 +328,8 @@ describe('Scripts Routes Test', () => {
             // Failure mode: address derivation could flip to mainnet prefixes when env is absent.
             // Negative control: setting `NETWORK=mainnet` would change the expected bech32 prefix and fail this check.
             delete process.env.NETWORK;
-            const fetchMock = mockFetch({ pers: 'unp-preview' });
+            const fetchSpy = jest.spyOn(global, 'fetch');
+            mockBundledScriptArtifacts({ pers: { unoptimizedCbor: 'unp-preview' } });
             const handles = {
                 'pers1@handlecontract': buildHandle('pers1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0131')
             };
@@ -325,16 +347,14 @@ describe('Scripts Routes Test', () => {
                     unoptimizedCbor: 'unp-preview'
                 })
             });
-            expect(fetchMock).toHaveBeenCalledWith(
-                'https://raw.githubusercontent.com/koralabs/handles-personalization/master/deploy/preview/pers.unoptimized.cbor'
-            );
+            expect(fetchSpy).not.toHaveBeenCalled();
         });
 
         it('ignores handles without required ordinals or inline scripts', async () => {
             // Feature: only `<slug><ordinal>@handlecontract` handles with inline script CBOR should appear in the catalog.
             // Failure mode: malformed names or missing script payloads could produce unusable catalog entries.
             // Negative control: adding an ordinal to `pers@handlecontract` or a script to `pers2@handlecontract` would increase the result count.
-            mockFetch({ pers: 'unp3' });
+            mockBundledScriptArtifacts({ pers: { unoptimizedCbor: 'unp3' } });
             const handles = {
                 'pers@handlecontract': buildHandle('pers@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d0141'),
                 'pers2@handlecontract': {
@@ -361,10 +381,10 @@ describe('Scripts Routes Test', () => {
         });
 
         it('omits unoptimized cbor when the repo artifact does not exist', async () => {
-            // Feature: missing repo-hosted `*.unoptimized.cbor` artifacts should not break `/scripts`; the field should just be absent.
-            // Failure mode: a 404 from GitHub could fail the whole catalog instead of preserving the rest of the script metadata.
-            // Negative control: returning `ok: true` with text would make `unoptimizedCbor` appear and fail this check.
-            jest.spyOn(global, 'fetch').mockResolvedValue({ ok: false, text: async () => '' } as Response);
+            // Feature: missing bundled `*.unoptimized.cbor` artifacts should not break `/scripts`; the field should just be absent.
+            // Failure mode: an optional artifact miss could fail the whole catalog instead of preserving the rest of the script metadata.
+            // Negative control: returning a non-empty bundled artifact would make `unoptimizedCbor` appear and fail this check.
+            mockBundledScriptArtifacts({ mkpl: {} });
             const handles = {
                 'mkpl7@handlecontract': buildHandle('mkpl7@handlecontract', 'addr_test1wr97aqagfyj68389dw3xwaefndftae9ua8mpv07vsjdg7jgh8mxmh', '4e4d0151')
             };

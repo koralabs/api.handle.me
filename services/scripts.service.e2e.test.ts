@@ -1,7 +1,9 @@
 import { bech32AddressFromHashes, blake2b, HandleType, ScriptType } from '@koralabs/kora-labs-common';
 import { RedisHandlesStore } from '../stores/redis';
+import { SCRIPT_SOURCES } from '../config/script-sources';
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
+import * as scriptArtifacts from './scriptArtifacts.service';
 import { getScriptByRefAddress, getScriptsIndex } from './scripts.service';
 
 const previewRefAddresses = [
@@ -40,14 +42,11 @@ describe('scripts service e2e', () => {
 
     beforeEach(() => {
         repo.rollBackToGenesis();
-        jest.spyOn(global, 'fetch').mockImplementation(async (input: any) => {
-            const slug = `${input}`.match(/\/([^/]+)\.unoptimized\.cbor$/)?.[1];
-            const unoptimized = slug === 'pers' ? 'unp-pz' : slug === 'demimnt' ? 'unp-demi' : '';
-
+        jest.spyOn(scriptArtifacts, 'getBundledScriptArtifact').mockImplementation((type) => {
+            const slug = SCRIPT_SOURCES[type]?.slug ?? `${type}`;
             return {
-                ok: Boolean(unoptimized),
-                text: async () => unoptimized
-            } as Response;
+                unoptimizedCbor: slug === 'pers' ? 'unp-pz' : slug === 'demimnt' ? 'unp-demi' : undefined
+            };
         });
 
         [
