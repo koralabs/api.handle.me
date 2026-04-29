@@ -8,14 +8,16 @@ import { blockfrostApiCall, fetchKoios } from './helpers';
 const MINTING_DATA_HANDLE_NAME = 'handle_root@handle_settings';
 const EMPTY_MPT_ROOT_HASH = Buffer.alloc(32).toString('hex');
 
-// Virtual subhandle burns that remain in the on-chain MPT because the
-// current validator doesn't know how to remove them. Mainnet's set was
-// emptied 2026-04-24 after demi v2 redeployed the on-chain trie without
-// the prior ghost. Preview still carries `dynamo2@ai` — verified
-// empirically against the preview chain root on 2026-04-25.
+// All networks now run a clean on-chain MPT — no ghost virtual-subhandle
+// burns remain that the validator can't remove. Preview's last ghost
+// (`dynamo2@ai`) was cleared 2026-04-28 by a syncMintingDataRoot push
+// that wrote a ghost-free root to handle_root@handle_settings. Kept as
+// an empty per-network table so a future ghost-recovery scenario only
+// needs a one-line addition (and so the on-chain calculator stays
+// network-aware in shape).
 export const GHOST_HANDLES: Record<string, string[]> = {
     mainnet: [],
-    preview: ['dynamo2@ai']
+    preview: []
 };
 
 const fetchCurrentMintingDataDatumCbor = async () => {
