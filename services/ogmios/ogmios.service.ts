@@ -127,7 +127,7 @@ class OgmiosService {
                                         throw new Error(`Block type ${result.block.type} is not supported`);
 
                                     const block = result.block as BlockPraos
-                                    this.processBlock(block);    
+                                    const touchedHandleIndexes = this.processBlock(block);
                                                                     
                                     const metrics = {
                                         currentSlot: block.slot,
@@ -137,6 +137,17 @@ class OgmiosService {
                                     }
                                     
                                     this.scanningRepo.setMetrics(metrics);
+                                    if (touchedHandleIndexes) {
+                                        try {
+                                            this.scanningRepo.refreshMetricCounts();
+                                        } catch (error: any) {
+                                            Logger.log({
+                                                message: `Failed to refresh cached metric counts after block ${block.id}: ${error?.message ?? error}`,
+                                                category: LogCategory.ERROR,
+                                                event: 'OgmiosService.refreshMetricCounts'
+                                            });
+                                        }
+                                    }
                                 }
                                 catch (error: any) {
                                     Logger.log({
@@ -187,6 +198,7 @@ class OgmiosService {
         
         const currentSlot = txBlock?.slot ?? this.scanningRepo.getMetrics().currentSlot ?? 0;
         const transactionsWithUtxos: { txBody: NonNullable<BlockPraos['transactions']>[number], utxos: UTxOWithTxInfo[] }[] = [];
+        let touchedHandleIndexes = false;
 
         for (let b = 0; b < (txBlock?.transactions ?? []).length; b++) {
             const txBody = txBlock?.transactions?.[b];
@@ -200,6 +212,7 @@ class OgmiosService {
 
                 const values = Object.entries(o?.value ?? {}).filter(([policyId]) => HANDLE_POLICIES.contains(NETWORK as Network, policyId));
                 if (values.length) {
+                    touchedHandleIndexes = true;
                     const minted = Object.entries(txBody?.mint ?? {}).filter(([policyId]) => HANDLE_POLICIES.contains(NETWORK as Network, policyId));
                     const handleAssets: [string, string[]][] = values.map(([policy, handles]) => [policy, Object.keys(handles)]);
                     const handles = handleAssets.flatMap(h => h[1])
@@ -270,6 +283,7 @@ class OgmiosService {
                 if (HANDLE_POLICIES.contains(NETWORK as Network, policy)) {
                     for (const [assetName, quantity] of Object.entries(assetInfo)) {
                         if (quantity == BigInt(-1)) {
+                            touchedHandleIndexes = true;
                             const { name, isCip67 } = getHandleNameFromAssetName(assetName);
                             if (!isCip67 || assetName.startsWith(AssetNameLabel.LBL_222) || assetName.startsWith(AssetNameLabel.LBL_000)) {
                                 const handle = this.scanningRepo.getHandle(name);
@@ -289,6 +303,8 @@ class OgmiosService {
             // remove all the utxos that were spent as inputs to this tx
             this.scanningRepo.removeUTxOs(txBody?.inputs.flatMap((x) => `${x.transaction.id}#${x.index}`) ?? []);
         }
+
+        return touchedHandleIndexes;
     }
 
     Internal = {

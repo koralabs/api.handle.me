@@ -15,6 +15,7 @@ import * as maestroService from '../services/maestro/policy-txs.service';
 const mockedMaestro = maestroService as jest.Mocked<typeof maestroService>;
 
 const mockedHelpers = helpers as jest.Mocked<typeof helpers>;
+const actualHelpers = jest.requireActual('../utils/helpers') as typeof helpers;
 const mockedGetHandleNameFromAssetName = getHandleNameFromAssetName as jest.Mock;
 const MockedStoreClass = RedisHandlesStore as unknown as jest.Mock;
 const MockedRepoClass = HandlesRepository as unknown as jest.Mock;
@@ -207,6 +208,7 @@ const setup = ({ whitelistedApiKeys = 'allowed-key' }: { whitelistedApiKeys?: st
 describe('Scanner lambda unit tests', () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        mockedHelpers.canonicalJsonStringify.mockImplementation(actualHelpers.canonicalJsonStringify);
     });
 
     it('exports lambdaHandler and Internal helpers', () => {

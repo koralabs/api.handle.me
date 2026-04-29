@@ -9,7 +9,7 @@ const address = 'addr_test1qzdzhdzf9ud8k2suzryvcdl78l3tfesnwp962vcuh99k8z834r3hj
 const movedAddress = 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746';
 const movedHolder = 'stake_test1urcr464g6xz4hn2ypnd4tulcnnjq38sg5e5rmdwa6tspwuqn7lhlg';
 
-const defaultReferenceToken: UTxO = {
+const defaultReferenceToken: NonNullable<StoredHandle['reference_token']> = {
     tx_id: 'default_ref_tx',
     id: 'default_ref_tx#0',
     slot: 0,
@@ -19,7 +19,7 @@ const defaultReferenceToken: UTxO = {
     address: '',
     blockHash: '',
     blockNum: 0
-};
+} as any;
 
 const slot = (() => {
     let value = Date.now();

@@ -799,6 +799,28 @@ export class HandlesRepository {
         this.store.setMetrics(metrics);
     }
 
+    public refreshMetricCounts(): IApiMetrics {
+        const metricsStore = this.store as IApiStore & {
+            holderCount?: () => number;
+            refreshMetricCounts?: () => IApiMetrics;
+        };
+
+        if (typeof metricsStore.refreshMetricCounts === 'function') {
+            return metricsStore.refreshMetricCounts();
+        }
+
+        const existingMetrics = this.store.getMetrics();
+        const refreshedMetrics = {
+            ...existingMetrics,
+            handleCount: this.store.count(),
+            holderCount: typeof metricsStore.holderCount === 'function'
+                ? metricsStore.holderCount()
+                : existingMetrics.holderCount ?? 0
+        };
+        this.store.setMetrics(refreshedMetrics);
+        return refreshedMetrics;
+    }
+
     public rollBackToGenesis(): void {
         this.store.rollBackToGenesis();
     }
@@ -1180,7 +1202,11 @@ export class HandlesRepository {
     }
     
     public async getStartingPoint(utxoFunctions: UTxOFunctions, failed = false): Promise<Point | null> {
-        return this.store.getStartingPoint(utxoFunctions , failed);
+        const startingPoint = await this.store.getStartingPoint(utxoFunctions , failed);
+        if (startingPoint) {
+            this.refreshMetricCounts();
+        }
+        return startingPoint;
     }
 
     public getUTxO(utxoId: string): UTxOWithTxInfo | null {

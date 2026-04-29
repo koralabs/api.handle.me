@@ -38,6 +38,7 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
   - `200` when current
   - `202` when storage is behind, Ogmios is behind, or scanner maintenance is actively updating state
   - `503` when cardano-node connectivity is unavailable
+- `/stats`, `/health`, and MCP `get_stats` read persisted metrics counters that are refreshed by scanner/bootstrap writers; they must not recompute full handle/holder cardinality on the request path.
 - `/health` status values currently include:
   - `current`
   - `storage_behind`

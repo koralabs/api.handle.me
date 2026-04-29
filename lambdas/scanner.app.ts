@@ -134,6 +134,18 @@ const getUTxOIndexHandlers = () => ({
     [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: handlesRepo.updateHandleIndexes.bind(handlesRepo)
 });
 
+const refreshCachedMetricCounts = () => {
+    try {
+        handlesRepo.refreshMetricCounts();
+    } catch (error: any) {
+        Logger.log({
+            message: `Failed to refresh cached metric counts: ${error?.message ?? error}`,
+            category: LogCategory.ERROR,
+            event: 'scannerLambda.refreshMetricCounts.error'
+        });
+    }
+};
+
 const isLockStale = (reason: LockedLambdaReason, lockTimestamp?: number): boolean => {
     if (!lockTimestamp) return false;
     const timeout = staleLockTimeouts[reason];
@@ -941,6 +953,7 @@ const checkRollback = async () => {
         }
         throw error;
     } finally {
+        refreshCachedMetricCounts();
         handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UNLOCKED });
     }
 };
@@ -954,6 +967,7 @@ const processReindex = async () => {
     try {
         // This function already chunks at a rate of about 20K every 10 seconds. 300K handles should take about 5 minutes
         store.repopulateIndexesFromUTxOs(getUTxOIndexHandlers());
+        refreshCachedMetricCounts();
         await buildAndStoreMptRootHash(store);
         handlesRepo.setMetrics({ indexSchemaVersion: store.getIndexSchemaVersion() });
         clearRecoveryFlag();
@@ -1379,6 +1393,7 @@ const scan = async () => {
         Logger.log({ message: `Error in scanner lambda: ${error.message}`, category: LogCategory.ERROR, event: 'scannerLambda.error' });
         throw error;
     } finally {
+        refreshCachedMetricCounts();
         // Rebuild whenever currentSlot changed this invocation — the scan loop
         // advances currentSlot and IndexNames.HANDLE per-block, so any exit
         // path (including a deadline-terminated one) that committed blocks

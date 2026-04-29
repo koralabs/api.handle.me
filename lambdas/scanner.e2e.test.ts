@@ -10,6 +10,7 @@ process.env.WHITELISTED_API_KEYS = 'scanner-e2e-key';
 const scanner = require('./scanner');
 const { lambdaHandler } = scanner;
 const mockedHelpers = helpers as jest.Mocked<typeof helpers>;
+const actualHelpers = jest.requireActual('../utils/helpers') as typeof helpers;
 
 const policy = 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a';
 const handleHex = '000de140726f6c6c6261636b';
@@ -105,6 +106,7 @@ describe('Scanner lambda e2e', () => {
     });
 
     beforeEach(() => {
+        mockedHelpers.canonicalJsonStringify.mockImplementation(actualHelpers.canonicalJsonStringify);
         repo.rollBackToGenesis();
         repo.addUTxOsWithMintData([buildTrackedUtxo()]);
         repo.setMetrics({
@@ -206,7 +208,7 @@ describe('Scanner lambda e2e', () => {
     });
 
     it('runs recovery reindex when recovery flag is set', async () => {
-        store.redisClientCall('set', getApiScannerRecoveryKey(), 'rollback');
+        store.redisClientCall('set', getApiScannerRecoveryKey(), 'reindex');
         repo.setMetrics({
             lockLambdas: LockedLambdaReason.UNLOCKED,
             indexSchemaVersion: Number(store.getIndexSchemaVersion()),

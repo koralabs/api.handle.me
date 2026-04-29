@@ -44,7 +44,8 @@ jest.mock('ws', () => {
 const createRepoMock = () =>
     ({
         setMetrics: jest.fn(),
-        getMetrics: jest.fn().mockReturnValue({ currentSlot: 0 })
+        getMetrics: jest.fn().mockReturnValue({ currentSlot: 0 }),
+        refreshMetricCounts: jest.fn()
     }) as any;
 
 describe('OgmiosService websocket client branches', () => {
@@ -95,7 +96,7 @@ describe('OgmiosService websocket client branches', () => {
     it('handles forward praos blocks and updates metrics', async () => {
         const repo = createRepoMock();
         const service = new OgmiosService(repo);
-        const processBlockSpy = jest.spyOn(service as any, 'processBlock').mockImplementation(jest.fn());
+        const processBlockSpy = jest.spyOn(service as any, 'processBlock').mockImplementation(jest.fn().mockReturnValue(true));
         const rpcSpy = jest.spyOn(service as any, '_rpcRequest').mockImplementation(jest.fn());
         const client = (service as any)._createWebSocketClient() as any;
         const block = {
@@ -127,6 +128,7 @@ describe('OgmiosService websocket client branches', () => {
             tipBlockHash: 'tip_hash',
             lastSlot: 124
         });
+        expect(repo.refreshMetricCounts).toHaveBeenCalled();
         expect(rpcSpy).toHaveBeenCalledWith('nextBlock', {}, 'next-block');
     });
 

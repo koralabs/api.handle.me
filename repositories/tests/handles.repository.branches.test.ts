@@ -20,6 +20,7 @@ const buildStoreMock = () => {
         rollBackToGenesis: jest.fn(),
         getMetrics: jest.fn().mockReturnValue({}),
         count: jest.fn().mockReturnValue(0),
+        holderCount: jest.fn().mockReturnValue(0),
         setMetrics: jest.fn(),
         getHashFromIndex: jest.fn(),
         setHashOnIndex: jest.fn(),
@@ -936,9 +937,11 @@ describe('HandlesRepository branch tests', () => {
         const repo = new HandlesRepository(store);
         const point = { slot: 123, id: 'hash_123' };
         store.getStartingPoint = jest.fn().mockResolvedValue(point);
+        store.refreshMetricCounts = jest.fn().mockReturnValue({ handleCount: 10, holderCount: 5 });
 
         await expect(repo.getStartingPoint({} as any, true)).resolves.toEqual(point);
         expect(store.getStartingPoint).toHaveBeenCalledWith({}, true);
+        expect(store.refreshMetricCounts).toHaveBeenCalled();
     });
 
     it('uses default getStartingPoint failed flag when omitted', async () => {
@@ -946,9 +949,22 @@ describe('HandlesRepository branch tests', () => {
         const repo = new HandlesRepository(store);
         const point = { slot: 321, id: 'hash_321' };
         store.getStartingPoint = jest.fn().mockResolvedValue(point);
+        store.refreshMetricCounts = jest.fn().mockReturnValue({ handleCount: 12, holderCount: 6 });
 
         await expect(repo.getStartingPoint({} as any)).resolves.toEqual(point);
         expect(store.getStartingPoint).toHaveBeenCalledWith({}, false);
+        expect(store.refreshMetricCounts).toHaveBeenCalled();
+    });
+
+    it('refreshes cached metric counts from store counters when no store helper exists', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+        store.getMetrics.mockReturnValue({ currentSlot: 12 });
+        store.count.mockReturnValue(9);
+        store.holderCount.mockReturnValue(4);
+
+        expect(repo.refreshMetricCounts()).toEqual({ currentSlot: 12, handleCount: 9, holderCount: 4 });
+        expect(store.setMetrics).toHaveBeenCalledWith({ currentSlot: 12, handleCount: 9, holderCount: 4 });
     });
 
     it('builds personalization from datum links and preserves defaults when datum is missing', async () => {

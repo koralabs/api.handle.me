@@ -1042,13 +1042,33 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(redisSpy).toHaveBeenCalledWith('zmscore', rootKey('holdercount'), ['holder_a', 'holder_b', 'holder_c']);
     });
 
-    it('builds metrics from defaults when cache is empty', () => {
+    it('returns empty metrics when cache is empty', () => {
         const store = new RedisHandlesStore();
         jest.spyOn(store as any, 'rehydrateObjectFromCache').mockReturnValue(undefined);
+
+        expect(store.getMetrics()).toEqual({});
+    });
+
+    it('returns cached metrics without recomputing counts on read', () => {
+        const store = new RedisHandlesStore();
+        jest.spyOn(store as any, 'rehydrateObjectFromCache').mockReturnValue({ currentSlot: 12, handleCount: 9, holderCount: 4 });
         jest.spyOn(store, 'count').mockReturnValue(9);
         jest.spyOn(store, 'holderCount').mockReturnValue(4);
 
-        expect(store.getMetrics()).toEqual({ handleCount: 9, holderCount: 4 });
+        expect(store.getMetrics()).toEqual({ currentSlot: 12, handleCount: 9, holderCount: 4 });
+        expect(store.count).not.toHaveBeenCalled();
+        expect(store.holderCount).not.toHaveBeenCalled();
+    });
+
+    it('refreshes cached metric counts from live index cardinality', () => {
+        const store = new RedisHandlesStore();
+        jest.spyOn(store as any, 'rehydrateObjectFromCache').mockReturnValue({ currentSlot: 12 });
+        jest.spyOn(store, 'count').mockReturnValue(9);
+        jest.spyOn(store, 'holderCount').mockReturnValue(4);
+        const setMetricsSpy = jest.spyOn(store, 'setMetrics').mockImplementation(jest.fn());
+
+        expect(store.refreshMetricCounts()).toEqual({ currentSlot: 12, handleCount: 9, holderCount: 4 });
+        expect(setMetricsSpy).toHaveBeenCalledWith({ currentSlot: 12, handleCount: 9, holderCount: 4 });
     });
 
     it('rehydrates nested references stored as key pointers', () => {
