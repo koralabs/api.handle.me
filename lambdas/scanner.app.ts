@@ -499,6 +499,7 @@ const getBatchedTxHashesWithFallback = async (blockHashes: string[]): Promise<st
     try {
         return await getBatchedTxHashes(blockHashes);
     } catch (error: any) {
+        if (error instanceof ScannerDeadlineError) throw error;
         Logger.log({
             message: `Koios block_txs failed, falling back to Blockfrost: ${error?.message ?? error}`,
             category: LogCategory.WARN,
@@ -512,6 +513,7 @@ const getBatchedTxInfoWithFallback = async (txHashes: string[]): Promise<KoiosTx
     try {
         return await getBatchedTxInfo(txHashes);
     } catch (error: any) {
+        if (error instanceof ScannerDeadlineError) throw error;
         Logger.log({
             message: `Koios tx_info failed for ${txHashes.length} txs, falling back to Blockfrost: ${error?.message ?? error}`,
             category: LogCategory.WARN,
@@ -529,6 +531,7 @@ const getBatchedDatumInfoWithFallback = async (txInfo: KoiosTxInfo[]): Promise<M
     try {
         return await getBatchedDatumInfo(txInfo);
     } catch (error: any) {
+        if (error instanceof ScannerDeadlineError) throw error;
         Logger.log({
             message: `Koios datum_info failed, falling back to Blockfrost: ${error?.message ?? error}`,
             category: LogCategory.WARN,

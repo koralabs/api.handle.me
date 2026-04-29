@@ -2198,6 +2198,46 @@ describe('Scanner lambda unit tests', () => {
         }
     });
 
+    it('scan exits cleanly instead of falling back to Blockfrost after the tx_info deadline is reached', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([
+            { hash: 'block_a', slot: 100, confirmations: 5 }
+        ] as never);
+
+        // Feature/invariant: once the scanner deadline elapses before Koios tx_info runs, the
+        // invocation must stop through the deadline path instead of starting Blockfrost tx_info
+        // fallback work for the remaining hashes.
+        // Failure mode: treating ScannerDeadlineError like a provider outage would trigger
+        // sequential Blockfrost tx_info fetches and risk a full Lambda timeout.
+        // Negative control: this test flips `deadlineExceeded` immediately after block_txs
+        // discovery; without the deadline guard in the fallback wrapper, fetchBlockfrostTxInfo
+        // would be called with `tx_a`.
+        let deadlineExceeded = false;
+        const nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => 1_000_000 + (deadlineExceeded ? 720_001 : 0));
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') {
+                deadlineExceeded = true;
+                return [{ tx_hash: 'tx_a' }] as never;
+            }
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        try {
+            await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+            expect(mockedHelpers.fetchBlockfrostTxInfo).not.toHaveBeenCalled();
+        } finally {
+            nowSpy.mockRestore();
+            logSpy.mockRestore();
+            warnSpy.mockRestore();
+        }
+    });
+
     // NOTE: datum_info Blockfrost fallback is tested via fetchBlockfrostDatumCbor in helpers.blockfrost-fallback.test.ts.
     // A scanner-level datum_info fallback test is impractical here because asyncForEach in kora-labs-common
     // creates a dangling rejected promise during its internal delay, which triggers Jest's unhandled rejection detection.

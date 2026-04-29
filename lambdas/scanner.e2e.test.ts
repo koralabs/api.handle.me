@@ -4,7 +4,16 @@ import { RedisHandlesStore } from '../stores/redis';
 import { getApiScannerRecoveryKey } from '../stores/redis/keys';
 import * as helpers from '../utils/helpers';
 
-jest.mock('../utils/helpers');
+jest.mock('../utils/helpers', () => {
+    const actual = jest.requireActual('../utils/helpers');
+    return {
+        ...actual,
+        blockfrostApiCall: jest.fn(),
+        buildUTxOsFromKoiosTxs: jest.fn(),
+        fetchKoios: jest.fn(),
+        fetchPaginatedResults: jest.fn()
+    };
+});
 process.env.WHITELISTED_API_KEYS = 'scanner-e2e-key';
 
 const scanner = require('./scanner');
@@ -118,6 +127,10 @@ describe('Scanner lambda e2e', () => {
             lockLambdas: LockedLambdaReason.UNLOCKED
         });
         jest.clearAllMocks();
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ height: 5000 }) } as never);
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+        mockedHelpers.fetchKoios.mockResolvedValue([] as never);
     });
 
     it('scans block updates and persists handle + metrics', async () => {
@@ -205,7 +218,7 @@ describe('Scanner lambda e2e', () => {
         expect(finalMetrics.indexSchemaVersion).toBeDefined();
     });
 
-    it('runs recovery reindex when recovery flag is set', async () => {
+    it('clears stale rollback recovery flags and continues the normal scan path', async () => {
         store.redisClientCall('set', getApiScannerRecoveryKey(), 'rollback');
         repo.setMetrics({
             lockLambdas: LockedLambdaReason.UNLOCKED,
@@ -216,7 +229,7 @@ describe('Scanner lambda e2e', () => {
 
         const result = await lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
 
-        expect(result).toBeUndefined();
+        expect(result).toEqual({ isBase64Encoded: false, statusCode: 200, body: '' });
         expect(store.redisClientCall('get', getApiScannerRecoveryKey())).toBeFalsy();
     });
 
