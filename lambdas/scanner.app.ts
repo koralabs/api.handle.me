@@ -512,6 +512,8 @@ const getBatchedTxInfoWithFallback = async (txHashes: string[]): Promise<KoiosTx
     try {
         return await getBatchedTxInfo(txHashes);
     } catch (error: any) {
+        // The hard deadline is a stop signal for this invocation, not a provider outage.
+        if (error instanceof ScannerDeadlineError) throw error;
         Logger.log({
             message: `Koios tx_info failed for ${txHashes.length} txs, falling back to Blockfrost: ${error?.message ?? error}`,
             category: LogCategory.WARN,
