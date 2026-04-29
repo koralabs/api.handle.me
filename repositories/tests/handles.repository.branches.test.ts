@@ -656,6 +656,22 @@ describe('HandlesRepository branch tests', () => {
         );
     });
 
+    it('returns undefined for getHolder when the indexed handle is missing a resolved ADA address', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+
+        store.getValuesFromIndexedSet.mockImplementation((index: IndexNames, key: string | number) => {
+            if (index === IndexNames.HOLDER && key === holder) return new Set(['alpha']);
+            if (index === IndexNames.DEFAULT_HANDLE && key === holder) return new Set(['alpha']);
+            return undefined;
+        });
+        store.getHashFromIndex.mockReturnValue({ name: 'alpha', resolved_addresses: {} });
+
+        // Negative control: removing the null guard in getHolder() would throw while reading
+        // storedHandle.resolved_addresses.ada instead of returning the repository's normal miss.
+        expect(repo.getHolder(holder)).toBeUndefined();
+    });
+
     it('returns empty search results when indexed filter set has no entries', () => {
         const store = buildStoreMock();
         const repo = new HandlesRepository(store);

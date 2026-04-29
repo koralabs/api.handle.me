@@ -1374,6 +1374,47 @@ describe('Scanner lambda unit tests', () => {
         expect(logEntries.some((entry) => entry.includes('scannerLambda.rollbackRetriable'))).toBe(true);
     });
 
+    it('defers rollback reconciliation while the scanner is still far behind tip', async () => {
+        // Validates: lambdaHandler skips the periodic rollback check when scan() leaves the
+        // index more than the 20-block window behind the chain tip.
+        // Failure mode caught: calling checkRollback on a deep backlog burns provider budget
+        // on canonical-delta work that is just normal catch-up and can restart timeout loops.
+        const { handlesRepo, scannerModule } = setup();
+        let metricsState = {
+            currentSlot: 130,
+            currentBlockHash: 'start_hash',
+            lastSlot: 130,
+            tipBlockHash: '',
+            utxoSchemaVersion: 1,
+            indexSchemaVersion: 1,
+            lastMaxRollbackCheck: Date.now(),
+            lockLambdas: LockedLambdaReason.UNLOCKED
+        };
+        handlesRepo.getMetrics.mockImplementation(() => ({ ...metricsState }));
+        handlesRepo.setMetrics.mockImplementation((update: Record<string, unknown>) => {
+            metricsState = { ...metricsState, ...update };
+        });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_131', slot: 131, confirmations: 5 }] as never);
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ slot: 700, height: 5000, hash: 'tip_hash' }) } as never);
+
+        await expect(
+            scannerModule.lambdaHandler({} as any, { getRemainingTimeInMillis: () => 900000 } as any)
+        ).resolves.toEqual({
+            isBase64Encoded: false,
+            statusCode: 200,
+            body: ''
+        });
+
+        expect(metricsState.currentSlot).toBe(131);
+        expect(metricsState.lastSlot).toBe(700);
+        const rollbackLockCalls = handlesRepo.setMetrics.mock.calls.filter(
+            ([update]) => update?.lockLambdas === LockedLambdaReason.ROLLBACK
+        );
+        // Negative control: without the deferral guard, checkRollback() would acquire the
+        // ROLLBACK lock even though the scanner is still hundreds of slots behind.
+        expect(rollbackLockCalls).toHaveLength(0);
+    });
+
     it('paces tx_info requests to stay under 6 requests per second and uses smaller soft body batching', async () => {
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
