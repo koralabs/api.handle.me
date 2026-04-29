@@ -74,6 +74,7 @@ describe('HealthController', () => {
                 })
             })
         );
+        expect(repoMock.isCaughtUp).toHaveBeenCalledWith(baseMetrics);
         expect(res.json.mock.calls[0][0].ogmios).toBeUndefined();
         expect(next).not.toHaveBeenCalled();
     });

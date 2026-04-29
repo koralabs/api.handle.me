@@ -173,6 +173,7 @@ const setup = ({ whitelistedApiKeys = 'allowed-key' }: { whitelistedApiKeys?: st
         getUTxO: jest.fn(),
         removeHandle: jest.fn(),
         removeUTxOs: jest.fn(),
+        refreshMetricCounts: jest.fn().mockReturnValue({}),
         setMetrics: jest.fn(),
         updateHandleIndexes: jest.fn(),
         updateHolder: jest.fn(),
@@ -472,8 +473,43 @@ describe('Scanner lambda unit tests', () => {
 
         await scannerModule.Internal.processReindex();
 
+        expect(handlesRepo.refreshMetricCounts).toHaveBeenCalledTimes(1);
         expect(handlesRepo.setMetrics).toHaveBeenCalledWith({ indexSchemaVersion: 3 });
         expect(handlesRepo.setMetrics).toHaveBeenLastCalledWith({ lockLambdas: LockedLambdaReason.UNLOCKED });
+    });
+
+    it('scan refreshes cached metric counts after advancing the stored head', async () => {
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics
+            .mockReturnValueOnce({
+                currentSlot: 130,
+                currentBlockHash: 'start_hash',
+                utxoSchemaVersion: 1,
+                indexSchemaVersion: 1,
+                lockLambdas: LockedLambdaReason.UNLOCKED
+            })
+            .mockReturnValue({
+                currentSlot: 101,
+                currentBlockHash: 'block_chunk_tail',
+                utxoSchemaVersion: 1,
+                indexSchemaVersion: 1,
+                lockLambdas: LockedLambdaReason.UNLOCKED
+            });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_chunk_tail', slot: 101, confirmations: 5 }] as never);
+        mockedHelpers.blockfrostApiCall.mockImplementation(async (endpoint: string) => {
+            if (endpoint === 'blocks/latest') return { ok: true, json: async () => ({ hash: 'real_tip_hash', slot: 999 }) } as never;
+            return { ok: true, json: async () => ({}) } as never;
+        });
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') return [{ tx_hash: 'tx_1' }] as never;
+            if (path === 'tx_info') return [{ tx_hash: 'tx_1', block_hash: 'block_chunk_tail', inputs: [] }] as never;
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        await scannerModule.Internal.scan();
+
+        expect(handlesRepo.refreshMetricCounts).toHaveBeenCalledTimes(1);
     });
 
     it('processReindex unlocks lambdas when repopulation fails', async () => {
