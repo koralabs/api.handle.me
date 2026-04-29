@@ -43,6 +43,7 @@ describe('StatsController', () => {
             total_handles: 0,
             total_holders: 7
         });
+        expect(repoMock.currentHttpStatus).toHaveBeenCalledWith({ handleCount: undefined, holderCount: 7 });
         expect(next).not.toHaveBeenCalled();
     });
 
@@ -63,6 +64,7 @@ describe('StatsController', () => {
             total_handles: 5,
             total_holders: 0
         });
+        expect(repoMock.currentHttpStatus).toHaveBeenCalledWith({ handleCount: 5, holderCount: undefined });
     });
 
     it('forwards unexpected repository errors to next', async () => {
