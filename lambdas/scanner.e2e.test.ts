@@ -10,6 +10,9 @@ process.env.WHITELISTED_API_KEYS = 'scanner-e2e-key';
 const scanner = require('./scanner');
 const { lambdaHandler } = scanner;
 const mockedHelpers = helpers as jest.Mocked<typeof helpers>;
+const actualHelpers = jest.requireActual('../utils/helpers') as typeof import('../utils/helpers');
+
+mockedHelpers.canonicalJsonStringify.mockImplementation((value: unknown) => actualHelpers.canonicalJsonStringify(value));
 
 const policy = 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a';
 const handleHex = '000de140726f6c6c6261636b';
@@ -118,6 +121,13 @@ describe('Scanner lambda e2e', () => {
             lockLambdas: LockedLambdaReason.UNLOCKED
         });
         jest.clearAllMocks();
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({
+            ok: true,
+            json: async () => ({ hash: 'provider_block', slot: 200, height: 5000 })
+        } as never);
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([] as never);
+        mockedHelpers.fetchKoios.mockResolvedValue([] as never);
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
     });
 
     it('scans block updates and persists handle + metrics', async () => {
@@ -181,6 +191,57 @@ describe('Scanner lambda e2e', () => {
         expect(repo.getHandle(handleName)).toEqual(expect.objectContaining({ name: handleName, utxo: 'scan_tx#0' }));
     });
 
+    it('returns success without Blockfrost tx_info fallback when the hard deadline is reached mid-scan', async () => {
+        // Validates: the Lambda exits cleanly after a tx_info deadline and preserves the
+        // existing indexed state instead of converting the stop into Blockfrost work.
+        // Failure mode caught: a swallowed ScannerDeadlineError would start sequential
+        // Blockfrost tx_info fetches and risk hitting the platform timeout while degraded.
+        // Negative control: if getBatchedTxInfoWithFallback() falls back on deadline,
+        // fetchBlockfrostTxInfo becomes observable in this test.
+        repo.setMetrics({
+            currentSlot: 1,
+            lastSlot: 2_000,
+            currentBlockHash: 'provider_block',
+            tipBlockHash: 'provider_block',
+            lastMaxRollbackCheck: Date.now(),
+            utxoSchemaVersion: Number(store.getUTxOSchemaVersion()),
+            indexSchemaVersion: Number(store.getIndexSchemaVersion()),
+            lockLambdas: LockedLambdaReason.UNLOCKED
+        });
+
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({
+            ok: true,
+            json: async () => ({ hash: 'tip_hash', slot: 2_000, height: 5_000 })
+        } as never);
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'next_hash', slot: 101, confirmations: 21 }] as never);
+
+        const baseNow = 1_000_000;
+        let currentNow = baseNow;
+        const nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => currentNow);
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') {
+                currentNow = baseNow + (12 * 60_000) + 1;
+                return [{ tx_hash: 'scan_tx' }] as never;
+            }
+            if (path === 'tx_info') {
+                throw new Error('tx_info should not run once the deadline has elapsed');
+            }
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        try {
+            const result = await lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
+
+            expect(result).toEqual({ isBase64Encoded: false, statusCode: 200, body: '' });
+            expect(mockedHelpers.fetchBlockfrostTxInfo).not.toHaveBeenCalled();
+            expect(mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info')).toHaveLength(0);
+            expect(repo.getUTxO('rollback_tx#0')).toEqual(expect.objectContaining({ tx_id: 'rollback_tx' }));
+        } finally {
+            nowSpy.mockRestore();
+        }
+    });
+
     it('recovers immediately when a reindex lock is stale', async () => {
         repo.setMetrics({
             lockLambdas: LockedLambdaReason.REINDEX,
@@ -205,7 +266,7 @@ describe('Scanner lambda e2e', () => {
         expect(finalMetrics.indexSchemaVersion).toBeDefined();
     });
 
-    it('runs recovery reindex when recovery flag is set', async () => {
+    it('clears a stale rollback recovery flag and continues the normal scan path', async () => {
         store.redisClientCall('set', getApiScannerRecoveryKey(), 'rollback');
         repo.setMetrics({
             lockLambdas: LockedLambdaReason.UNLOCKED,
@@ -216,7 +277,7 @@ describe('Scanner lambda e2e', () => {
 
         const result = await lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
 
-        expect(result).toBeUndefined();
+        expect(result).toEqual({ isBase64Encoded: false, statusCode: 200, body: '' });
         expect(store.redisClientCall('get', getApiScannerRecoveryKey())).toBeFalsy();
     });
 
