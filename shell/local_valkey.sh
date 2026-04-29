@@ -4,6 +4,24 @@ set -a && source .env && set +a
 REDIS_PORT=${REDIS_PORT:-6380}
 REDIS_HOST=${REDIS_HOST:-127.0.0.1}
 VALKEY_BIN=$(command -v valkey-server || true)
+STATE_DIR=${TMPDIR:-/tmp}/api-handle-me-valkey
+
+if [ -z "${VALKEY_BIN}" ] && [ -x /tmp/kora-redis/bin/valkey-server ]
+then
+    VALKEY_BIN=/tmp/kora-redis/bin/valkey-server
+    export LD_LIBRARY_PATH="/tmp/kora-redis/root/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+fi
+
+if [ -z "${VALKEY_BIN}" ]
+then
+    VALKEY_BIN=$(command -v redis-server || true)
+fi
+
+if [ -z "${VALKEY_BIN}" ] && [ -x /tmp/kora-redis/root/usr/bin/redis-server ]
+then
+    VALKEY_BIN=/tmp/kora-redis/root/usr/bin/redis-server
+    export LD_LIBRARY_PATH="/tmp/kora-redis/root/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+fi
 
 if [ -z "${VALKEY_BIN}" ]
 then
@@ -20,9 +38,9 @@ fi
 
 if ! ss -lnt | grep -q ":${REDIS_PORT} "
 then
-    mkdir -p tmp
-    VALKEY_PIDFILE="${PWD}/tmp/valkey-${REDIS_PORT}.pid"
-    VALKEY_LOGFILE="${PWD}/tmp/valkey-${REDIS_PORT}.log"
+    mkdir -p "${STATE_DIR}"
+    VALKEY_PIDFILE="${STATE_DIR}/valkey-${REDIS_PORT}.pid"
+    VALKEY_LOGFILE="${STATE_DIR}/valkey-${REDIS_PORT}.log"
     echo "Starting test Valkey instance - connecting to ${REDIS_HOST}:${REDIS_PORT}"
     "${VALKEY_BIN}" \
         --bind "${REDIS_HOST}" \
@@ -30,7 +48,7 @@ then
         --save "" \
         --appendonly no \
         --daemonize yes \
-        --dir "${PWD}/tmp" \
+        --dir "${STATE_DIR}" \
         --pidfile "${VALKEY_PIDFILE}" \
         --logfile "${VALKEY_LOGFILE}"
 
