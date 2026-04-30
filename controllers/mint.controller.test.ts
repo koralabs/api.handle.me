@@ -20,9 +20,10 @@ const mockResponse = () => {
 
 describe('Mint Routes Test', () => {
     describe('[POST] /mint', () => {
-        it('Should return 404 when trying to mint regular Handle', async () => {
+        it('Should pass an ApiError to next() when trying to mint a regular Handle (so it picks up the canonical envelope)', async () => {
             const mintController = new MintController();
             const response = mockResponse();
+            const next = jest.fn();
             const body =  {
                 handle: 'test@handle',
                 tx_hash: 'tx_123',
@@ -33,15 +34,17 @@ describe('Mint Routes Test', () => {
             }
             await mintController.mint(
                 // @ts-expect-error
-                {body}, 
-                response, 
-                () => {}
+                {body},
+                response,
+                next
             );
-            
-            expect(response.status).toHaveBeenCalledWith(400);
-            expect(response.json).toHaveBeenCalledWith({
-                error: "handle_type: 'handle' is not supported for minting at this time."
-            });
+
+            expect(next).toHaveBeenCalledTimes(1);
+            const err = next.mock.calls[0][0];
+            expect(err).toEqual(expect.objectContaining({
+                status: 400,
+                code: 'handle_type_unsupported_for_mint'
+            }));
         });
 
         it('Should mint SubHandle', async () => {

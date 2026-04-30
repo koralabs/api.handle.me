@@ -57,11 +57,11 @@ describe('Home Routes Test', () => {
     });
 
     describe('[GET] /', () => {
-        it('Should return HTML discovery page by default', async () => {
+        it('Should return JSON OpenAPI spec by default (no Accept header)', async () => {
             const response = await request(app?.getServer()).get('/');
             expect(response.status).toEqual(200);
-            expect(response.headers['content-type']).toMatch(/text\/html/);
-            expect(response.text).toContain('<a href="/swagger">Swagger UI</a>');
+            expect(response.headers['content-type']).toMatch(/application\/json/);
+            expect(response.body).toEqual(expect.objectContaining({ openapi: expect.any(String) }));
         });
     });
 });

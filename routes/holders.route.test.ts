@@ -99,7 +99,10 @@ describe('Testing Holders Routes', () => {
         it('should throw error if address does not exist', async () => {
             const response = await request(app?.getServer()).get('/holders/nope');
             expect(response.status).toEqual(404);
-            expect(response.body.message).toEqual('Not found');
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'holder_not_found',
+                message: 'Holder not found'
+            }));
         });
 
         it('should return valid handle', async () => {

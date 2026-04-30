@@ -14,6 +14,12 @@ class IndexRoute extends BaseRoute {
 
     private initializeRoutes() {
         this.router.get(`${this.path}`, this.homeController.index);
+        // Conventional spec aliases — agents probe these paths first.
+        this.router.get('/openapi.json', this.homeController.openapiJson);
+        this.router.get('/swagger.json', this.homeController.swaggerJson);
+        // Well-known paths.
+        this.router.get('/.well-known/api-catalog', this.homeController.apiCatalog);
+        this.router.get('/.well-known/security.txt', this.homeController.securityTxt);
     }
 }
 

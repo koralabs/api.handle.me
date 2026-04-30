@@ -1,5 +1,6 @@
 import { decodeCborToJson, encodeJsonToDatum, KeyType } from '@koralabs/kora-labs-common';
 import { NextFunction, Request, Response } from 'express';
+import { ApiError } from '../utils/apiError';
 
 class DatumController {
     public async index (req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -24,8 +25,7 @@ class DatumController {
 
                 const { cbor, schema = {} } = req.body;
                 if (!cbor) {
-                    res.status(400).send({ message: 'cbor required' });
-                    return;
+                    throw ApiError.cborRequired();
                 }
 
                 const decoded = decodeCborToJson({ cborString: cbor, schema, defaultKeyType: req.query.default_key_type as KeyType });

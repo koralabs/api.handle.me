@@ -37,7 +37,8 @@ const buildReq = () =>
 const buildRes = () => {
     const json = jest.fn();
     const status = jest.fn().mockReturnValue({ json });
-    return { json, status } as any;
+    const set = jest.fn();
+    return { json, status, set } as any;
 };
 
 describe('HealthController', () => {

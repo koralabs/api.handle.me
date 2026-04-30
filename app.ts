@@ -10,6 +10,8 @@ import { CREDENTIALS, NODE_ENV, ORIGIN, PORT } from './config';
 import { IRegistry } from './interfaces/registry.interface';
 import { DynamicLoadType } from './interfaces/util.interface';
 import errorMiddleware from './middlewares/error.middleware';
+import notFoundMiddleware from './utils/notFound';
+import packageJson from './package.json';
 import { HandlesRepository } from './repositories/handlesRepository';
 import OgmiosService from './services/ogmios/ogmios.service';
 import { dynamicallyLoad } from './utils/util';
@@ -52,7 +54,7 @@ class App {
 
     public async listen() {
         await this.initialize();
-        this.app.set('trust proxy', 1); 
+        this.app.set('trust proxy', 1);
         const server = this.app.listen(this.port, () => {
             Logger.log({ message: `🚀 ${this.env} app listening on port ${this.port} 🚀`, category: LogCategory.INFO, event: 'app.listen' });
         });
@@ -69,6 +71,9 @@ class App {
     public async initialize() {
         this.initializeMiddleware();
         await this.initializeDynamicHandlers();
+        // Final route fall-through: distinguish 405 (path matched, method didn't)
+        // from 404 (no path matched). Must come AFTER all routes are mounted.
+        this.app.use(notFoundMiddleware(this.app));
         this.app.use(errorMiddleware);
         return this;
     }
@@ -83,6 +88,8 @@ class App {
         this.app.use(express.text());
         this.app.use(express.json());
         this.app.use(express.urlencoded({ extended: true }));
+        // discoveryMiddleware (Link rel=service-doc, X-API-Version) is auto-loaded
+        // from middlewares/ by initializeDynamicHandlers — no explicit mount needed.
     }
 
     private async initializeDynamicHandlers() {
@@ -115,7 +122,7 @@ class App {
         const handlesRepo = new HandlesRepository(new this.registry.handlesStore());
         if (this.disableOgmios || this.env === 'test') {
             await handlesRepo.initialize();
-            
+
             // If we're running local we want the scanner to replace ogmios scanning
             if (['development', 'test'].includes(NODE_ENV) && process.env.USE_LAMBDA_SCANNER == 'true') {
                 await (async () => {
@@ -167,7 +174,8 @@ class App {
 
         try {
             const swaggerFile = IS_LOCAL ? './docs/swagger.yml' : './swagger.yml';
-            const swaggerFileContent = fs.readFileSync(swaggerFile).toString();
+            // Substitute {{version}} so OpenAPI codegen sees a real semver, not a literal placeholder.
+            const swaggerFileContent = fs.readFileSync(swaggerFile).toString().replace(/\{\{version\}\}/g, packageJson.version);
             const swaggerDoc = parse(swaggerFileContent);
             this.app.get(swaggerSpecRoute, (_req, res) => {
                 res.type('application/yaml').send(swaggerFileContent);

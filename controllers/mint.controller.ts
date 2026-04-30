@@ -1,6 +1,7 @@
 import { HandleType, INormalizedQueryParams } from '@koralabs/kora-labs-common';
 import { NextFunction, Request, Response } from 'express';
 import { mintMySubHandle } from '../services/minting.service';
+import { ApiError } from '../utils/apiError';
 
 /*********************************************
  * Used by api.handle.me for SubHandle mints
@@ -21,10 +22,7 @@ class MintController {
 
             // For now, we only support minting subhandles. In the future, after DEMI, we will open this up to minting handles.
             if (handle_type == HandleType.HANDLE) {
-                res.status(400).json({
-                    error: "handle_type: 'handle' is not supported for minting at this time."
-                });
-                return;
+                throw ApiError.handleTypeUnsupportedForMint();
             }
 
             const subHandleType = handle_type.replace('_subhandle', '');

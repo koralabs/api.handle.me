@@ -4,7 +4,6 @@ import {
     checkHandlePattern,
     HandlePaginationModel, HandleSearchModel,
     HandleType,
-    HttpException,
     IGetAllQueryParams, IGetHandleRequest,
     ISearchBody,
     isEmpty,
@@ -22,8 +21,16 @@ import { IRegistry } from '../interfaces/registry.interface';
 import { HandleViewModel } from '../models/view/handle.view.model';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getScriptByRefAddress, resolvePreferredScriptTypeForHandleName } from '../services/scripts.service';
+import { ApiError, statusCodeToErrorCode } from '../utils/apiError';
+import { wantsRawCbor, wantsTextPlain } from '../utils/contentNegotiation';
 
 type HandleSearchQueryParams = IGetAllQueryParams & { root_handle?: string };
+
+const setSearchTotal = (res: Response, total: number) => {
+    const value = total.toString();
+    res.set('X-Total-Count', value);
+    res.set('x-handles-search-total', value);
+};
 
 class HandlesController {
     private static async getScriptByAddress(req: Request<any>, address?: string, handleName?: string): Promise<UTxO['script'] | undefined> {
@@ -50,11 +57,11 @@ class HandlesController {
     private static validateRecordsPerPage(recordsPerPage?: string, maxRecordsPerPage = MAX_PAGINATED_RESULTS): void {
         const count = Number(recordsPerPage);
         if (recordsPerPage && Number.isFinite(count) && count > maxRecordsPerPage) {
-            throw new HttpException(400, `'records_per_page' must be ${maxRecordsPerPage} or less`);
+            throw ApiError.recordsPerPageTooLarge(maxRecordsPerPage);
         }
     }
 
-    private static async getHandleFromRepo (req: Request<IGetHandleRequest, {}, {}>): Promise<{ code: number; message: string | null; handle: StoredHandle | null; }> {
+    private static async getHandleFromRepo (req: Request<IGetHandleRequest, {}, {}>): Promise<{ code: number; handle: StoredHandle; }> {
         const handleName = req.params.handle;
         const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
         const asHex = req.query.hex == 'true';
@@ -63,29 +70,29 @@ class HandlesController {
         if (!handle) {
             const validHandle = checkHandlePattern(handleName, handleName.includes('@') ? handleName.split('@')[1] : undefined);
             if (!validHandle.valid) {
-                return {
-                    code: AvailabilityResponseCode.NOT_ACCEPTABLE,
-                    message: validHandle.message,
-                    handle
-                };
+                // Invalid handle shape — treat as not found and point users at the handle FAQ
+                // for the current rules rather than enumerating violations in the API surface.
+                throw ApiError.handleNameInvalid();
             }
             const protectedWordsResult = await ProtectedWords.checkAvailability(handleName);
 
             if (!protectedWordsResult.available) {
-                return {
-                    code: protectedWordsResult.code,
-                    message: (protectedWordsResult.code === AvailabilityResponseCode.NOT_AVAILABLE_FOR_LEGAL_REASONS ? protectedWordsResult.reason : protectedWordsResult.message) ?? null,
-                    handle
-                };
+                // Preserve the existing AvailabilityResponseCode → HTTP-status passthrough
+                // (notably 451 for legally restricted names) — downstream consumers branch on it.
+                const status = protectedWordsResult.code;
+                const message = (status === AvailabilityResponseCode.NOT_AVAILABLE_FOR_LEGAL_REASONS
+                    ? protectedWordsResult.reason
+                    : protectedWordsResult.message) ?? 'Handle is not available';
+                throw new ApiError(status, statusCodeToErrorCode(status), message);
             }
-            return { code: 404, message: 'Handle not found', handle };
+            throw ApiError.handleNotFound();
         }
-        return { code: handleRepo.currentHttpStatus(), message: null, handle };
+        return { code: handleRepo.currentHttpStatus(), handle };
     }
 
     public static parseQueryAndSearchHandles(req: Request<Request, {}, {}, IGetAllQueryParams>, handleRepo: HandlesRepository, handles?: ISearchBody) {
         const { records_per_page, page, characters, length, rarity, numeric_modifiers, slot_number, search: searchQuery, holder_address, og, handle_type, sort, personalized, root_handle } = req.query as HandleSearchQueryParams;
-        const namesOnly = req.headers?.accept?.startsWith('text/plain') ?? false;
+        const namesOnly = wantsTextPlain(req);
         const maxRecordsPerPage = namesOnly ? MAX_TEXT_PLAIN_PAGINATED_RESULTS : MAX_PAGINATED_RESULTS;
         HandlesController.validateRecordsPerPage(records_per_page, maxRecordsPerPage);
         const effectiveRecordsPerPage = records_per_page ?? (namesOnly ? `${MAX_TEXT_PLAIN_PAGINATED_RESULTS}` : undefined);
@@ -99,7 +106,7 @@ class HandlesController {
             holder_address,
             root_handle,
             personalized,
-            handle_type,            
+            handle_type,
             og,
             handles
         } as ConstructorParameters<typeof HandleSearchModel>[0] & { root_handle?: string });
@@ -125,38 +132,39 @@ class HandlesController {
 
             const handles = HandlesController.parseQueryAndSearchHandles(req, handleRepo);
 
-            if (req.headers?.accept?.startsWith('text/plain')) {
+            if (wantsTextPlain(req)) {
                 const handleNames = handles.handles as string[];
                 res.set('Content-Type', 'text/plain; charset=utf-8');
-                res.set('x-handles-search-total', handles.searchTotal.toString());
+                setSearchTotal(res, handles.searchTotal);
                 res.status(handleRepo.currentHttpStatus()).send(handleNames.join('\n'));
                 return;
             }
 
-            res.set('x-handles-search-total', handles.searchTotal.toString())
-                .status(handleRepo.currentHttpStatus())
+            setSearchTotal(res, handles.searchTotal);
+            res.status(handleRepo.currentHttpStatus())
                 .json((handles.handles as StoredHandle[]).filter((handle: StoredHandle) => !!handle.utxo).map((handle: StoredHandle) => new HandleViewModel(handle)));
         } catch (error) {
             next(error);
         }
     }
 
-    private static async _searchFromList (req: Request<Request, {}, ISearchBody, IGetAllQueryParams>, res: Response, next: NextFunction, handles?: ISearchBody): Promise<void> {
+    private static async _searchFromList (req: Request<Request, {}, ISearchBody, IGetAllQueryParams>, res: Response, handles?: ISearchBody): Promise<void> {
         const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
         const handleSearchResults = HandlesController.parseQueryAndSearchHandles(req, handleRepo, handles)
 
-        
-        if (req.headers?.accept?.startsWith('text/plain')) {
+
+        if (wantsTextPlain(req)) {
             const handles = handleSearchResults.handles;
             res.set('Content-Type', 'text/plain; charset=utf-8');
-            res.set('x-handles-search-total', handleSearchResults.searchTotal.toString());
+            setSearchTotal(res, handleSearchResults.searchTotal);
             res.status(handleRepo.currentHttpStatus()).send(handles.join('\n'));
             return;
         }
 
         const handlesViewModel = (handleSearchResults.handles as StoredHandle[]).filter((handle: StoredHandle) => !!handle.utxo).map((handle: StoredHandle) => new HandleViewModel(handle));
 
-        res.set('x-handles-search-total', `${handlesViewModel.length}`).status(handleRepo.currentHttpStatus()).json(handlesViewModel);
+        setSearchTotal(res, handlesViewModel.length);
+        res.status(handleRepo.currentHttpStatus()).json(handlesViewModel);
     }
 
     public async list (req: Request<Request, {}, ISearchBody, IGetAllQueryParams>, res: Response, next: NextFunction): Promise<void> {
@@ -189,7 +197,7 @@ class HandlesController {
                 default:
                     break;
             }
-            await HandlesController._searchFromList(req, res, next, handles);
+            await HandlesController._searchFromList(req, res, handles);
         } catch (error) {
             next(error);
         }
@@ -197,8 +205,8 @@ class HandlesController {
 
     public async getHandle (req: Request<IGetHandleRequest, {}, {}>, res: Response, next: NextFunction): Promise<void> {
         try {
-            const handleData = await HandlesController.getHandleFromRepo(req);
-            res.status(handleData.code).json(handleData.handle ? new HandleViewModel(handleData.handle) : { message: handleData.message });
+            const { code, handle } = await HandlesController.getHandleFromRepo(req);
+            res.status(code).json(new HandleViewModel(handle));
         } catch (error) {
             next(error);
         }
@@ -207,49 +215,35 @@ class HandlesController {
     public async getPersonalizedHandle(req: Request<IGetHandleRequest, {}, {}>, res: Response, next: NextFunction) {
         try {
             const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
-            const handle = await HandlesController.getHandleFromRepo(req);
+            const { code, handle } = await HandlesController.getHandleFromRepo(req);
 
-            if (handle.code == 200 || handle.code == 202 ) {
-                const personalization =  await handleRepo.getPersonalization(handle.handle);  
-                if (!personalization) {
-                    res.status(handle.code).json({});
-                    return;
-                }
-                res.status(handle.code).json(personalization);
-                return;
-            }
-            res.status(handle.code).send(handle.message);
-
+            const personalization = await handleRepo.getPersonalization(handle);
+            res.status(code).json(personalization ?? {});
         } catch (error) {
             next(error);
         }
     }
 
     private static async buildHandleReferenceToken(req: Request<IGetHandleRequest, {}, {}>): Promise<{ reference_token?: UTxO; code: number }> {
-        const handleData = await HandlesController.getHandleFromRepo(req);
+        const { code, handle } = await HandlesController.getHandleFromRepo(req);
 
-        if (handleData.handle?.reference_utxo) {
+        if (handle.reference_utxo) {
             const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
-            const refUtxo = handleRepo.getUTxO(handleData.handle?.reference_utxo)
+            const refUtxo = handleRepo.getUTxO(handle.reference_utxo)
             if (refUtxo) {
-                const reference_token = await HandlesController.attachReferenceTokenScript(req, new UTxO(refUtxo), handleData.handle.name);
-                return { reference_token, code: handleData.code };
+                const reference_token = await HandlesController.attachReferenceTokenScript(req, new UTxO(refUtxo), handle.name);
+                return { reference_token, code };
             }
         }
 
-        return { code: handleData.code };
+        return { code };
     }
 
     public async getPersonalizationUTxO(req: Request<IGetHandleRequest, {}, {}>, res: Response, next: NextFunction) {
         try {
             const { reference_token, code } = await HandlesController.buildHandleReferenceToken(req);
 
-            if (!reference_token) {
-                res.status(code).json({});
-                return;
-            }
-
-            res.status(code).json(reference_token);
+            res.status(code).json(reference_token ?? {});
         } catch (error) {
             next(error);
         }
@@ -257,33 +251,31 @@ class HandlesController {
 
     public async getHandleUTxO(req: Request<IGetHandleRequest, {}, {}>, res: Response, next: NextFunction) {
         try {
-            const handleData = await HandlesController.getHandleFromRepo(req);
+            const { handle } = await HandlesController.getHandleFromRepo(req);
 
             const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
 
-            if (!handleData.handle) {
-                res.status(404).send({ message: 'Handle not found' });
-                return;
-            }
+            const reference_script = handle.script?.cbor;
 
-            const reference_script = handleData.handle.script?.cbor;
-            
-            let datum = handleRepo.getHandleDatumByName(handleData.handle.name);
+            let datum = handleRepo.getHandleDatumByName(handle.name);
 
-            if (datum && req.headers?.accept?.startsWith('application/json')) {
+            // The embedded `datum` field defaults to JSON-decoded (matching
+            // the rest of the API's "default to JSON" content-negotiation rule).
+            // Clients that want the raw on-chain CBOR-hex opt in via
+            // `Accept: text/plain` (or `application/cbor` / `application/cbor-hex`).
+            if (datum && !wantsRawCbor(req)) {
                 try {
                     datum = await decodeCborToJson({ cborString: datum, schema: {}, defaultKeyType: req.query.default_key_type as DefaultTextFormat });
                 } catch {
-                    res.status(400).send({ message: 'Unable to decode datum to json' });
-                    return;
+                    throw ApiError.datumDecodeFailed();
                 }
             }
 
             res.status(handleRepo.currentHttpStatus()).json({
-                tx_id: handleData.handle.utxo.split('#')[0],
-                index: parseInt(handleData.handle.utxo.split('#')[1]),
-                lovelace: handleData.handle.lovelace,
-                address: handleData.handle.resolved_addresses.ada,
+                tx_id: handle.utxo.split('#')[0],
+                index: parseInt(handle.utxo.split('#')[1]),
+                lovelace: handle.lovelace,
+                address: handle.resolved_addresses.ada,
                 datum,
                 reference_script
             });
@@ -295,38 +287,35 @@ class HandlesController {
     public async getHandleDatum(req: Request<IGetHandleRequest, {}, {}>, res: Response, next: NextFunction) {
         try {
             if (!isDatumEndpointEnabled()) {
-                res.status(400).send({ message: 'Datum endpoint is disabled' });
-                return;
+                throw ApiError.datumEndpointDisabled();
             }
-            const handleData = await HandlesController.getHandleFromRepo(req);
-
-            if (!handleData.handle) {
-                res.status(404).send({ message: 'Handle datum not found' });
-                return;
-            }
+            const { handle } = await HandlesController.getHandleFromRepo(req);
 
             const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
 
-            const handleDatum = handleRepo.getHandleDatumByName(handleData.handle.name);
+            const handleDatum = handleRepo.getHandleDatumByName(handle.name);
 
             if (!handleDatum) {
-                res.status(404).send({ message: 'Handle datum not found' });
+                throw ApiError.datumNotFound();
+            }
+
+            // Default to JSON when Accept is missing or */* — match the API-wide default.
+            const wantsRaw = wantsRawCbor(req);
+            if (wantsRaw) {
+                res.status(handleRepo.currentHttpStatus())
+                    .contentType(`${wantsRaw}; charset=utf-8`)
+                    .send(handleDatum);
                 return;
             }
 
-            if (req.headers?.accept?.startsWith('application/json')) {
-                try {
-                    const decodedDatum = await decodeCborToJson({ cborString: handleDatum, schema: {}, defaultKeyType: req.query.default_key_type as DefaultTextFormat });
-                    res.set('Content-Type', 'application/json');
-                    res.status(handleRepo.currentHttpStatus()).json(decodedDatum);
-                    return;
-                } catch {
-                    res.status(400).send({ message: 'Unable to decode datum to json' });
-                    return;
-                }
+            try {
+                const decodedDatum = await decodeCborToJson({ cborString: handleDatum, schema: {}, defaultKeyType: req.query.default_key_type as DefaultTextFormat });
+                res.set('Content-Type', 'application/json');
+                res.status(handleRepo.currentHttpStatus()).json(decodedDatum);
+                return;
+            } catch {
+                throw ApiError.datumDecodeFailed();
             }
-
-            res.status(handleRepo.currentHttpStatus()).contentType('text/plain; charset=utf-8').send(handleDatum);
         } catch (error) {
             next(error);
         }
@@ -334,22 +323,24 @@ class HandlesController {
 
     public async getHandleScript(req: Request<IGetHandleRequest, {}, {}>, res: Response, next: NextFunction) {
         try {
-            const handleData = await HandlesController.getHandleFromRepo(req);
-
-            if (!handleData?.handle) {
-                res.status(404).send({ message: 'Handle not found' });
-                return;
-            }
+            const { code, handle } = await HandlesController.getHandleFromRepo(req);
 
             const script =
-                handleData.handle.script ??
-                await HandlesController.getScriptByAddress(req, handleData.handle.resolved_addresses?.ada, handleData.handle.name);
+                handle.script ??
+                await HandlesController.getScriptByAddress(req, handle.resolved_addresses?.ada, handle.name);
             if (!script) {
-                res.status(404).send({ message: 'Script not found' });
+                throw ApiError.scriptNotFound();
+            }
+
+            // Per content negotiation: text/plain or CBOR mime types get the raw CBOR hex string;
+            // anything else (including */* and missing Accept) gets the JSON {cbor, type, hash}.
+            const wantsRaw = wantsRawCbor(req);
+            if (wantsRaw && script.cbor) {
+                res.set('Content-Type', `${wantsRaw}; charset=utf-8`).status(code).send(script.cbor);
                 return;
             }
 
-            res.status(handleData.code).json(script);
+            res.status(code).json(script);
         } catch (error) {
             next(error);
         }
@@ -360,26 +351,23 @@ class HandlesController {
             const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
             const { handle, code } = await HandlesController.getHandleFromRepo(req);
 
-            if (!handle) {
-                res.status(404).send({ message: 'Handle not found' });
-                return;
-            }
-
             if (!handle.subhandle_settings || !handle.subhandle_settings.utxo_id) {
-                res.status(404).send({ message: 'SubHandle settings not found' });
+                throw ApiError.subhandleSettingsNotFound();
+            }
+
+            const utxo = handleRepo.getUTxO(handle.subhandle_settings.utxo_id);
+            const wantsText = wantsTextPlain(req);
+
+            if (wantsText) {
+                if (!utxo?.datum) {
+                    throw ApiError.subhandleSettingsNotFound();
+                }
+                res.set('Content-Type', 'text/plain; charset=utf-8').status(code).send(utxo.datum);
                 return;
             }
 
-            const utxo = handleRepo.getUTxO(handle.subhandle_settings.utxo_id); 
             if (utxo) {
-                const subHandleSettingsUTxO = new UTxO(utxo);
-                handle.subhandle_settings.utxo = subHandleSettingsUTxO;
-
-                if (req.headers?.accept?.startsWith('text/plain')) {
-                    res.set('Content-Type', 'text/plain; charset=utf-8');
-                    res.status(code).send(handle.subhandle_settings.utxo.datum);
-                    return;
-                }
+                handle.subhandle_settings.utxo = new UTxO(utxo);
             }
 
             res.status(code).json(handle.subhandle_settings);
@@ -390,27 +378,21 @@ class HandlesController {
 
     public async getSubHandleSettingsUTxO(req: Request<IGetHandleRequest, {}, {}>, res: Response, next: NextFunction) {
         try {
-            const handle = await HandlesController.getHandleFromRepo(req);
+            const { code, handle } = await HandlesController.getHandleFromRepo(req);
 
-            if (!handle?.handle) {
-                res.status(404).send({ message: 'Handle not found' });
-                return;
-            }
-            if (!handle.handle.subhandle_settings?.utxo_id) {
-                res.status(404).send({ message: 'SubHandle settings not found' });
-                return;
+            if (!handle.subhandle_settings?.utxo_id) {
+                throw ApiError.subhandleSettingsNotFound();
             }
 
             const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
-            const utxo = handleRepo.getUTxO(handle.handle.subhandle_settings.utxo_id); 
+            const utxo = handleRepo.getUTxO(handle.subhandle_settings.utxo_id);
             if (!utxo) {
-                res.status(404).send({ message: 'SubHandle settings UTxO not found' });
-                return;
+                throw ApiError.subhandleSettingsUtxoNotFound();
             }
-            
-            handle.handle.subhandle_settings.utxo = new UTxO(utxo);
 
-            res.status(handle.code).json(handle.handle.subhandle_settings.utxo);
+            handle.subhandle_settings.utxo = new UTxO(utxo);
+
+            res.status(code).json(handle.subhandle_settings.utxo);
         } catch (error) {
             next(error);
         }
@@ -418,22 +400,17 @@ class HandlesController {
 
     public async getSubHandles(req: Request<IGetHandleRequest, {}, {}>, res: Response, next: NextFunction) {
         try {
-            const handleData = await HandlesController.getHandleFromRepo(req);
-
-            if (!handleData?.handle) {
-                res.status(404).send({ message: 'Handle not found' });
-                return;
-            }
+            const { code, handle } = await HandlesController.getHandleFromRepo(req);
 
             const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
-            let subHandles = handleRepo.getSubHandlesByRootHandle(handleData.handle.name);
+            let subHandles = handleRepo.getSubHandlesByRootHandle(handle.name);
 
             if (req.query.type) {
                 const type = req.query.type === 'virtual' ? HandleType.VIRTUAL_SUBHANDLE : HandleType.NFT_SUBHANDLE;
                 subHandles = subHandles.filter((subHandle) => subHandle.handle_type === type);
             }
 
-            res.status(handleData.code).json(subHandles);
+            res.status(code).json(subHandles);
         } catch (error) {
             next(error);
         }

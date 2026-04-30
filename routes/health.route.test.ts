@@ -128,6 +128,9 @@ describe('Health Routes Test', () => {
             });
             expect(response.body).not.toHaveProperty('ogmios');
             expect(fetchHealthSpy).not.toHaveBeenCalled();
+            // /health flips between 200/202/503; without no-store a CDN can serve a stale
+            // status indefinitely after the underlying state changes.
+            expect(response.headers['cache-control']).toEqual('no-store');
         });
 
         it('Should return 503 and health stats when ogmios does not connect', async () => {

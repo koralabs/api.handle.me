@@ -118,7 +118,10 @@ describe('Policies Routes Test', () => {
             const response = await request(app?.getServer()).get('/policies');
 
             expect(response.status).toEqual(404);
-            expect(response.body).toEqual({ message: 'Handle policies not found' });
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'policies_not_found',
+                message: 'Handle policies not found'
+            }));
         });
 
         it('should return 404 when policies handle is missing', async () => {
@@ -127,7 +130,10 @@ describe('Policies Routes Test', () => {
             const response = await request(app?.getServer()).get('/policies');
 
             expect(response.status).toEqual(404);
-            expect(response.body).toEqual({ message: 'Handle policies not found' });
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'policies_not_found',
+                message: 'Handle policies not found'
+            }));
         });
 
         it('should return 400 when policies datum decode fails', async () => {
@@ -138,7 +144,10 @@ describe('Policies Routes Test', () => {
             const response = await request(app?.getServer()).get('/policies');
 
             expect(response.status).toEqual(400);
-            expect(response.body).toEqual({ message: 'Unable to decode handle policies datum to json' });
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'policies_decode_failed',
+                message: 'Unable to decode handle policies datum to json'
+            }));
         });
 
         it('should return 202 when store is still catching up', async () => {

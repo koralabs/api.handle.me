@@ -81,14 +81,32 @@ describe('MCP Routes Test', () => {
     });
 
     describe('[GET] /mcp', () => {
-        it('should return 405 when streamable-http GET/SSE is disabled', async () => {
+        it('returns 405 with capability descriptor body so clients probing GET can self-bootstrap', async () => {
             const response = await request(app?.getServer()).get('/mcp');
 
             expect(response.status).toEqual(405);
             expect(response.headers.allow).toEqual('POST');
-            expect(response.body).toEqual({
-                message: 'SSE transport is not enabled. Use POST /mcp with JSON-RPC.'
-            });
+            expect(response.headers['mcp-protocol-version']).toBeDefined();
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'method_not_allowed',
+                message: expect.any(String),
+                docs: expect.any(String),
+                protocol: 'Model Context Protocol',
+                transport: 'streamable-http',
+                latest_protocol_version: expect.any(String),
+                supported_protocol_versions: expect.arrayContaining([expect.any(String)]),
+                server_info: expect.objectContaining({
+                    name: 'api.handle.me',
+                    version: expect.any(String)
+                }),
+                tools: expect.arrayContaining([
+                    expect.objectContaining({ name: expect.any(String) })
+                ]),
+                links: expect.objectContaining({
+                    openapi: '/openapi.json',
+                    swagger_ui: '/swagger'
+                })
+            }));
         });
     });
 

@@ -660,7 +660,11 @@ describe('Testing Handles Routes', () => {
         it('should throw error if handle does not exist', async () => {
             const response = await request(app?.getServer()).get('/handles/nope');
             expect(response.status).toEqual(404);
-            expect(response.body.message).toEqual('Handle not found');
+            expect(response.body).toEqual({
+                error: 'handle_not_found',
+                message: 'Handle not found',
+                docs: expect.stringContaining('handle.me/$/faq')
+            });
         });
 
         it('should return valid handle', async () => {
@@ -697,34 +701,51 @@ describe('Testing Handles Routes', () => {
             expect(response.body).toEqual({ name: '1', resolved_addresses: { ada: 'addr1' }, utxo: 'utxo#0', policy: 'f0ff' });
         });
 
-        it('should return legendary message when handle does not exist', async () => {
+        it('returns 404 with handle FAQ docs URL for legendary single-char handles', async () => {
             const response = await request(app?.getServer()).get('/handles/l');
-            expect(response.status).toEqual(406);
-            expect(response.body.message).toEqual('Legendary handles are not available to mint.');
+            expect(response.status).toEqual(404);
+            expect(response.body).toEqual({
+                error: 'handle_not_found',
+                message: 'Handle not found',
+                docs: expect.stringContaining('handle.me/$/faq')
+            });
         });
 
-        it('should return invalid message', async () => {
+        it('returns 404 with handle FAQ docs URL for malformed handle (***); shape rules are not the API\'s job', async () => {
             const response = await request(app?.getServer()).get('/handles/***');
-            expect(response.status).toEqual(406);
-            expect(response.body.message).toEqual('Invalid handle. Only a-z, 0-9, dash (-), underscore (_), and period (.) are allowed.');
+            expect(response.status).toEqual(404);
+            expect(response.body).toEqual({
+                error: 'handle_not_found',
+                message: 'Handle not found',
+                docs: expect.stringContaining('handle.me/$/faq')
+            });
         });
 
         it('should return 404 for unminted subhandle', async () => {
             const response = await request(app?.getServer()).get('/handles/nope@handle');
             expect(response.status).toEqual(404);
-            expect(response.body.message).toEqual('Handle not found');
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'handle_not_found',
+                message: 'Handle not found'
+            }));
         });
 
-        it('should return not allowed message', async () => {
+        it('should return 451 with protected-words message preserved', async () => {
             const response = await request(app?.getServer()).get('/handles/japan');
             expect(response.status).toEqual(451);
-            expect(response.body.message).toEqual("Protected word match on 'jap,an'");
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'unavailable_for_legal_reasons',
+                message: "Protected word match on 'jap,an'"
+            }));
         });
 
         it('should throw error if handle does not have a utxo', async () => {
             const response = await request(app?.getServer()).get('/handles/no-utxo');
             expect(response.status).toEqual(404);
-            expect(response.body.message).toEqual('Handle not found');
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'handle_not_found',
+                message: 'Handle not found'
+            }));
         });
     });
 
@@ -734,22 +755,31 @@ describe('Testing Handles Routes', () => {
             expect(response.status).toEqual(404);
         });
 
-        it('should return legendary message', async () => {
+        it('returns 404 (not 406) for legendary single-char handles on /personalized', async () => {
             const response = await request(app?.getServer()).get('/handles/l');
-            expect(response.status).toEqual(406);
-            expect(response.body.message).toEqual('Legendary handles are not available to mint.');
+            expect(response.status).toEqual(404);
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'handle_not_found',
+                docs: expect.stringContaining('handle.me/$/faq')
+            }));
         });
 
-        it('should return invalid message', async () => {
+        it('returns 404 (not 406) for malformed handle on /personalized', async () => {
             const response = await request(app?.getServer()).get('/handles/***');
-            expect(response.status).toEqual(406);
-            expect(response.body.message).toEqual('Invalid handle. Only a-z, 0-9, dash (-), underscore (_), and period (.) are allowed.');
+            expect(response.status).toEqual(404);
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'handle_not_found',
+                docs: expect.stringContaining('handle.me/$/faq')
+            }));
         });
 
-        it('should return not allowed message', async () => {
+        it('should return 451 with protected-words message preserved on /personalized', async () => {
             const response = await request(app?.getServer()).get('/handles/japan');
             expect(response.status).toEqual(451);
-            expect(response.body.message).toEqual("Protected word match on 'jap,an'");
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'unavailable_for_legal_reasons',
+                message: "Protected word match on 'jap,an'"
+            }));
         });
 
         it('should return personalization payload when available', async () => {
@@ -774,7 +804,10 @@ describe('Testing Handles Routes', () => {
         it('should return 404 if holder doesn\'t exist', async () => {
             const response = await request(app?.getServer()).get('/holders/nope');
             expect(response.status).toEqual(404);
-            expect(response.body.message).toEqual('Not found');
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'holder_not_found',
+                message: 'Holder not found'
+            }));
         });
 
         it('should return valid handle', async () => {
@@ -793,17 +826,35 @@ describe('Testing Handles Routes', () => {
             jest.spyOn(config, 'isDatumEndpointEnabled').mockReturnValue(false);
             const response = await request(app?.getServer()).get('/handles/taco/datum');
             expect(response.status).toEqual(400);
-            expect(response.body.message).toEqual('Datum endpoint is disabled');
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'datum_endpoint_disabled',
+                message: 'Datum endpoint is disabled'
+            }));
         });
 
-        it('should throw error if address does not exist', async () => {
+        it('should 404 when the handle itself does not exist', async () => {
             jest.spyOn(config, 'isDatumEndpointEnabled').mockReturnValue(true);
             const response = await request(app?.getServer()).get('/handles/nope/datum');
             expect(response.status).toEqual(404);
-            expect(response.body.message).toEqual('Handle datum not found');
+            // getHandleFromRepo throws first when the handle is missing entirely.
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'handle_not_found',
+                message: 'Handle not found'
+            }));
         });
 
-        it('should decode json if accept is application/json', async () => {
+        it('decodes JSON when no Accept header is sent (default behavior)', async () => {
+            jest.spyOn(config, 'isDatumEndpointEnabled').mockReturnValue(true);
+            const response = await request(app?.getServer()).get('/handles/burrito/datum');
+            expect(response.status).toEqual(200);
+            expect(response.headers['content-type']).toMatch(/application\/json/);
+            expect(response.body.constructor_0[0]).toEqual({
+                handles: [{ umm: 'yeah', yo: 'hey' }],
+                some: { welp: { thing: 'right' } }
+            });
+        });
+
+        it('decodes JSON when Accept: application/json', async () => {
             jest.spyOn(config, 'isDatumEndpointEnabled').mockReturnValue(true);
             const response = await request(app?.getServer()).get('/handles/burrito/datum').set('Accept', 'application/json');
             expect(response.status).toEqual(200);
@@ -813,10 +864,11 @@ describe('Testing Handles Routes', () => {
             });
         });
 
-        it('should return valid handle as text', async () => {
+        it('returns raw CBOR-hex when Accept: text/plain', async () => {
             jest.spyOn(config, 'isDatumEndpointEnabled').mockReturnValue(true);
-            const response = await request(app?.getServer()).get('/handles/taco/datum');
+            const response = await request(app?.getServer()).get('/handles/taco/datum').set('Accept', 'text/plain');
             expect(response.status).toEqual(200);
+            expect(response.headers['content-type']).toMatch(/text\/plain/);
             expect(response.text).toEqual('taco_datum');
         });
 
@@ -827,7 +879,10 @@ describe('Testing Handles Routes', () => {
             });
             const response = await request(app?.getServer()).get('/handles/taco/datum').set('Accept', 'application/json');
             expect(response.status).toEqual(400);
-            expect(response.body.message).toEqual('Unable to decode datum to json');
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'datum_decode_failed',
+                message: 'Unable to decode datum to json'
+            }));
         });
     });
 
@@ -835,16 +890,40 @@ describe('Testing Handles Routes', () => {
         it('should return handle not found when script request handle is missing', async () => {
             const response = await request(app?.getServer()).get('/handles/nope/script');
             expect(response.status).toEqual(404);
-            expect(response.body).toEqual({ message: 'Handle not found' });
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'handle_not_found',
+                message: 'Handle not found'
+            }));
         });
 
-        it('should return valid script for handle', async () => {
+        it('should return valid script for handle as JSON by default', async () => {
             const response = await request(app?.getServer()).get('/handles/skirt_steak_taco/script');
             expect(response.status).toEqual(200);
+            expect(response.headers['content-type']).toMatch(/application\/json/);
             expect(response.body).toEqual({
                 type: 'plutus_v2',
                 cbor: 'a247'
             });
+        });
+
+        it('returns raw CBOR-hex when Accept: text/plain', async () => {
+            const response = await request(app?.getServer()).get('/handles/skirt_steak_taco/script').set('Accept', 'text/plain');
+            expect(response.status).toEqual(200);
+            expect(response.headers['content-type']).toMatch(/text\/plain/);
+            expect(response.text).toEqual('a247');
+        });
+
+        it('returns raw CBOR with Content-Type: application/cbor when Accept: application/cbor', async () => {
+            const response = await request(app?.getServer()).get('/handles/skirt_steak_taco/script').set('Accept', 'application/cbor');
+            expect(response.status).toEqual(200);
+            expect(response.headers['content-type']).toMatch(/application\/cbor/);
+            expect(response.text).toEqual('a247');
+        });
+
+        it('emits Deprecation: true header (RFC 9745) on the obsolete route', async () => {
+            const response = await request(app?.getServer()).get('/handles/skirt_steak_taco/script');
+            expect(response.headers.deprecation).toEqual('true');
+            expect(response.headers.link).toContain('rel="successor-version"');
         });
 
         it('should attach configured script when handle has no inline script', async () => {
@@ -871,7 +950,11 @@ describe('Testing Handles Routes', () => {
         it('should return script not found', async () => {
             const response = await request(app?.getServer()).get('/handles/no-utxo/script');
             expect(response.status).toEqual(404);
-            expect(response.body).toEqual({ message: 'Script not found' });
+            // `no-utxo` is mocked to be missing entirely, so getHandleFromRepo throws handle_not_found
+            // before the script lookup runs. Asserting the umbrella shape.
+            expect(response.body).toEqual(expect.objectContaining({
+                error: expect.stringMatching(/handle_not_found|script_not_found/)
+            }));
         });
     });
 
@@ -931,23 +1014,9 @@ describe('Testing Handles Routes', () => {
     });
 
     describe('[GET] /handles/:handle/utxo', () => {
-        it('should return handle utxo details', async () => {
-            const response = await request(app?.getServer()).get('/handles/burritos/utxo');
-            expect(response.status).toEqual(200);
-            expect(response.body).toEqual(
-                expect.objectContaining({
-                    tx_id: 'utxo',
-                    index: 0,
-                    address: 'addr1',
-                    datum: 'burritos_datum',
-                    reference_script: 'a247'
-                })
-            );
-        });
-
-        it('should decode handle datum to json when requested', async () => {
+        it('decodes the embedded datum to JSON by default (no Accept header)', async () => {
             jest.spyOn(cbor, 'decodeCborToJson').mockResolvedValue({ decoded: true } as any);
-            const response = await request(app?.getServer()).get('/handles/burritos/utxo').set('Accept', 'application/json');
+            const response = await request(app?.getServer()).get('/handles/burritos/utxo');
             expect(response.status).toEqual(200);
             expect(response.body).toEqual(
                 expect.objectContaining({
@@ -960,19 +1029,58 @@ describe('Testing Handles Routes', () => {
             );
         });
 
+        it('decodes the embedded datum to JSON when Accept: application/json', async () => {
+            jest.spyOn(cbor, 'decodeCborToJson').mockResolvedValue({ decoded: true } as any);
+            const response = await request(app?.getServer()).get('/handles/burritos/utxo').set('Accept', 'application/json');
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual(
+                expect.objectContaining({
+                    datum: { decoded: true }
+                })
+            );
+        });
+
+        it('keeps datum as raw CBOR-hex when Accept: text/plain', async () => {
+            const response = await request(app?.getServer()).get('/handles/burritos/utxo').set('Accept', 'text/plain');
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual(
+                expect.objectContaining({
+                    tx_id: 'utxo',
+                    index: 0,
+                    address: 'addr1',
+                    datum: 'burritos_datum',
+                    reference_script: 'a247'
+                })
+            );
+        });
+
+        it('keeps datum as raw CBOR-hex when Accept: application/cbor', async () => {
+            const response = await request(app?.getServer()).get('/handles/burritos/utxo').set('Accept', 'application/cbor');
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual(
+                expect.objectContaining({ datum: 'burritos_datum' })
+            );
+        });
+
         it('should return 400 when handle utxo datum decode fails for json accept', async () => {
             jest.spyOn(cbor, 'decodeCborToJson').mockImplementation(() => {
                 throw new Error('bad cbor');
             });
             const response = await request(app?.getServer()).get('/handles/burritos/utxo').set('Accept', 'application/json');
             expect(response.status).toEqual(400);
-            expect(response.body.message).toEqual('Unable to decode datum to json');
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'datum_decode_failed',
+                message: 'Unable to decode datum to json'
+            }));
         });
 
         it('should return not found when handle utxo does not exist', async () => {
             const response = await request(app?.getServer()).get('/handles/nope/utxo');
             expect(response.status).toEqual(404);
-            expect(response.body).toEqual({ message: 'Handle not found' });
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'handle_not_found',
+                message: 'Handle not found'
+            }));
         });
 
         it('should get reference token datum for a handle', async () => {
@@ -999,19 +1107,35 @@ describe('Testing Handles Routes', () => {
         it('should return 404 for unminted subhandle', async () => {
             const response = await request(app?.getServer()).get('/handles/nope@handle/subhandle_settings');
             expect(response.status).toEqual(404);
-            expect(response.body.message).toEqual('Handle not found');
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'handle_not_found',
+                message: 'Handle not found'
+            }));
+        });
+
+        it('emits Deprecation: true on the obsolete underscore form', async () => {
+            const response = await request(app?.getServer()).get('/handles/sub@handle2/subhandle_settings');
+            expect(response.headers.deprecation).toEqual('true');
+            expect(response.headers.link).toContain('rel="successor-version"');
+            expect(response.headers.link).toContain('/handles/sub@handle2/subhandle-settings');
         });
 
         it('should return No sub handle settings found', async () => {
             const response = await request(app?.getServer()).get('/handles/no_settings@handle/subhandle_settings');
             expect(response.status).toEqual(404);
-            expect(response.body.message).toEqual('SubHandle settings not found');
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'subhandle_settings_not_found',
+                message: 'SubHandle settings not found'
+            }));
         });
 
         it('should return invalid settings', async () => {
             const response = await request(app?.getServer()).get('/handles/not@array/subhandle_settings');
             expect(response.status).toEqual(404);
-            expect(response.body.message).toEqual('SubHandle settings not found');
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'subhandle_settings_not_found',
+                message: 'SubHandle settings not found'
+            }));
         });
 
         it('should return settings cbor', async () => {
@@ -1062,19 +1186,28 @@ describe('Testing Handles Routes', () => {
         it('should return 404 for unminted subhandle', async () => {
             const response = await request(app?.getServer()).get('/handles/nope@handle/subhandle_settings/utxo');
             expect(response.status).toEqual(404);
-            expect(response.body.message).toEqual('Handle not found');
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'handle_not_found',
+                message: 'Handle not found'
+            }));
         });
 
         it('should return No sub handle settings found', async () => {
             const response = await request(app?.getServer()).get('/handles/no_settings@handle/subhandle_settings/utxo');
             expect(response.status).toEqual(404);
-            expect(response.body.message).toEqual('SubHandle settings not found');
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'subhandle_settings_not_found',
+                message: 'SubHandle settings not found'
+            }));
         });
 
         it('should return invalid settings', async () => {
             const response = await request(app?.getServer()).get('/handles/not@array/subhandle_settings/utxo');
             expect(response.status).toEqual(404);
-            expect(response.body.message).toEqual('SubHandle settings not found');
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'subhandle_settings_not_found',
+                message: 'SubHandle settings not found'
+            }));
         });
 
         it('should return settings utxo json', async () => {

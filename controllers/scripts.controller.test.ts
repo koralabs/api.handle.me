@@ -292,14 +292,22 @@ describe('Scripts Routes Test', () => {
             // Failure mode: an unknown type could accidentally fall back to a default script instead of surfacing the miss.
             // Negative control: changing the type to `pz_contract` would make this request succeed.
             const response = mockResponse();
+            const next = jest.fn();
             await new ScriptsController().index(
                 mockRequest({latest: true, type: 'unknown'}, { get: () => mockRegistry({}) }),
                 response as any,
-                () => {}
+                next
             );
 
-            expect(response.status).toHaveBeenCalledWith(404);
-            expect(response.send).toHaveBeenCalledWith({ message: 'Latest script not found' });
+            // The controller now throws an ApiError instead of writing res.status/.send directly,
+            // so the canonical error envelope flows through the global error middleware.
+            expect(next).toHaveBeenCalledTimes(1);
+            const err = next.mock.calls[0][0];
+            expect(err).toEqual(expect.objectContaining({
+                status: 404,
+                code: 'script_not_found',
+                message: 'Latest script not found'
+            }));
         });
 
         it('falls back to preview address encoding when NETWORK is missing', async () => {

@@ -432,11 +432,31 @@ class MCPController {
     }
 
     public async get(_req: Request, res: Response, _next: NextFunction): Promise<void> {
+        // GET /mcp returns a discoverability descriptor instead of a bare 405 +
+        // one-sentence message. Status stays 405 (POST is the only valid verb
+        // for the JSON-RPC transport) but the body advertises the capability surface
+        // so an MCP client probing GET can self-bootstrap without out-of-band knowledge.
         res
             .status(405)
             .set('Allow', 'POST')
             .set('MCP-Protocol-Version', LATEST_PROTOCOL_VERSION)
-            .json({ message: 'SSE transport is not enabled. Use POST /mcp with JSON-RPC.' });
+            .json({
+                error: 'method_not_allowed',
+                message: 'SSE transport is not enabled. Use POST /mcp with JSON-RPC 2.0.',
+                docs: 'https://api.handle.me/',
+                protocol: 'Model Context Protocol',
+                transport: 'streamable-http',
+                latest_protocol_version: LATEST_PROTOCOL_VERSION,
+                supported_protocol_versions: [...SUPPORTED_PROTOCOL_VERSIONS],
+                server_info: { name: 'api.handle.me', version: packageJson.version },
+                tools: TOOL_DEFINITIONS,
+                links: {
+                    openapi: '/openapi.json',
+                    openapi_yaml: '/swagger/swagger.yml',
+                    swagger_ui: '/swagger',
+                    home: '/'
+                }
+            });
     }
 }
 

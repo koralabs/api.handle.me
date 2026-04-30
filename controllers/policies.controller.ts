@@ -2,6 +2,7 @@ import { HttpException } from '@koralabs/kora-labs-common';
 import { NextFunction, Request, Response } from 'express';
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
+import { ApiError } from '../utils/apiError';
 import { decodePoliciesDatum, HANDLE_POLICIES_NAME } from '../utils/policies';
 
 class PoliciesController {
@@ -14,15 +15,13 @@ class PoliciesController {
                 policiesDatum = handleRepo.getHandleDatumByName(HANDLE_POLICIES_NAME);
             } catch (error) {
                 if (error instanceof HttpException && error.status === 404) {
-                    res.status(404).json({ message: 'Handle policies not found' });
-                    return;
+                    throw ApiError.policiesNotFound();
                 }
                 throw error;
             }
 
             if (!policiesDatum) {
-                res.status(404).json({ message: 'Handle policies not found' });
-                return;
+                throw ApiError.policiesNotFound();
             }
 
             try {
@@ -30,8 +29,7 @@ class PoliciesController {
                 res.status(handleRepo.currentHttpStatus()).json(policies);
                 return;
             } catch {
-                res.status(400).json({ message: 'Unable to decode handle policies datum to json' });
-                return;
+                throw ApiError.policiesDecodeFailed();
             }
         } catch (error) {
             next(error);

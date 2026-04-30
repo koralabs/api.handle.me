@@ -1,6 +1,7 @@
-import { ScriptDetails, ScriptType } from '@koralabs/kora-labs-common';
+import { ScriptDetails } from '@koralabs/kora-labs-common';
 import { NextFunction, Request, Response } from 'express';
 import { getScriptSlug, getScriptsIndex, resolveScriptTypeQuery } from '../services/scripts.service';
+import { ApiError } from '../utils/apiError';
 
 class ScriptsController {
     public index = async (req: Request<Request>, res: Response, next: NextFunction): Promise<void> => {
@@ -31,8 +32,7 @@ class ScriptsController {
                 const latestScript = allScripts.find(([_, value]) => value.latest);
 
                 if (!latestScript) {
-                    res.status(404).send({ message: 'Latest script not found' });
-                    return;
+                    throw ApiError.latestScriptNotFound();
                 }
 
                 const [scriptAddress, scriptData] = latestScript;

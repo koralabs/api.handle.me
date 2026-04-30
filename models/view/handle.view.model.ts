@@ -1,4 +1,5 @@
-import { HandleType, HttpException, IDrep, Rarity, StoredHandle } from '@koralabs/kora-labs-common';
+import { HandleType, IDrep, Rarity, StoredHandle } from '@koralabs/kora-labs-common';
+import { ApiError } from '../../utils/apiError';
 
 export class HandleViewModel {
     hex: string;
@@ -58,7 +59,7 @@ export class HandleViewModel {
 
     constructor(handle: StoredHandle) {
         if (!handle.utxo) {
-            throw new HttpException(404, 'Handle not found');
+            throw ApiError.handleNotFound();
         }
 
         this.hex = handle.hex;

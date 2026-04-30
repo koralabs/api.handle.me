@@ -86,6 +86,7 @@ class HealthController {
             else if (status != HealthStatus.CURRENT)
                 statusCode = 202;
             
+            res.set('Cache-Control', 'no-store');
             res.status(statusCode).json({
                 status,
                 ...(ogmiosScanningEnabled ? { ogmios } : {}),
