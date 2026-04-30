@@ -978,8 +978,26 @@ export class HandlesRepository {
                         if (utxo.slot >= handle.updated_slot_number) {
                             if (!utxo.datum) {
                                 Logger.log({ message: `No datum for reference token ${handle.name}`, category: LogCategory.ERROR, event: 'processScannedHandleInfo.referenceToken.noDatum' });
-                                // Skip only this asset. `return` previously exited the whole function,
-                                // silently abandoning every remaining handle asset in the UTxO.
+                                // For LBL_000 (virtual subhandle) the on-chain MPT
+                                // includes this name regardless of datum presence
+                                // (engine indexes by asset name, not datum). If we
+                                // skip the save, our computed MPT diverges from
+                                // chain by one entry — see datum-less LBL_000s
+                                // like n4@sh_settings_011 on preview. Set the
+                                // minimum fields needed to land in IndexNames.HANDLE
+                                // and fall through to save; resolved_addresses
+                                // stays whatever _buildHandle gave us (the script
+                                // address holding the token).
+                                if (assetDetails.assetLabel === AssetNameLabel.LBL_000) {
+                                    handle.updated_slot_number = utxo.slot;
+                                    handle.utxo = utxo.id;
+                                    handle.handle_type = HandleType.VIRTUAL_SUBHANDLE;
+                                    break;
+                                }
+                                // LBL_100 datum-less is genuinely broken (a ref
+                                // token without personalization data has nothing
+                                // to contribute); the LBL_222 owner pass for the
+                                // same handle handles the index entry.
                                 continue;
                             }
 
