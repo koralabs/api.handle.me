@@ -125,13 +125,20 @@ const getNetwork = () => {
     return network === 'mainnet' || network === 'preprod' ? network : DEFAULT_NETWORK;
 };
 
-const getUnoptimizedCborUrl = (type: ScriptType) => {
+const getUnoptimizedCborUrl = (type: ScriptType, slugOverride?: string) => {
     const source = SCRIPT_SOURCES[type];
     if (!source) {
         return null;
     }
 
-    return `${GITHUB_RAW_BASE_URL}/${source.repo}/master/deploy/${getNetwork()}/${source.slug}.unoptimized.cbor`;
+    // For families that split one ScriptType across multiple validators
+    // (notably PZ V3 — persprx + perspz + perslfc + persdsg all map to
+    // PZ_CONTRACT), each validator publishes its own unoptimized cbor at
+    // `deploy/<network>/<role-slug>.unoptimized.cbor`. The caller passes
+    // the role slug parsed from the handle name. Without an override we
+    // fall back to the family-level `<type-slug>.unoptimized.cbor`.
+    const slug = slugOverride ?? source.slug;
+    return `${GITHUB_RAW_BASE_URL}/${source.repo}/master/deploy/${getNetwork()}/${slug}.unoptimized.cbor`;
 };
 
 const getDeploymentStateUrl = (type: ScriptType) => {
@@ -174,13 +181,18 @@ export const resolvePreferredScriptTypeForHandleName = (handleName?: string): Sc
     return ScriptType.PZ_CONTRACT;
 };
 
-const fetchUnoptimizedCbor = async (type: ScriptType, cache: Map<ScriptType, Promise<string | undefined>>) => {
-    const cached = cache.get(type);
+const fetchUnoptimizedCbor = async (
+    type: ScriptType,
+    cache: Map<string, Promise<string | undefined>>,
+    slugOverride?: string
+) => {
+    const cacheKey = `${type}::${slugOverride ?? ''}`;
+    const cached = cache.get(cacheKey);
     if (cached) {
         return cached;
     }
 
-    const url = getUnoptimizedCborUrl(type);
+    const url = getUnoptimizedCborUrl(type, slugOverride);
     const request = (async () => {
         if (!url) {
             return;
@@ -199,7 +211,7 @@ const fetchUnoptimizedCbor = async (type: ScriptType, cache: Map<ScriptType, Pro
         }
     })();
 
-    cache.set(type, request);
+    cache.set(cacheKey, request);
     return request;
 };
 
@@ -346,28 +358,53 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
     }
 
     const scripts: { [scriptAddress: string]: ScriptDetails } = {};
-    const unoptimizedCborCache = new Map<ScriptType, Promise<string | undefined>>();
+    const unoptimizedCborCache = new Map<string, Promise<string | undefined>>();
     const assignedScriptHandlesCache = new Map<ScriptType, Promise<string[] | undefined>>();
+
+    // Extract the per-validator role slug from a SubHandle name when one is
+    // present. e.g., `persprx1@handlecontract` → `persprx`. Returns undefined
+    // for monolithic-validator handles like `pers6@handlecontract` so the
+    // family-level `<type-slug>.unoptimized.cbor` is used.
+    const HANDLECONTRACT_SUFFIX = '@handlecontract';
+    const getRoleSlug = (handleName: string): string | undefined => {
+        const lower = handleName.toLowerCase();
+        if (!lower.endsWith(HANDLECONTRACT_SUFFIX)) return undefined;
+        const stem = lower.slice(0, -HANDLECONTRACT_SUFFIX.length);
+        // Match `<slug-with-letters><digits>` — the digit suffix is the
+        // ordinal. The role slug is the letter prefix when it has letters
+        // beyond the family slug.
+        const m = stem.match(/^([a-z]+)\d+$/);
+        if (!m) return undefined;
+        return m[1];
+    };
 
     for (const [scriptType, matches] of matchesByType.entries()) {
         const matchesWithScript = matches.filter(({ handle }) => !!handle.script?.cbor);
         const latestOrdinal = matchesWithScript.length > 0
             ? Math.max(...matchesWithScript.map(({ ordinal }) => ordinal))
             : Math.max(...matches.map(({ ordinal }) => ordinal));
-        const unoptimizedCbor = await fetchUnoptimizedCbor(scriptType, unoptimizedCborCache);
+        const familyUnoptimizedCbor = await fetchUnoptimizedCbor(scriptType, unoptimizedCborCache);
+        const familySlug = SCRIPT_SOURCES[scriptType]?.slug;
         const assignedScriptHandles = await fetchAssignedScriptHandles(scriptType, assignedScriptHandlesCache);
-        // Every assigned handle that has on-chain script bytes is marked
-        // active. Multi-handle assignment supports the PZ V3 split (one
-        // ScriptType backed by four validators — persprx/perspz/perslfc/
-        // persdsg). Falls back to the legacy "highest-ordinal-wins" scheme
-        // when no `assigned_handles.scripts` are specified for the type.
         const activeAssignedHandleNames = new Set<string>(
             (assignedScriptHandles ?? [])
                 .map((handleName) => handleRepo.getHandle(handleName))
                 .filter((handle): handle is StoredHandle => !!handle?.script?.cbor)
                 .map((handle) => handle.name.toLowerCase())
         );
+        // Resolve per-handle unoptimized cbor (used for split-validator
+        // families like PZ V3). When the role slug differs from the family
+        // slug we fetch a separate file; otherwise reuse the family-level cbor.
+        const unoptimizedCborFor = async (handleName: string): Promise<string | undefined> => {
+            const role = getRoleSlug(handleName);
+            if (!role || role === familySlug) {
+                return familyUnoptimizedCbor;
+            }
+            return fetchUnoptimizedCbor(scriptType, unoptimizedCborCache, role);
+        };
+
         for (const { handle, ordinal } of matches) {
+            const unoptimizedCbor = await unoptimizedCborFor(handle.name);
             const scriptEntry = await buildScriptEntry(
                 handle,
                 scriptType,
@@ -381,14 +418,12 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
             }
         }
 
-        // If any assigned handle wasn't already covered by `matches` (e.g.,
-        // its name doesn't match the slug-based parser), build entries for
-        // those too so they appear in /scripts.
         const matchedNames = new Set(matches.map(({ handle }) => handle.name.toLowerCase()));
         for (const assignedName of activeAssignedHandleNames) {
             if (matchedNames.has(assignedName)) continue;
             const assignedHandle = handleRepo.getHandle(assignedName);
             if (assignedHandle?.script?.cbor) {
+                const unoptimizedCbor = await unoptimizedCborFor(assignedHandle.name);
                 const scriptEntry = await buildScriptEntry(assignedHandle, scriptType, true, unoptimizedCbor);
                 if (scriptEntry) {
                     scripts[scriptEntry[0]] = scriptEntry[1];
