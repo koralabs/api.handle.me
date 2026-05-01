@@ -57,6 +57,17 @@ const createRepo = (req: Request<any>): HandlesRepository | null => {
     return new HandlesRepository(new registry.handlesStore());
 };
 
+// Some app slugs (notably PZ V3 — `pers`) split the validator across multiple
+// roles and use a `<slug><role><ordinal>` SubHandle naming scheme:
+//   pers6@handlecontract                  → V2 monolith
+//   persprx1 / perspz1 / perslfc1 /
+//     persdsg1 @handlecontract              → V3 split (proxy / personalize /
+//                                                       lifecycle / designer-
+//                                                       settings observers)
+// All four V3 SubHandles map to ScriptType.PZ_CONTRACT and are exposed
+// individually in /scripts (the BFF picks per-validator by handle name).
+const PERS_V3_ROLES = new Set(['prx', 'pz', 'lfc', 'dsg']);
+
 const parseScriptHandle = (handleName: string): { type: ScriptType; ordinal: number } | null => {
     const normalizedName = `${handleName}`.toLowerCase();
     if (!normalizedName.endsWith(HANDLE_SUFFIX)) {
@@ -69,7 +80,16 @@ const parseScriptHandle = (handleName: string): { type: ScriptType; ordinal: num
             continue;
         }
 
-        const ordinal = slugWithOrdinal.slice(slug.length);
+        let ordinal = slugWithOrdinal.slice(slug.length);
+        // PZ V3 split: tolerate the role infix (`prx`, `pz`, `lfc`, `dsg`)
+        // between slug and ordinal so persprx1/perspz1/perslfc1/persdsg1
+        // all parse as PZ_CONTRACT subhandles.
+        if (slug === 'pers' && !/^\d+$/.test(ordinal)) {
+            const roleMatch = ordinal.match(/^(prx|pz|lfc|dsg)(\d+)$/);
+            if (roleMatch && PERS_V3_ROLES.has(roleMatch[1])) {
+                ordinal = roleMatch[2];
+            }
+        }
         if (!/^\d+$/.test(ordinal)) {
             return null;
         }
