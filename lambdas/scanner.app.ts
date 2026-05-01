@@ -232,11 +232,11 @@ const shouldTriggerReindexShortcut = (event: any): boolean => {
     }
 };
 
-const extractRepairHandlesFromEvent = (event: any): string[] | null => {
+const extractRepairHandlesFromEvent = (event: any): { handles: string[]; force: boolean } | null => {
     if (!isFunctionUrlEvent(event)) return null;
     const path = `${event?.rawPath ?? event?.requestContext?.http?.path ?? ''}`.trim();
     if (path !== '/repair-handles' && path !== '/scanner/repair-handles') return null;
-    if (!event?.body) return [];
+    if (!event?.body) return { handles: [], force: false };
     let rawBody = `${event.body}`;
     if (event?.isBase64Encoded) {
         rawBody = Buffer.from(rawBody, 'base64').toString('utf8');
@@ -244,7 +244,7 @@ const extractRepairHandlesFromEvent = (event: any): string[] | null => {
     try {
         const parsedBody = JSON.parse(rawBody);
         if (Array.isArray(parsedBody?.handles) && parsedBody.handles.every((h: any) => typeof h === 'string')) {
-            return parsedBody.handles;
+            return { handles: parsedBody.handles, force: parseBooleanValue(parsedBody?.force) };
         }
     } catch { /* fall through */ }
     return null;
@@ -1020,7 +1020,7 @@ const clearStaleLockIfNeeded = (metrics: ReturnType<HandlesRepository['getMetric
  * Flow: load stored handles → asset_utxos for canonical locations → identify
  * drift → fetch tx_info → apply the same repair as processRollback.
  */
-const repairHandles = async (handleNames: string[]): Promise<{ checked: number; repaired: number; notFound: number; inserted: number }> => {
+const repairHandles = async (handleNames: string[], force = false): Promise<{ checked: number; repaired: number; notFound: number; inserted: number }> => {
     if (!handleNames.length) return { checked: 0, repaired: 0, notFound: 0, inserted: 0 };
 
     const storedHandles = store
@@ -1085,11 +1085,15 @@ const repairHandles = async (handleNames: string[]): Promise<{ checked: number; 
         }
     }, KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS);
 
-    // Classify each target: drifted (stored tx ≠ canonical) | missing-and-on-chain (insert) | ok | not-on-chain
+    // Classify each target: drifted (stored tx ≠ canonical) | missing-and-on-chain (insert) | ok | not-on-chain.
+    // `force` extends the drift set to every stored handle that has a canonical entry on-chain — used when
+    // the on-chain UTxO hasn't moved but a stored field needs refreshing (e.g., stale `script.type` after
+    // the V2/V3 hash-prefix fix). Without it, repair is a no-op for handles whose UTxO is up-to-date.
     const driftedHandles = storedHandles.filter((h) => {
         const storedTx = h.utxo?.split('#')[0];
         const canonical = canonicalTxByHandle.get(h.name);
-        return canonical && storedTx && storedTx !== canonical;
+        if (!canonical || !storedTx) return false;
+        return force || storedTx !== canonical;
     });
     const insertNames = missingNames.filter((n) => canonicalTxByHandle.has(n));
     const handlesToTouch = new Set<string>([...driftedHandles.map((h) => h.name), ...insertNames]);
@@ -1478,17 +1482,17 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
             return buildFunctionUrlResponse(200, { message: 'Reindex complete' });
         }
 
-        const repairList = extractRepairHandlesFromEvent(event);
-        if (repairList !== null) {
+        const repairRequest = extractRepairHandlesFromEvent(event);
+        if (repairRequest !== null) {
             if (!isWhitelistedScannerShortcutRequest(event)) {
                 return buildFunctionUrlResponse(401, { message: 'Unauthorized' });
             }
             Logger.log({
-                message: `Running handle repair shortcut for ${repairList.length} handles`,
+                message: `Running handle repair shortcut for ${repairRequest.handles.length} handles${repairRequest.force ? ' (force=true)' : ''}`,
                 category: LogCategory.INFO,
                 event: 'scannerLambda.repairShortcut'
             });
-            const result = await repairHandles(repairList);
+            const result = await repairHandles(repairRequest.handles, repairRequest.force);
             return {
                 isBase64Encoded: false,
                 statusCode: 200,
