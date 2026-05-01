@@ -326,6 +326,10 @@ interface UtxoRecord {
     inlineDatumCbor?: string;
     referenceScriptHash?: string;
     referenceScriptCbor?: string;
+    // Plutus language tag (`plutusV1` / `plutusV2` / `plutusV3`). Required so
+    // /scripts can derive the right validator hash — without it, V3 scripts
+    // were hashed as V2 and exposed at non-existent script addresses.
+    referenceScriptType?: string;
     fetchedVia: 'koios' | 'blockfrost';
     poolName: string;
 }
@@ -395,6 +399,7 @@ const toKoiosRecords = (rows: any[], batch: WorkItem[], poolName: string): UtxoR
                 inlineDatumCbor: r.inline_datum?.bytes,
                 referenceScriptHash: r.reference_script?.hash,
                 referenceScriptCbor: r.reference_script?.bytes,
+                referenceScriptType: r.reference_script?.type,
                 fetchedVia: 'koios',
                 poolName
             });
@@ -750,6 +755,7 @@ interface GroupedUtxo {
     blockHeight?: number;
     inlineDatumCbor?: string;
     referenceScriptCbor?: string;
+    referenceScriptType?: string;
     handlesByPolicy: Map<string, Set<string>>;
 }
 
@@ -767,6 +773,7 @@ const groupUtxosByOutput = (records: UtxoRecord[]): GroupedUtxo[] => {
                 blockHeight: r.blockHeight,
                 inlineDatumCbor: r.inlineDatumCbor,
                 referenceScriptCbor: r.referenceScriptCbor,
+                referenceScriptType: r.referenceScriptType,
                 handlesByPolicy: new Map()
             };
             byKey.set(key, g);
@@ -827,7 +834,7 @@ const buildUtxosWithTxInfo = (
             address: g.address,
             lovelace: Number(g.lovelace || 0),
             datum: g.inlineDatumCbor,
-            script: g.referenceScriptCbor ? { type: 'plutus', cbor: g.referenceScriptCbor } : undefined,
+            script: g.referenceScriptCbor ? { type: g.referenceScriptType ?? 'plutusV2', cbor: g.referenceScriptCbor } : undefined,
             handles: Array.from(g.handlesByPolicy.entries()).map(([p, set]) => [p, Array.from(set)]),
             mint: Array.from(mintByPolicy.entries()).map(([p, arr]) => [p, arr]),
             metadata

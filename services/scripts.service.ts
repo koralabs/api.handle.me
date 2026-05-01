@@ -244,12 +244,31 @@ const fetchAssignedScriptHandles = async (type: ScriptType, cache: Map<ScriptTyp
 
 export const getScriptSlug = (type: ScriptType) => SCRIPT_SOURCES[type]?.slug ?? type;
 
-const getValidatorHashFromScriptCbor = (scriptCbor?: string) => {
-    if (!scriptCbor || !/^[0-9a-f]+$/i.test(scriptCbor) || scriptCbor.length % 2 !== 0) {
+// Plutus validator hash = blake2b-224(<lang-tag> || cbor). The leading byte
+// tags the language so a script's hash differs across versions even when
+// the bytes are identical. The api stores `script.type` from upstream data
+// sources (koios `reference_script.type`, blockfrost `scripts/{hash}.type`);
+// values can be 'plutusV1'/'plutusV2'/'plutusV3' (modern) or
+// 'PlutusScriptV1'/'PlutusScriptV2' (legacy from older scans). Anything we
+// don't recognize falls back to V2 — historically the only Plutus version
+// the api ingested.
+const PLUTUS_LANGUAGE_PREFIX: Record<string, string> = {
+    plutusV1: '01',
+    plutusV2: '02',
+    plutusV3: '03',
+    PlutusScriptV1: '01',
+    PlutusScriptV2: '02',
+    PlutusScriptV3: '03'
+};
+
+const getValidatorHashFromScript = (script?: { cbor?: string; type?: string }) => {
+    const cbor = script?.cbor;
+    if (!cbor || !/^[0-9a-f]+$/i.test(cbor) || cbor.length % 2 !== 0) {
         return null;
     }
 
-    return blake2b(Buffer.from(`02${scriptCbor}`, 'hex'), 28);
+    const prefix = PLUTUS_LANGUAGE_PREFIX[script?.type ?? ''] ?? '02';
+    return blake2b(Buffer.from(`${prefix}${cbor}`, 'hex'), 28);
 };
 
 const buildScriptEntry = async (
@@ -260,7 +279,7 @@ const buildScriptEntry = async (
     scriptSourceHandle: StoredHandle = handle
 ): Promise<[string, ScriptDetails] | null> => {
     const refScriptAddress = scriptSourceHandle.resolved_addresses?.ada;
-    const validatorHash = getValidatorHashFromScriptCbor(scriptSourceHandle.script?.cbor);
+    const validatorHash = getValidatorHashFromScript(scriptSourceHandle.script);
     if (!refScriptAddress || !validatorHash || !scriptSourceHandle.script?.cbor) {
         return null;
     }

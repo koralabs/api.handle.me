@@ -195,7 +195,13 @@ export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[], datumByHash 
                 datum: resolveKoiosOutputDatum(o, datumByHash),
                 script: o.reference_script
                     ? {
-                        type: 'PlutusScriptV2',
+                        // Preserve Plutus language version from koios so the
+                        // /scripts hash computation can pick the right tag.
+                        // Hardcoding 'PlutusScriptV2' broke V3 deployments —
+                        // the resulting validator hash was wrong, and the
+                        // /scripts response advertised V3 scripts at a
+                        // V2-derived address that didn't exist on chain.
+                        type: o.reference_script.type ?? 'plutusV2',
                         cbor: o.reference_script.bytes
                     }
                     : undefined
@@ -306,13 +312,22 @@ export const fetchBlockfrostTxInfo = async (txHash: string): Promise<KoiosTxInfo
             reference_script: null as { bytes: string; type: string } | null
         }));
 
-    // Fetch reference script bytes for outputs that have them
+    // Fetch reference script bytes (and language tag) for outputs that have
+    // them. The /cbor endpoint only returns the bytes — the language is on
+    // the /scripts/{hash} metadata endpoint and we need it so the api
+    // computes the right validator hash for V3 scripts (was hardcoded V2).
     for (const output of outputs) {
         const bfOutput = (utxoData.outputs ?? []).find((o: any) => o.output_index === output.tx_index && !o.collateral);
         if (bfOutput?.reference_script_hash) {
             try {
-                const scriptCbor = await blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}/cbor`);
-                output.reference_script = { bytes: scriptCbor.cbor ?? '', type: 'PlutusScriptV2' };
+                const [scriptCbor, scriptMeta] = await Promise.all([
+                    blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}/cbor`),
+                    blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}`).catch(() => ({}))
+                ]);
+                output.reference_script = {
+                    bytes: scriptCbor.cbor ?? '',
+                    type: scriptMeta?.type ?? 'plutusV2'
+                };
             } catch (e: any) {
                 Logger.log({
                     message: `Failed to fetch reference script ${bfOutput.reference_script_hash} for ${txHash}#${output.tx_index}: ${e?.message ?? e}`,
