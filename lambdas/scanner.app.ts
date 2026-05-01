@@ -232,24 +232,6 @@ const shouldTriggerReindexShortcut = (event: any): boolean => {
     }
 };
 
-const extractRepairHandlesFromEvent = (event: any): { handles: string[]; force: boolean } | null => {
-    if (!isFunctionUrlEvent(event)) return null;
-    const path = `${event?.rawPath ?? event?.requestContext?.http?.path ?? ''}`.trim();
-    if (path !== '/repair-handles' && path !== '/scanner/repair-handles') return null;
-    if (!event?.body) return { handles: [], force: false };
-    let rawBody = `${event.body}`;
-    if (event?.isBase64Encoded) {
-        rawBody = Buffer.from(rawBody, 'base64').toString('utf8');
-    }
-    try {
-        const parsedBody = JSON.parse(rawBody);
-        if (Array.isArray(parsedBody?.handles) && parsedBody.handles.every((h: any) => typeof h === 'string')) {
-            return { handles: parsedBody.handles, force: parseBooleanValue(parsedBody?.force) };
-        }
-    } catch { /* fall through */ }
-    return null;
-};
-
 const isWhitelistedScannerShortcutRequest = (event: any): boolean => {
     const apiKey = getEventHeader(event, 'api-key');
     return !!apiKey && getWhitelistedApiKeys().includes(apiKey);
@@ -1008,164 +990,6 @@ const clearStaleLockIfNeeded = (metrics: ReturnType<HandlesRepository['getMetric
     return true;
 };
 
-/**
- * Window-agnostic repair for a specific list of handle names.
- *
- * Unlike processRollback (which is scoped to a 2160-block window and catches
- * orphaned + drifted UTxOs within that window), this function repairs handles
- * regardless of how old their stored state is. It's used by the one-time
- * full-chain verification script to fix handles whose stored tx has drifted
- * further back than the rollback window reaches.
- *
- * Flow: load stored handles → asset_utxos for canonical locations → identify
- * drift → fetch tx_info → apply the same repair as processRollback.
- */
-const repairHandles = async (handleNames: string[], force = false): Promise<{ checked: number; repaired: number; notFound: number; inserted: number }> => {
-    if (!handleNames.length) return { checked: 0, repaired: 0, notFound: 0, inserted: 0 };
-
-    const storedHandles = store
-        .pipeline(() => {
-            handleNames.forEach((name) => handlesRepo.getHandle(name));
-        })
-        .filter(Boolean) as StoredHandle[];
-
-    const storedByName = new Map(storedHandles.map((h) => [h.name, h]));
-    const missingNames = handleNames.filter((n) => !storedByName.has(n));
-
-    // Build asset_utxos batches for all target handles — both drift-check for
-    // existing ones and broad lookup for missing ones.
-    const networkKey = NETWORK.toLowerCase() as Network;
-    const activePolicies = Object.keys(HANDLE_POLICIES[networkKey] ?? {});
-    const batchedAssets: [string, string][][] = [];
-    let assetNames: [string, string][] = [];
-    const pushAsset = (policy: string, hex: string) => {
-        assetNames.push([policy, hex]);
-        if (JSON.stringify({ _asset_list: assetNames, _extended: true }).length >= 4700) {
-            batchedAssets.push(assetNames);
-            assetNames = [];
-        }
-    };
-    for (const storedHandle of storedHandles) {
-        const { isCip67 } = getHandleNameFromAssetName(storedHandle.hex);
-        pushAsset(storedHandle.policy, storedHandle.hex);
-        if (isCip67) {
-            const hexWithoutLabel = storedHandle.hex.slice(8);
-            pushAsset(storedHandle.policy, `${AssetNameLabel.LBL_100}${hexWithoutLabel}`);
-            pushAsset(storedHandle.policy, `${AssetNameLabel.LBL_001}${hexWithoutLabel}`);
-        }
-    }
-    // Missing handles: we don't know the asset form, so try every variant on
-    // every active policy. Koios ignores non-existent assets cheaply.
-    for (const name of missingNames) {
-        const utf8hex = Buffer.from(name, 'utf8').toString('hex');
-        for (const policy of activePolicies) {
-            pushAsset(policy, utf8hex); // legacy (no label)
-            pushAsset(policy, `${AssetNameLabel.LBL_222}${utf8hex}`); // CIP68 owner
-            pushAsset(policy, `${AssetNameLabel.LBL_100}${utf8hex}`); // CIP68 reference
-            pushAsset(policy, `${AssetNameLabel.LBL_000}${utf8hex}`); // virtual subhandle
-        }
-    }
-    if (assetNames.length) batchedAssets.push(assetNames);
-
-    // Query canonical state
-    const canonicalTxHashes: string[] = [];
-    const canonicalTxByHandle = new Map<string, string>();
-    await asyncForEach(batchedAssets, async (batch) => {
-        const koiosUtxos = await fetchAssetUtxoBatchWithRetry(batch);
-        if (koiosUtxos !== null) {
-            for (const utxo of koiosUtxos) {
-                canonicalTxHashes.push(utxo.tx_hash);
-                for (const asset of utxo.asset_list ?? []) {
-                    if (HANDLE_POLICIES.contains(NETWORK as Network, asset.policy_id)) {
-                        const { name } = getHandleNameFromAssetName(asset.asset_name);
-                        canonicalTxByHandle.set(name, utxo.tx_hash);
-                    }
-                }
-            }
-        }
-    }, KOIOS_ASSET_UTXOS_MIN_INTERVAL_MS);
-
-    // Classify each target: drifted (stored tx ≠ canonical) | missing-and-on-chain (insert) | ok | not-on-chain.
-    // `force` extends the drift set to every stored handle that has a canonical entry on-chain — used when
-    // the on-chain UTxO hasn't moved but a stored field needs refreshing (e.g., stale `script.type` after
-    // the V2/V3 hash-prefix fix). Without it, repair is a no-op for handles whose UTxO is up-to-date.
-    const driftedHandles = storedHandles.filter((h) => {
-        const storedTx = h.utxo?.split('#')[0];
-        const canonical = canonicalTxByHandle.get(h.name);
-        if (!canonical || !storedTx) return false;
-        return force || storedTx !== canonical;
-    });
-    const insertNames = missingNames.filter((n) => canonicalTxByHandle.has(n));
-    const handlesToTouch = new Set<string>([...driftedHandles.map((h) => h.name), ...insertNames]);
-
-    if (!handlesToTouch.size) {
-        return { checked: handleNames.length, repaired: 0, notFound: handleNames.length - storedHandles.length, inserted: 0 };
-    }
-
-    // Fetch full tx_info for the canonical UTxOs we care about
-    const canonicalHandleUTxOs = await getBatchedUTxOsWithFallback([...new Set(canonicalTxHashes)]);
-    const touchedUTxOs = canonicalHandleUTxOs
-        .map((utxo) => filterUTxOToHandleNames(utxo, handlesToTouch))
-        .filter((utxo): utxo is UTxOWithTxInfo => !!utxo);
-
-    // For drifted handles only, collect stale stored UTxO ids to remove
-    const staleUtxoIds = new Set<string>();
-    for (const h of driftedHandles) {
-        if (h.utxo) staleUtxoIds.add(h.utxo);
-    }
-
-    // Update holders for drifted handles (missing ones will be holder-indexed inside updateHandleIndexes)
-    if (driftedHandles.length) {
-        const stakeAddresses = driftedHandles.map((h) => buildHolderInfo(h.resolved_addresses.ada).address);
-        const holderHandles = store.pipeline(() => {
-            stakeAddresses.forEach((address) => store.getValuesFromIndexedSet(IndexNames.HOLDER, address));
-        }) as Set<string>[];
-        const holdersMap = new Map<string, Set<string>>();
-        stakeAddresses.forEach((address, index) => holdersMap.set(address, holderHandles[index]));
-        store.pipeline(() => {
-            driftedHandles.forEach((handle) => handlesRepo.updateHolder(handle, holdersMap));
-        });
-    }
-
-    // Remove stale UTxOs, apply canonical state (this is insert-friendly: new UTxOs go in cleanly)
-    if (staleUtxoIds.size) handlesRepo.removeUTxOs([...staleUtxoIds]);
-    handlesRepo.addUTxOsWithMintData(touchedUTxOs);
-    handlesRepo.addMintDataFromUTxOs(touchedUTxOs);
-
-    // Rebuild handle indexes — updateHandleIndexes tolerates existingHandle=undefined
-    const touchedNames = [...handlesToTouch];
-    const storedHandlesMap = new Map<string, StoredHandle>(driftedHandles.map((h) => [h.name, h]));
-    const retrievedMintingData = store.pipeline(() => {
-        touchedNames.forEach((name) => handlesRepo.getHandleMintingData(name));
-    }) as Set<string>[];
-    const mintValueIndex: Map<string, MintingData[]> = new Map();
-    retrievedMintingData.forEach((md, i) => {
-        mintValueIndex.set(touchedNames[i], Array.from(md).map((m) => JSON.parse(m)));
-    });
-    store.pipeline(() => {
-        for (const utxo of touchedUTxOs) {
-            // Same repair semantics as processRollback: suppress the double-mint bump so repeated
-            // drift repair doesn't inflate `handle.amount` past the burn threshold in removeHandle().
-            handlesRepo.updateHandleIndexes(utxo, mintValueIndex, storedHandlesMap, undefined, { suppressDoubleMintDetection: true });
-        }
-    });
-
-    const logNames = touchedNames.slice(0, 10).join(', ');
-    const logSuffix = touchedNames.length > 10 ? ` (+${touchedNames.length - 10})` : '';
-    Logger.log({
-        message: `Repaired handles — drifted=${driftedHandles.length}, inserted=${insertNames.length}: ${logNames}${logSuffix}`,
-        category: LogCategory.NOTIFY,
-        event: 'scannerLambda.repairHandles'
-    });
-
-    return {
-        checked: handleNames.length,
-        repaired: driftedHandles.length,
-        notFound: missingNames.length - insertNames.length,
-        inserted: insertNames.length
-    };
-};
-
 const scan = async () => {
     Logger.local(`Running scan...`);
     const metrics = handlesRepo.getMetrics();
@@ -1425,20 +1249,18 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
     store.initialize();
     logBreadcrumb('store_initialized');
     const isReindexShortcut = shouldTriggerReindexShortcut(event);
-    const isRepairShortcut = extractRepairHandlesFromEvent(event) !== null;
     const leaseOwner = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const leaseAcquired = acquireScannerLease(leaseOwner);
     if (!leaseAcquired) {
         // Lease is held by another scanner invocation. Scheduled cron ticks just skip.
-        // Shortcut paths (reindex / repair) used to proceed without the lease, which let
-        // them race with the scanner on the same Valkey keys (correctness-spiral V3).
-        // Refuse with a 409 instead so the operator retries after the active scan exits;
-        // the lease TTL is 60s, so retries are cheap.
-        if (isReindexShortcut || isRepairShortcut) {
-            logBreadcrumb(`lease_not_acquired_${isReindexShortcut ? 'reindex' : 'repair'}_shortcut_refused`);
+        // The reindex shortcut used to proceed without the lease, which let it race the
+        // scanner on the same Valkey keys (correctness-spiral V3). Refuse with a 409
+        // instead so the operator retries after the active scan exits; lease TTL is 60s.
+        if (isReindexShortcut) {
+            logBreadcrumb('lease_not_acquired_reindex_shortcut_refused');
             return buildFunctionUrlResponse(409, {
                 message: 'Scanner is currently active. Retry shortly.',
-                shortcut: isReindexShortcut ? 'reindex' : 'repair'
+                shortcut: 'reindex'
             });
         }
         logBreadcrumb('lease_not_acquired_skipping');
@@ -1480,25 +1302,6 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
             });
             await processReindex();
             return buildFunctionUrlResponse(200, { message: 'Reindex complete' });
-        }
-
-        const repairRequest = extractRepairHandlesFromEvent(event);
-        if (repairRequest !== null) {
-            if (!isWhitelistedScannerShortcutRequest(event)) {
-                return buildFunctionUrlResponse(401, { message: 'Unauthorized' });
-            }
-            Logger.log({
-                message: `Running handle repair shortcut for ${repairRequest.handles.length} handles${repairRequest.force ? ' (force=true)' : ''}`,
-                category: LogCategory.INFO,
-                event: 'scannerLambda.repairShortcut'
-            });
-            const result = await repairHandles(repairRequest.handles, repairRequest.force);
-            return {
-                isBase64Encoded: false,
-                statusCode: 200,
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify(result)
-            };
         }
 
         const metrics = handlesRepo.getMetrics();
