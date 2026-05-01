@@ -261,6 +261,36 @@ describe('Scripts Routes Test', () => {
             }));
         });
 
+        it('prefers persprx (spend proxy) when multiple PZ V3 handles are all marked latest', async () => {
+            // Feature: PZ V3 splits one PZ_CONTRACT family across four validators (proxy + three withdraw observers),
+            // and all four can be marked `latest: true`. `latest=true&type=pers` is consumed by the BFF migrate handler
+            // as the migration target — that is unambiguously the spend proxy (`persprx`), since observers don't have a spend side.
+            // Failure mode: returning `persdsg` / `perspz` / `perslfc` would send the LBL_100 ref token to a withdraw-only
+            //  contract that cannot be spent, bricking the migrated handle.
+            // Negative control: removing the persprx preference would let object-key iteration order win, which is alphabetical
+            //  (`persdsg1` first) — that's the failure we are guarding against.
+            mockFetch({ pers: 'pers-unoptimized' });
+            const handles = {
+                'persdsg1@handlecontract': buildHandle('persdsg1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d03dd'),
+                'perslfc1@handlecontract': buildHandle('perslfc1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d03ff'),
+                'persprx1@handlecontract': buildHandle('persprx1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d03aa'),
+                'perspz1@handlecontract': buildHandle('perspz1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d03cc')
+            };
+
+            const response = mockResponse();
+            await new ScriptsController().index(
+                mockRequest({ latest: true, type: 'pers' }, { get: () => mockRegistry(handles) }),
+                response as any,
+                () => {}
+            );
+
+            expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+                scriptAddress: buildScriptAddress(handles['persprx1@handlecontract'].script.cbor),
+                handle: 'persprx1@handlecontract',
+                latest: true
+            }));
+        });
+
         it('still accepts deprecated legacy type aliases during the migration', async () => {
             // Feature: legacy `type` aliases should continue to work during the deprecation window while callers migrate to slug names.
             // Failure mode: switching the public query contract to slugs could break existing clients immediately.
