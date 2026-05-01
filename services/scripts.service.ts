@@ -320,17 +320,23 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
             : Math.max(...matches.map(({ ordinal }) => ordinal));
         const unoptimizedCbor = await fetchUnoptimizedCbor(scriptType, unoptimizedCborCache);
         const assignedScriptHandles = await fetchAssignedScriptHandles(scriptType, assignedScriptHandlesCache);
-        const activeAssignedHandleName = assignedScriptHandles
-            ?.map((handleName) => handleRepo.getHandle(handleName))
-            .find((handle): handle is StoredHandle => !!handle?.script?.cbor)
-            ?.name
-            ?.toLowerCase();
+        // Every assigned handle that has on-chain script bytes is marked
+        // active. Multi-handle assignment supports the PZ V3 split (one
+        // ScriptType backed by four validators — persprx/perspz/perslfc/
+        // persdsg). Falls back to the legacy "highest-ordinal-wins" scheme
+        // when no `assigned_handles.scripts` are specified for the type.
+        const activeAssignedHandleNames = new Set<string>(
+            (assignedScriptHandles ?? [])
+                .map((handleName) => handleRepo.getHandle(handleName))
+                .filter((handle): handle is StoredHandle => !!handle?.script?.cbor)
+                .map((handle) => handle.name.toLowerCase())
+        );
         for (const { handle, ordinal } of matches) {
             const scriptEntry = await buildScriptEntry(
                 handle,
                 scriptType,
-                activeAssignedHandleName
-                    ? handle.name.toLowerCase() === activeAssignedHandleName
+                activeAssignedHandleNames.size > 0
+                    ? activeAssignedHandleNames.has(handle.name.toLowerCase())
                     : ordinal === latestOrdinal,
                 unoptimizedCbor
             );
@@ -339,10 +345,15 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
             }
         }
 
-        if (activeAssignedHandleName && !matches.some(({ handle }) => handle.name.toLowerCase() === activeAssignedHandleName)) {
-            const activeAssignedHandle = handleRepo.getHandle(activeAssignedHandleName);
-            if (activeAssignedHandle?.script?.cbor) {
-                const scriptEntry = await buildScriptEntry(activeAssignedHandle, scriptType, true, unoptimizedCbor);
+        // If any assigned handle wasn't already covered by `matches` (e.g.,
+        // its name doesn't match the slug-based parser), build entries for
+        // those too so they appear in /scripts.
+        const matchedNames = new Set(matches.map(({ handle }) => handle.name.toLowerCase()));
+        for (const assignedName of activeAssignedHandleNames) {
+            if (matchedNames.has(assignedName)) continue;
+            const assignedHandle = handleRepo.getHandle(assignedName);
+            if (assignedHandle?.script?.cbor) {
+                const scriptEntry = await buildScriptEntry(assignedHandle, scriptType, true, unoptimizedCbor);
                 if (scriptEntry) {
                     scripts[scriptEntry[0]] = scriptEntry[1];
                 }
