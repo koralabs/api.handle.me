@@ -59,16 +59,33 @@ const createRepo = (req: Request<any>): HandlesRepository | null => {
 
 // Some app slugs (notably PZ V3 — `pers`) split the validator across multiple
 // roles and use a `<slug><role><ordinal>` SubHandle naming scheme:
-//   pers6@handlecontract                  → V2 monolith
+//   pers6@handlecontract                  → V2 monolith (no role)
 //   persprx1 / perspz1 / perslfc1 /
 //     persdsg1 @handlecontract              → V3 split (proxy / personalize /
 //                                                       lifecycle / designer-
 //                                                       settings observers)
 // All four V3 SubHandles map to ScriptType.PZ_CONTRACT and are exposed
 // individually in /scripts (the BFF picks per-validator by handle name).
-const PERS_V3_ROLES = new Set(['prx', 'pz', 'lfc', 'dsg']);
+//
+// `proxy` is the spend script — the address callers migrate to. Observers
+// are withdraw-zero validators delegated to from the proxy; they have no
+// spend side and must never be returned as a migration target.
+type ScriptRole = 'proxy' | 'observer';
 
-const parseScriptHandle = (handleName: string): { type: ScriptType; ordinal: number } | null => {
+const PERS_V3_ROLE_KIND: Record<string, ScriptRole> = {
+    prx: 'proxy',
+    pz: 'observer',
+    lfc: 'observer',
+    dsg: 'observer'
+};
+
+type ParsedScriptHandle = {
+    type: ScriptType;
+    ordinal: number;
+    role?: ScriptRole;
+};
+
+const parseScriptHandle = (handleName: string): ParsedScriptHandle | null => {
     const normalizedName = `${handleName}`.toLowerCase();
     if (!normalizedName.endsWith(HANDLE_SUFFIX)) {
         return null;
@@ -81,12 +98,11 @@ const parseScriptHandle = (handleName: string): { type: ScriptType; ordinal: num
         }
 
         let ordinal = slugWithOrdinal.slice(slug.length);
-        // PZ V3 split: tolerate the role infix (`prx`, `pz`, `lfc`, `dsg`)
-        // between slug and ordinal so persprx1/perspz1/perslfc1/persdsg1
-        // all parse as PZ_CONTRACT subhandles.
+        let role: ScriptRole | undefined;
         if (slug === 'pers' && !/^\d+$/.test(ordinal)) {
             const roleMatch = ordinal.match(/^(prx|pz|lfc|dsg)(\d+)$/);
-            if (roleMatch && PERS_V3_ROLES.has(roleMatch[1])) {
+            if (roleMatch) {
+                role = PERS_V3_ROLE_KIND[roleMatch[1]];
                 ordinal = roleMatch[2];
             }
         }
@@ -96,7 +112,8 @@ const parseScriptHandle = (handleName: string): { type: ScriptType; ordinal: num
 
         return {
             type,
-            ordinal: Number.parseInt(ordinal, 10)
+            ordinal: Number.parseInt(ordinal, 10),
+            role
         };
     }
 
@@ -362,6 +379,21 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
     }
 
     return scripts;
+};
+
+// `latest=true&type=X` answers "what is the canonical spend script of type X?"
+// For legacy single-validator types (no role), the only latest entry is the
+// answer. For V3 split types, every role is `latest: true` (so consumers like
+// the BFF can discover the full quartet by name pattern), but only the proxy
+// is the migration target — observers have no spend side.
+export const findPrimaryLatestScript = (
+    scripts: [string, ScriptDetails][]
+): [string, ScriptDetails] | undefined => {
+    const latestEntries = scripts.filter(([, value]) => value.latest);
+    const proxy = latestEntries.find(([, value]) => parseScriptHandle(value.handle ?? '')?.role === 'proxy');
+    if (proxy) return proxy;
+    const legacy = latestEntries.find(([, value]) => parseScriptHandle(value.handle ?? '')?.role === undefined);
+    return legacy ?? latestEntries[0];
 };
 
 export const getScriptByRefAddress = async (
