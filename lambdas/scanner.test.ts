@@ -4,6 +4,7 @@ import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { getHandlesStore, RedisHandlesStore } from '../stores/redis';
 import { getApiMptRebuildPendingKey, getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
 import * as helpers from '../utils/helpers';
+import type { KoiosTxInfo } from '../interfaces/provider.interface';
 
 jest.mock('../utils/helpers');
 jest.mock('../stores/redis');
@@ -2192,6 +2193,90 @@ describe('Scanner lambda unit tests', () => {
             await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
 
             expect(mockedHelpers.fetchBlockfrostTxInfo).toHaveBeenCalledWith('tx_a');
+        } finally {
+            logSpy.mockRestore();
+            warnSpy.mockRestore();
+        }
+    });
+
+    it('scan backfills via Blockfrost when Koios tx_info returns fewer rows than requested', async () => {
+        // Validates: when Koios's /tx_info returns HTTP 200 with fewer rows
+        // than the request listed (empirically observed across 25 days of
+        // mainnet logs — see project_known_integrity_gaps.md gap #3), the
+        // scanner backfills the missing hash via Blockfrost instead of
+        // advancing past it.
+        // Failure mode caught: regression to the silent short-response
+        // behaviour that left preview pz_settings pointing at a UTxO
+        // consumed 3+ days earlier (slot 111168833 / tx abbf7e561505d8).
+        // Without the backfill the dropped tx_hash is permanently missed
+        // once currentSlot moves on.
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+
+        mockedHelpers.fetchPaginatedResults.mockImplementation(async (endpoint: string) => {
+            if (endpoint.includes('blocks/start_hash/next')) {
+                return [{ hash: 'block_a', slot: 100, confirmations: 5 }] as never;
+            }
+            return [] as never;
+        });
+
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'block_txs') {
+                return [{ tx_hash: 'tx_present' }, { tx_hash: 'tx_dropped' }] as never;
+            }
+            if (path === 'tx_info') {
+                const parsedBody = JSON.parse(body ?? '{}');
+                const requested: string[] = parsedBody._tx_hashes ?? [];
+                // Simulate Koios silently omitting tx_dropped from the response.
+                return requested
+                    .filter((hash) => hash !== 'tx_dropped')
+                    .map((tx_hash) => ({
+                        tx_hash,
+                        block_hash: 'block_a',
+                        block_height: 1,
+                        absolute_slot: 100,
+                        inputs: [],
+                        outputs: [],
+                        assets_minted: [],
+                        metadata: {},
+                        reference_inputs: []
+                    })) as never;
+            }
+            return [] as never;
+        });
+
+        const blockfrostBackfill = {
+            tx_hash: 'tx_dropped',
+            block_hash: 'block_a',
+            block_height: 1,
+            absolute_slot: 100,
+            inputs: [],
+            outputs: [],
+            assets_minted: [],
+            metadata: {},
+            reference_inputs: []
+        };
+        mockedHelpers.fetchBlockfrostTxInfo.mockResolvedValue(blockfrostBackfill as never);
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        try {
+            await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+            // Negative control: the scanner is required to call Blockfrost
+            // for the dropped hash specifically (and only that one). If the
+            // partial-response detection regresses, this expectation fails.
+            expect(mockedHelpers.fetchBlockfrostTxInfo).toHaveBeenCalledWith('tx_dropped');
+            expect(mockedHelpers.fetchBlockfrostTxInfo).not.toHaveBeenCalledWith('tx_present');
+
+            // Both txs must reach buildUTxOsFromKoiosTxs — confirming the
+            // backfilled tx is re-merged with the Koios results before
+            // downstream UTxO/handle-index processing.
+            const builtCalls = mockedHelpers.buildUTxOsFromKoiosTxs.mock.calls;
+            expect(builtCalls.length).toBeGreaterThan(0);
+            const txHashesPassed = builtCalls.flatMap((call) => (call[0] as KoiosTxInfo[]).map((tx) => tx.tx_hash));
+            expect(txHashesPassed).toEqual(expect.arrayContaining(['tx_present', 'tx_dropped']));
         } finally {
             logSpy.mockRestore();
             warnSpy.mockRestore();

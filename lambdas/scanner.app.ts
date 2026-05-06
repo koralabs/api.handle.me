@@ -509,8 +509,9 @@ const getBatchedTxHashesWithFallback = async (blockHashes: string[]): Promise<st
 };
 
 const getBatchedTxInfoWithFallback = async (txHashes: string[]): Promise<KoiosTxInfo[]> => {
+    let koiosResults: KoiosTxInfo[];
     try {
-        return await getBatchedTxInfo(txHashes);
+        koiosResults = await getBatchedTxInfo(txHashes);
     } catch (error: any) {
         Logger.log({
             message: `Koios tx_info failed for ${txHashes.length} txs, falling back to Blockfrost: ${error?.message ?? error}`,
@@ -523,6 +524,34 @@ const getBatchedTxInfoWithFallback = async (txHashes: string[]): Promise<KoiosTx
         }
         return results;
     }
+
+    // Koios's /tx_info endpoint has been observed returning fewer rows than
+    // requested with HTTP 200 — most often the empty array for the whole
+    // batch (CloudWatch sweep over ~25 days: 19 occurrences, signatures
+    // include hashes=1..6 info=0 and a few hashes=N info=N-1). Mechanism
+    // is upstream and not pinned down (load-balancing across instances at
+    // different sync states, PostgREST query/cache quirks, or transient
+    // node degradation responding 200+[] instead of 5xx are all candidates).
+    // Without this check the scanner accepts the short array, advances
+    // currentSlot, and permanently loses the missed tx — concretely
+    // observed on preview slot 111168833 / tx abbf7e561505d8 (txCount=3
+    // source=block_txs followed by txInfoCount=2), which left handle
+    // pz_settings pointing at a UTxO consumed 3+ days earlier. Backfill
+    // via Blockfrost for any requested hash Koios omitted.
+    const returnedHashes = new Set(koiosResults.map((tx) => tx.tx_hash));
+    const missing = txHashes.filter((hash) => !returnedHashes.has(hash));
+    if (missing.length === 0) return koiosResults;
+
+    Logger.log({
+        message: `Koios tx_info returned ${koiosResults.length}/${txHashes.length}; backfilling ${missing.length} missing hashes via Blockfrost (first=${missing[0]})`,
+        category: LogCategory.WARN,
+        event: 'scannerLambda.koiosTxInfo.partialResponseBackfill'
+    });
+
+    for (const txHash of missing) {
+        koiosResults.push(await fetchBlockfrostTxInfo(txHash));
+    }
+    return koiosResults;
 };
 
 const getBatchedDatumInfoWithFallback = async (txInfo: KoiosTxInfo[]): Promise<Map<string, string>> => {
