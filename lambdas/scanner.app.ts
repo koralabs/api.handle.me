@@ -525,19 +525,19 @@ const getBatchedTxInfoWithFallback = async (txHashes: string[]): Promise<KoiosTx
         return results;
     }
 
-    // Koios's /tx_info endpoint has been observed returning fewer rows than
-    // requested with HTTP 200 — most often the empty array for the whole
-    // batch (CloudWatch sweep over ~25 days: 19 occurrences, signatures
-    // include hashes=1..6 info=0 and a few hashes=N info=N-1). Mechanism
-    // is upstream and not pinned down (load-balancing across instances at
-    // different sync states, PostgREST query/cache quirks, or transient
-    // node degradation responding 200+[] instead of 5xx are all candidates).
-    // Without this check the scanner accepts the short array, advances
-    // currentSlot, and permanently loses the missed tx — concretely
-    // observed on preview slot 111168833 / tx abbf7e561505d8 (txCount=3
-    // source=block_txs followed by txInfoCount=2), which left handle
-    // pz_settings pointing at a UTxO consumed 3+ days earlier. Backfill
-    // via Blockfrost for any requested hash Koios omitted.
+    // Tx discovery (Maestro on mainnet) and tx-info fetch (Koios) are
+    // independent providers indexing the chain at different rates. When
+    // Maestro lists a freshly-included handle-touching tx_hash before
+    // Koios's /tx_info has ingested it, /tx_info responds 200 with a
+    // shortened array (often empty for the whole batch). 25-day CloudWatch
+    // sweep: 19/19 mismatches were source=maestro. Without this check the
+    // scanner accepts the short array, advances currentSlot, and
+    // permanently loses the missed tx — concretely observed on preview
+    // slot 111168833 / tx abbf7e561505d8 (the one block_txs-sourced
+    // anomaly; preview doesn't use Maestro yet still hit cross-endpoint
+    // lag in the same Koios cluster), which left handle pz_settings
+    // pointing at a UTxO consumed 3+ days earlier. Backfill via Blockfrost
+    // for any requested hash Koios omitted.
     const returnedHashes = new Set(koiosResults.map((tx) => tx.tx_hash));
     const missing = txHashes.filter((hash) => !returnedHashes.has(hash));
     if (missing.length === 0) return koiosResults;
