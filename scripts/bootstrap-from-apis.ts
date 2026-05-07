@@ -403,13 +403,33 @@ const toKoiosRecords = (rows: any[], batch: WorkItem[], poolName: string): UtxoR
     return records;
 };
 
+// Koios's asset_utxos enforces a 5120-byte body limit and returns 413 when a
+// batch's assets serialize past it. @-subhandle names are long enough that a
+// 50-item batch can hit the cap; the previous catch in runWorker logged the
+// 413 and dropped the entire batch's work items, leaving e.g. 15 handles from
+// the stale-preview list missing from the snapshot's utxos despite their
+// minting data being present. Recursively halve the batch on 413 so every
+// work item still ends up attempted.
 const fetchUtxoBatchKoios = async (pool: Pool, batch: WorkItem[]): Promise<UtxoRecord[]> => {
     const body = JSON.stringify({
         _asset_list: batch.map((w) => [w.policy, w.assetNameHex]),
         _extended: true
     });
-    const rows = await koiosFetch('asset_utxos', { method: 'POST', body, token: pool.token }) as any[];
-    return toKoiosRecords(rows, batch, pool.name);
+    try {
+        const rows = await koiosFetch('asset_utxos', { method: 'POST', body, token: pool.token }) as any[];
+        return toKoiosRecords(rows, batch, pool.name);
+    } catch (e: any) {
+        const msg = String(e?.message ?? '');
+        if (/\b413\b/.test(msg) && batch.length > 1) {
+            const mid = Math.ceil(batch.length / 2);
+            const [left, right] = await Promise.all([
+                fetchUtxoBatchKoios(pool, batch.slice(0, mid)),
+                fetchUtxoBatchKoios(pool, batch.slice(mid))
+            ]);
+            return [...left, ...right];
+        }
+        throw e;
+    }
 };
 
 // Blockfrost has no /assets/{id}/utxos endpoint (confirmed against its OpenAPI
@@ -1031,6 +1051,55 @@ const fmtMs = (ms: number) => `${(ms / 1000).toFixed(2)}s`;
     }
     console.log(`  TxInfo rows collected: ${txInfoRun.txInfo.size}`);
     console.log(`  [elapsed ${fmtMs(Date.now() - t4c)}]`);
+
+    // Phase 4d: rescue records whose batched asset_utxos answer points at a
+    // tx_id that tx_info couldn't find. Empirically, Koios's asset_utxos is
+    // not always consistent across batches — small fraction of assets get
+    // back a phantom UTxO whose tx never resolves in tx_info (e793e740#1's
+    // canonical placement of lgtbmn77 + e2elcm6a1c47@e2eyvw0lk36hw6z came
+    // back as a c55fd87e#3 ghost row in batched calls during the
+    // 2026-05-07 preview backfill). Single-asset asset_utxos calls return
+    // the canonical answer reliably, so re-query those assets one at a
+    // time, force the answer to overwrite any prior batched record.
+    const t4d = Date.now();
+    const ghostRecords = results.filter((r) => r.txHash && !txInfoRun.txInfo.has(r.txHash));
+    if (ghostRecords.length > 0) {
+        console.log(`\nPhase 4d: rescue ${ghostRecords.length} record(s) whose tx_id has no tx_info`);
+        const ghostKeys = new Set(ghostRecords.map((r) => `${r.policy}/${r.assetNameHex}`));
+        // Drop the ghost records before re-querying so the rescue answer is
+        // the only one that survives groupUtxosByOutput.
+        for (let i = results.length - 1; i >= 0; i--) {
+            const rec = results[i];
+            if (ghostKeys.has(`${rec.policy}/${rec.assetNameHex}`) && !txInfoRun.txInfo.has(rec.txHash)) {
+                results.splice(i, 1);
+            }
+        }
+        const ghostWorkItems: WorkItem[] = ghostRecords.map((r) => ({
+            policy: r.policy,
+            assetNameHex: r.assetNameHex,
+            handleName: r.handleName,
+            labelKey: r.labelKey
+        }));
+        const rescuePool: Pool = { name: 'koios-rescue', kind: 'koios', token: KOIOS_HIGH, rps: 4, batchSize: 1 };
+        const newTxHashes = new Set<string>();
+        for (const w of ghostWorkItems) {
+            try {
+                const recs = await fetchUtxoBatchKoios(rescuePool, [w]);
+                for (const rec of recs) {
+                    results.push(rec);
+                    if (rec.txHash) newTxHashes.add(rec.txHash);
+                }
+            } catch (e: any) {
+                console.error(`  rescue ${w.handleName} failed: ${e?.message ?? e}`);
+            }
+        }
+        if (newTxHashes.size > 0) {
+            const rescuedTxInfo = await runPhase4c(Array.from(newTxHashes));
+            for (const [hash, row] of rescuedTxInfo.txInfo) txInfoRun.txInfo.set(hash, row);
+            console.log(`  Re-fetched tx_info for ${rescuedTxInfo.txInfo.size} new tx hash(es)`);
+        }
+        console.log(`  [elapsed ${fmtMs(Date.now() - t4d)}]`);
+    }
 
     // Phase 5: snapshot
     const t5 = Date.now();
