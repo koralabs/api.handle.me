@@ -241,13 +241,13 @@ const blockfrostFallbackJson = async (endpointSegment: string): Promise<any> => 
     return response.json();
 };
 
-export const fetchBlockfrostTxHashes = async (blockHashes: string[]): Promise<string[]> => {
-    const allTxHashes: string[] = [];
+export const fetchBlockfrostTxHashes = async (blockHashes: string[]): Promise<{ block_hash: string; tx_hash: string }[]> => {
+    const rows: { block_hash: string; tx_hash: string }[] = [];
     for (const blockHash of blockHashes) {
         const txHashes = await fetchPaginatedResults<string>(`blocks/${blockHash}/txs`);
-        allTxHashes.push(...txHashes);
+        for (const tx_hash of txHashes) rows.push({ block_hash: blockHash, tx_hash });
     }
-    return allTxHashes;
+    return rows;
 };
 
 export const fetchBlockfrostTxInfo = async (txHash: string): Promise<KoiosTxInfo> => {

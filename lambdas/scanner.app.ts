@@ -420,12 +420,12 @@ const getBatchedDatumInfo = async (txInfo: KoiosTxInfo[]) => {
 };
 
 
-const fetchBlockTxHashBatchWithRetry = async (hashBatch: string[], attempt = 0): Promise<string[]> => {
+const fetchBlockTxHashBatchWithRetry = async (hashBatch: string[], attempt = 0): Promise<{ block_hash: string; tx_hash: string }[]> => {
     checkDeadline('block_txs_retry');
     const body = getBlockTxsBody(hashBatch);
     try {
-        const txs = (await fetchKoios(`block_txs`, 'POST', body)) as { tx_hash: string }[] | null;
-        return txs?.map((tx) => tx.tx_hash) ?? [];
+        const txs = (await fetchKoios(`block_txs`, 'POST', body)) as { block_hash: string; tx_hash: string }[] | null;
+        return (txs ?? []).map((tx) => ({ block_hash: tx.block_hash, tx_hash: tx.tx_hash }));
     } catch (error: any) {
         const retriable = isRetriableKoiosError(error);
         Logger.local({
@@ -483,19 +483,19 @@ const getBatchedTxHashes = async (blockHashes: string[]) => {
     const batchedBlockHashes = getKoiosBatches(blockHashes, '_block_hashes', {
         maxBodyLength: KOIOS_BLOCK_TXS_SOFT_BODY_LIMIT
     });
-    const txHashes: string[] = [];
+    const rows: { block_hash: string; tx_hash: string }[] = [];
     for (const hashBatch of batchedBlockHashes) {
-        txHashes.push(...await fetchBlockTxHashBatchWithRetry(hashBatch));
+        rows.push(...await fetchBlockTxHashBatchWithRetry(hashBatch));
         if (KOIOS_BLOCK_TXS_MIN_INTERVAL_MS > 0) {
             await delayMs(KOIOS_BLOCK_TXS_MIN_INTERVAL_MS);
         }
     }
-    return txHashes;
+    return rows;
 };
 
 // ========== Blockfrost per-iteration fallback wrappers ==========
 
-const getBatchedTxHashesWithFallback = async (blockHashes: string[]): Promise<string[]> => {
+const getBatchedTxHashesWithFallback = async (blockHashes: string[]): Promise<{ block_hash: string; tx_hash: string }[]> => {
     try {
         return await getBatchedTxHashes(blockHashes);
     } catch (error: any) {
@@ -707,7 +707,8 @@ const processRollback = async ({ currentSlot, rollbackOffset = DEFAULT_ROLLBACK_
 
     const missedBlockHandles = new Set<string>();
     if (!anchorOrphaned && unseenCanonicalBlocks.length) {
-        const missedTxHashes = [...new Set(await getBatchedTxHashesWithFallback(unseenCanonicalBlocks.map((b) => b.hash)))];
+        const missedRows = await getBatchedTxHashesWithFallback(unseenCanonicalBlocks.map((b) => b.hash));
+        const missedTxHashes = [...new Set(missedRows.map((r) => r.tx_hash))];
         if (missedTxHashes.length) {
             const missedTxInfo = await getBatchedTxInfoWithFallback(missedTxHashes);
             const collectFromAssets = (assets: { policy_id: string; asset_name: string }[] | undefined) => {
@@ -1177,7 +1178,7 @@ const scan = async () => {
     handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.SCANNING, lockLambdasTimestamp: Date.now() });
     try {
         scanBreadcrumb('fetchPaginatedResults_start', `from=${metrics.currentBlockHash}`);
-        let bResp: { hash: string; slot: number; confirmations: number }[] = await fetchPaginatedResults(
+        let bResp: { hash: string; slot: number; confirmations: number; tx_count?: number }[] = await fetchPaginatedResults(
             `blocks/${metrics.currentBlockHash}/next`,
             SCANNER_MAX_BLOCKS_PER_INVOCATION + 1
         );
@@ -1282,9 +1283,19 @@ const scan = async () => {
             const blockChunk = bResp.slice(blockIndex, blockIndex + SCANNER_BLOCK_PREFETCH_CHUNK_SIZE);
             scanBreadcrumb('chunk_start', `offset=${blockIndex}/${bResp.length} chunkSize=${blockChunk.length}`);
             scanBreadcrumb('getBatchedTxHashes_start');
+            // For the block_txs path we keep the per-block mapping returned
+            // by Koios so we can compare its row count to Blockfrost's
+            // tx_count below. Maestro path has its own per-block expected
+            // map already populated above.
+            const blockTxRows = maestroHashesByBlock
+                ? null
+                : await getBatchedTxHashesWithFallback(blockChunk.map((block) => block.hash));
+            const blockTxCountByBlock = blockTxRows
+                ? blockTxRows.reduce<Map<string, number>>((acc, r) => { acc.set(r.block_hash, (acc.get(r.block_hash) ?? 0) + 1); return acc; }, new Map())
+                : null;
             const txHashes = maestroHashesByBlock
                 ? [...new Set(blockChunk.flatMap((block) => maestroHashesByBlock.get(block.hash) ?? []))]
-                : [...new Set(await getBatchedTxHashesWithFallback(blockChunk.map((block) => block.hash)))];
+                : [...new Set((blockTxRows ?? []).map((r) => r.tx_hash))];
             scanBreadcrumb('getBatchedTxHashes_done', `txCount=${txHashes.length} source=${maestroHashesByBlock ? 'maestro' : 'block_txs'}`);
             scanBreadcrumb('getBatchedTxInfo_start');
             const txList = await getBatchedTxInfoWithFallback(txHashes);
@@ -1316,6 +1327,26 @@ const scan = async () => {
             for (const b of blockChunk) {
                 const expectedTxs = maestroHashesByBlock?.get(b.hash);
                 const receivedTxHashes = (txInfoByBlockHash.get(b.hash) ?? []).map((t) => t.tx_hash);
+
+                // block_txs-vs-Blockfrost cross-check: when Blockfrost lists
+                // a block as having N txs but Koios's block_txs returned
+                // fewer, the two providers disagree about this block's
+                // contents (typically because we're inside the k=2160 reorg
+                // window and Blockfrost's chain at this height isn't on
+                // Koios's chain). Halting prevents silently advancing on
+                // one provider's chain while the other can't see it.
+                if (blockTxCountByBlock && typeof b.tx_count === 'number') {
+                    const koiosCount = blockTxCountByBlock.get(b.hash) ?? 0;
+                    if (koiosCount < b.tx_count) {
+                        Logger.log({
+                            message: `block_txs coverage incomplete for block ${b.hash} (slot ${b.slot}); pausing scan, next invocation will resume from currentBlockHash. blockfrost_tx_count=${b.tx_count} koios_block_txs_count=${koiosCount}`,
+                            category: LogCategory.WARN,
+                            event: 'scannerLambda.koiosBlockTxs.coverageIncompletePause'
+                        });
+                        return;
+                    }
+                }
+
                 // Maestro path knows expected tx_hashes per block, so coverage
                 // is checked exactly. The block_txs path doesn't carry a
                 // per-block mapping at this point — if anything in the chunk

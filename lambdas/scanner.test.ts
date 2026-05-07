@@ -2158,7 +2158,7 @@ describe('Scanner lambda unit tests', () => {
             return [] as never;
         });
         mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
-        mockedHelpers.fetchBlockfrostTxHashes.mockResolvedValue(['tx_fallback'] as never);
+        mockedHelpers.fetchBlockfrostTxHashes.mockResolvedValue([{ block_hash: 'block_a', tx_hash: 'tx_fallback' }] as never);
 
         const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
         const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -2270,6 +2270,57 @@ describe('Scanner lambda unit tests', () => {
             // we deliberately avoid the slower second-indexer round-trip
             // and let the next Lambda tick refetch.
             expect(mockedHelpers.fetchBlockfrostTxInfo).not.toHaveBeenCalled();
+        } finally {
+            logSpy.mockRestore();
+            warnSpy.mockRestore();
+        }
+    });
+
+    it('scan halts when Koios block_txs returns fewer rows than Blockfrost tx_count for a block', async () => {
+        // Validates: when Blockfrost lists a block as having N txs (via the
+        // tx_count field on `blocks/{hash}/next`) but Koios's block_txs
+        // returns fewer rows for that same block hash, the providers
+        // disagree about this block's contents — typically because the
+        // block is inside the k=2160 reorg window on Blockfrost's chain
+        // but NOT on Koios's chain. The scanner halts at that block so it
+        // doesn't silently accept Koios's empty answer as truth and
+        // advance currentSlot through divergent territory.
+        // Failure mode caught: regression to the 2026-05-06 23:11 PDT
+        // preview behavior, where every block_txs response was empty for
+        // 16+ hours yet currentSlot kept advancing.
+        const { handlesRepo, store, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+
+        mockedHelpers.fetchPaginatedResults.mockImplementation(async (endpoint: string) => {
+            if (endpoint.includes('blocks/start_hash/next')) {
+                // Blockfrost says this block has 2 txs.
+                return [{ hash: 'block_divergent', slot: 100, confirmations: 5, tx_count: 2 }] as never;
+            }
+            return [] as never;
+        });
+
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') {
+                // Koios returns nothing for this block hash — its chain
+                // doesn't include block_divergent.
+                return [] as never;
+            }
+            return [] as never;
+        });
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        try {
+            await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+            // Negative control: scanner must NOT advance past block_divergent
+            // when block_txs row count (0) is short of Blockfrost tx_count (2).
+            expect(handlesRepo.setMetrics).not.toHaveBeenCalledWith(
+                expect.objectContaining({ currentBlockHash: 'block_divergent' })
+            );
+            expect(store.recordScannedBlock).not.toHaveBeenCalledWith(100, 'block_divergent');
+            expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).not.toHaveBeenCalled();
         } finally {
             logSpy.mockRestore();
             warnSpy.mockRestore();
