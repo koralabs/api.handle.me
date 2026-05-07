@@ -509,9 +509,8 @@ const getBatchedTxHashesWithFallback = async (blockHashes: string[]): Promise<st
 };
 
 const getBatchedTxInfoWithFallback = async (txHashes: string[]): Promise<KoiosTxInfo[]> => {
-    let koiosResults: KoiosTxInfo[];
     try {
-        koiosResults = await getBatchedTxInfo(txHashes);
+        return await getBatchedTxInfo(txHashes);
     } catch (error: any) {
         Logger.log({
             message: `Koios tx_info failed for ${txHashes.length} txs, falling back to Blockfrost: ${error?.message ?? error}`,
@@ -524,34 +523,6 @@ const getBatchedTxInfoWithFallback = async (txHashes: string[]): Promise<KoiosTx
         }
         return results;
     }
-
-    // Tx discovery (Maestro on mainnet) and tx-info fetch (Koios) are
-    // independent providers indexing the chain at different rates. When
-    // Maestro lists a freshly-included handle-touching tx_hash before
-    // Koios's /tx_info has ingested it, /tx_info responds 200 with a
-    // shortened array (often empty for the whole batch). 25-day CloudWatch
-    // sweep: 19/19 mismatches were source=maestro. Without this check the
-    // scanner accepts the short array, advances currentSlot, and
-    // permanently loses the missed tx — concretely observed on preview
-    // slot 111168833 / tx abbf7e561505d8 (the one block_txs-sourced
-    // anomaly; preview doesn't use Maestro yet still hit cross-endpoint
-    // lag in the same Koios cluster), which left handle pz_settings
-    // pointing at a UTxO consumed 3+ days earlier. Backfill via Blockfrost
-    // for any requested hash Koios omitted.
-    const returnedHashes = new Set(koiosResults.map((tx) => tx.tx_hash));
-    const missing = txHashes.filter((hash) => !returnedHashes.has(hash));
-    if (missing.length === 0) return koiosResults;
-
-    Logger.log({
-        message: `Koios tx_info returned ${koiosResults.length}/${txHashes.length}; backfilling ${missing.length} missing hashes via Blockfrost (first=${missing[0]})`,
-        category: LogCategory.WARN,
-        event: 'scannerLambda.koiosTxInfo.partialResponseBackfill'
-    });
-
-    for (const txHash of missing) {
-        koiosResults.push(await fetchBlockfrostTxInfo(txHash));
-    }
-    return koiosResults;
 };
 
 const getBatchedDatumInfoWithFallback = async (txInfo: KoiosTxInfo[]): Promise<Map<string, string>> => {
@@ -1329,7 +1300,40 @@ const scan = async () => {
                 existing.push(tx);
                 txInfoByBlockHash.set(blockHash, existing);
             }
+            // Tx discovery (Maestro on mainnet) and tx-info fetch (Koios) are
+            // independent indexers running at different speeds. Maestro can
+            // list a freshly-included handle-touching tx_hash before Koios's
+            // /tx_info has ingested it, in which case /tx_info responds 200
+            // with a shortened array. If we kept advancing currentSlot past
+            // a block whose tx_info we don't yet have, that tx would be lost
+            // forever — concretely observed at preview slot 111168833 /
+            // tx abbf7e561505d8, which left pz_settings pointing at a UTxO
+            // consumed 3+ days earlier. Instead, halt the scan at the first
+            // block with incomplete tx_info coverage so the next invocation
+            // retries from currentBlockHash, by which time Koios will have
+            // caught up.
+            const chunkHasShortResponse = txList.length < txHashes.length;
             for (const b of blockChunk) {
+                const expectedTxs = maestroHashesByBlock?.get(b.hash);
+                const receivedTxHashes = (txInfoByBlockHash.get(b.hash) ?? []).map((t) => t.tx_hash);
+                // Maestro path knows expected tx_hashes per block, so coverage
+                // is checked exactly. The block_txs path doesn't carry a
+                // per-block mapping at this point — if anything in the chunk
+                // is short, halt at this chunk's first block so we don't
+                // advance past a block that *might* have contained the
+                // missing tx.
+                const coverageOk = expectedTxs !== undefined
+                    ? expectedTxs.every((hash) => receivedTxHashes.includes(hash))
+                    : !chunkHasShortResponse;
+                if (!coverageOk) {
+                    const missing = expectedTxs?.filter((hash) => !receivedTxHashes.includes(hash)) ?? [];
+                    Logger.log({
+                        message: `tx_info coverage incomplete for block ${b.hash} (slot ${b.slot}); pausing scan, next invocation will resume from currentBlockHash. expected=${expectedTxs?.length ?? 'unknown'} received=${receivedTxHashes.length}${missing.length ? ` missing=${missing.slice(0, 3).join(',')}${missing.length > 3 ? '…' : ''}` : ''}`,
+                        category: LogCategory.WARN,
+                        event: 'scannerLambda.koiosTxInfo.coverageIncompletePause'
+                    });
+                    return;
+                }
                 const block = { id: b.hash, slot: b.slot, confirmations: b.confirmations };
                 const blockTxList = txInfoByBlockHash.get(b.hash) ?? [];
                 const builtUTxOs = buildUTxOsFromKoiosTxs(blockTxList, datumInfoByHash);

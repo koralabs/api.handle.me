@@ -2005,7 +2005,11 @@ describe('Scanner lambda unit tests', () => {
         expect(handlesRepo.removeUTxOs).not.toHaveBeenCalled();
     });
 
-    it('scan tolerates null tx_info responses and missing handles on UTxOs', async () => {
+    it('scan halts without crashing when tx_info returns null for a requested hash', async () => {
+        // Null tx_info response yields zero rows — the coverage check fires
+        // and pauses the scan rather than crashing or silently advancing
+        // past the missed tx. Pre-halt behaviour processed an empty txList
+        // and called downstream handlers with []; the halt now skips them.
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
         mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
@@ -2018,9 +2022,11 @@ describe('Scanner lambda unit tests', () => {
             { ...buildUtxo({ id: 'scan_newer#0', slot: 101, blockHash: 'block_newer', assetName: 'asset-a' }), handles: undefined }
         ] as never);
 
-        await scannerModule.Internal.scan();
+        await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
 
-        expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenCalledTimes(1);
+        // Scan halted before any block was processed, so no
+        // UTxO/handle-index mutation should have occurred.
+        expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).not.toHaveBeenCalled();
         expect(handlesRepo.removeUTxOs).not.toHaveBeenCalled();
     });
 
@@ -2199,18 +2205,18 @@ describe('Scanner lambda unit tests', () => {
         }
     });
 
-    it('scan backfills via Blockfrost when Koios tx_info returns fewer rows than requested', async () => {
+    it('scan halts at the first block whose tx_info coverage is incomplete (block_txs path)', async () => {
         // Validates: when Koios's /tx_info returns HTTP 200 with fewer rows
-        // than the request listed (empirically observed across 25 days of
-        // mainnet logs — see project_known_integrity_gaps.md gap #3), the
-        // scanner backfills the missing hash via Blockfrost instead of
-        // advancing past it.
-        // Failure mode caught: regression to the silent short-response
-        // behaviour that left preview pz_settings pointing at a UTxO
-        // consumed 3+ days earlier (slot 111168833 / tx abbf7e561505d8).
-        // Without the backfill the dropped tx_hash is permanently missed
-        // once currentSlot moves on.
-        const { handlesRepo, scannerModule } = setup();
+        // than the request listed (empirically observed — see
+        // project_known_integrity_gaps.md gap #3, dominant cause is Maestro
+        // outpacing Koios's tx_info indexer), the scanner halts before
+        // advancing past any block in the affected chunk. The next
+        // invocation will retry from currentBlockHash, by which time Koios
+        // will have caught up.
+        // Failure mode caught: regression to advancing past a missed tx,
+        // which left preview pz_settings pointing at a UTxO consumed 3+
+        // days earlier (slot 111168833 / tx abbf7e561505d8).
+        const { handlesRepo, store, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
 
         mockedHelpers.fetchPaginatedResults.mockImplementation(async (endpoint: string) => {
@@ -2227,7 +2233,7 @@ describe('Scanner lambda unit tests', () => {
             if (path === 'tx_info') {
                 const parsedBody = JSON.parse(body ?? '{}');
                 const requested: string[] = parsedBody._tx_hashes ?? [];
-                // Simulate Koios silently omitting tx_dropped from the response.
+                // Simulate Koios returning only one of the two requested rows.
                 return requested
                     .filter((hash) => hash !== 'tx_dropped')
                     .map((tx_hash) => ({
@@ -2245,18 +2251,6 @@ describe('Scanner lambda unit tests', () => {
             return [] as never;
         });
 
-        const blockfrostBackfill = {
-            tx_hash: 'tx_dropped',
-            block_hash: 'block_a',
-            block_height: 1,
-            absolute_slot: 100,
-            inputs: [],
-            outputs: [],
-            assets_minted: [],
-            metadata: {},
-            reference_inputs: []
-        };
-        mockedHelpers.fetchBlockfrostTxInfo.mockResolvedValue(blockfrostBackfill as never);
         mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
 
         const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -2264,19 +2258,104 @@ describe('Scanner lambda unit tests', () => {
         try {
             await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
 
-            // Negative control: the scanner is required to call Blockfrost
-            // for the dropped hash specifically (and only that one). If the
-            // partial-response detection regresses, this expectation fails.
-            expect(mockedHelpers.fetchBlockfrostTxInfo).toHaveBeenCalledWith('tx_dropped');
-            expect(mockedHelpers.fetchBlockfrostTxInfo).not.toHaveBeenCalledWith('tx_present');
+            // Negative control: the scanner must NOT advance currentSlot
+            // past block_a, and must NOT record block_a as scanned. If the
+            // halt regresses, both of these would be called.
+            expect(handlesRepo.setMetrics).not.toHaveBeenCalledWith(
+                expect.objectContaining({ currentBlockHash: 'block_a' })
+            );
+            expect(store.recordScannedBlock).not.toHaveBeenCalledWith(100, 'block_a');
 
-            // Both txs must reach buildUTxOsFromKoiosTxs — confirming the
-            // backfilled tx is re-merged with the Koios results before
-            // downstream UTxO/handle-index processing.
-            const builtCalls = mockedHelpers.buildUTxOsFromKoiosTxs.mock.calls;
-            expect(builtCalls.length).toBeGreaterThan(0);
-            const txHashesPassed = builtCalls.flatMap((call) => (call[0] as KoiosTxInfo[]).map((tx) => tx.tx_hash));
-            expect(txHashesPassed).toEqual(expect.arrayContaining(['tx_present', 'tx_dropped']));
+            // Blockfrost must not be touched on the short-response path —
+            // we deliberately avoid the slower second-indexer round-trip
+            // and let the next Lambda tick refetch.
+            expect(mockedHelpers.fetchBlockfrostTxInfo).not.toHaveBeenCalled();
+        } finally {
+            logSpy.mockRestore();
+            warnSpy.mockRestore();
+        }
+    });
+
+    it('scan processes complete blocks and halts at the first incomplete block (Maestro path)', async () => {
+        // Validates the per-block coverage check on the Maestro discovery
+        // path: blocks whose Maestro-listed tx_hashes are all present in
+        // tx_info advance normally; the first block missing any expected
+        // tx_hash halts the scan so the next invocation retries from there.
+        // Failure mode caught: a regression that either (a) advances past
+        // an incomplete block, or (b) halts unnecessarily on a complete
+        // block ahead of an incomplete one.
+        const { handlesRepo, store, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+
+        mockedHelpers.fetchPaginatedResults.mockImplementation(async (endpoint: string) => {
+            if (endpoint.includes('blocks/start_hash/next')) {
+                return [
+                    { hash: 'block_complete', slot: 100, confirmations: 5 },
+                    { hash: 'block_incomplete', slot: 110, confirmations: 5 },
+                    { hash: 'block_after', slot: 120, confirmations: 5 }
+                ] as never;
+            }
+            return [] as never;
+        });
+
+        mockedMaestro.isMaestroConfigured.mockReturnValue(true);
+        mockedMaestro.discoverHandleTxsBySlotRange.mockResolvedValue({
+            txHashes: ['tx_in_complete', 'tx_in_incomplete'],
+            slotByTx: new Map<string, number>([
+                ['tx_in_complete', 100],
+                ['tx_in_incomplete', 110]
+            ])
+        } as never);
+
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
+            if (path === 'tx_info') {
+                const parsedBody = JSON.parse(body ?? '{}');
+                const requested: string[] = parsedBody._tx_hashes ?? [];
+                // Koios has tx_in_complete but not tx_in_incomplete yet
+                // (the lag scenario). Return only the one it has.
+                return requested
+                    .filter((hash) => hash === 'tx_in_complete')
+                    .map((tx_hash) => ({
+                        tx_hash,
+                        block_hash: 'block_complete',
+                        block_height: 1,
+                        absolute_slot: 100,
+                        inputs: [],
+                        outputs: [],
+                        assets_minted: [],
+                        metadata: {},
+                        reference_inputs: []
+                    })) as never;
+            }
+            return [] as never;
+        });
+
+        mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        try {
+            await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+            // block_complete must be processed (currentSlot advances to 100,
+            // recordScannedBlock called).
+            expect(handlesRepo.setMetrics).toHaveBeenCalledWith(
+                expect.objectContaining({ currentBlockHash: 'block_complete', currentSlot: 100 })
+            );
+            expect(store.recordScannedBlock).toHaveBeenCalledWith(100, 'block_complete');
+
+            // block_incomplete and block_after must NOT advance — coverage
+            // check halted the scan at block_incomplete.
+            expect(handlesRepo.setMetrics).not.toHaveBeenCalledWith(
+                expect.objectContaining({ currentBlockHash: 'block_incomplete' })
+            );
+            expect(handlesRepo.setMetrics).not.toHaveBeenCalledWith(
+                expect.objectContaining({ currentBlockHash: 'block_after' })
+            );
+            expect(store.recordScannedBlock).not.toHaveBeenCalledWith(110, 'block_incomplete');
+            expect(store.recordScannedBlock).not.toHaveBeenCalledWith(120, 'block_after');
+
+            expect(mockedHelpers.fetchBlockfrostTxInfo).not.toHaveBeenCalled();
         } finally {
             logSpy.mockRestore();
             warnSpy.mockRestore();
