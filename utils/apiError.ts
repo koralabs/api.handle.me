@@ -48,10 +48,6 @@ export class ApiError extends HttpException {
         return new ApiError(404, 'script_not_found', 'Script not found');
     }
 
-    static latestScriptNotFound(): ApiError {
-        return new ApiError(404, 'script_not_found', 'Latest script not found');
-    }
-
     static subhandleSettingsNotFound(): ApiError {
         return new ApiError(404, 'subhandle_settings_not_found', 'SubHandle settings not found');
     }

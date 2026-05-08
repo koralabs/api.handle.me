@@ -40,15 +40,6 @@ describe('scripts service e2e', () => {
 
     beforeEach(() => {
         repo.rollBackToGenesis();
-        jest.spyOn(global, 'fetch').mockImplementation(async (input: any) => {
-            const slug = `${input}`.match(/\/([^/]+)\.unoptimized\.cbor$/)?.[1];
-            const unoptimized = slug === 'pers' ? 'unp-pz' : slug === 'demimnt' ? 'unp-demi' : '';
-
-            return {
-                ok: Boolean(unoptimized),
-                text: async () => unoptimized
-            } as Response;
-        });
 
         [
             ['pers1@handlecontract', previewRefAddresses[0], '4e4d1001'],
@@ -79,29 +70,26 @@ describe('scripts service e2e', () => {
         // Feature: the script resolver should read real indexed subhandles and key the catalog by derived script address.
         // Failure mode: a resolver bug could key entries by refScriptAddress or miss the highest ordinal latest selection.
         // Negative control: if `pers2@handlecontract` were renamed to ordinal `1`, the latest assertion below would fail.
-        const scripts = await getScriptsIndex(req);
+        const scripts = getScriptsIndex(req);
 
         expect(scripts).toEqual({
             [buildScriptAddress('4e4d1001')]: expect.objectContaining({
                 handle: 'pers1@handlecontract',
                 refScriptAddress: previewRefAddresses[0],
                 latest: false,
-                type: 'pers',
-                unoptimizedCbor: 'unp-pz'
+                type: 'pers'
             }),
             [buildScriptAddress('4e4d1002')]: expect.objectContaining({
                 handle: 'pers2@handlecontract',
                 refScriptAddress: previewRefAddresses[1],
                 latest: true,
-                type: 'pers',
-                unoptimizedCbor: 'unp-pz'
+                type: 'pers'
             }),
             [buildScriptAddress('4e4d1003')]: expect.objectContaining({
                 handle: 'demimnt3@handlecontract',
                 refScriptAddress: previewRefAddresses[1],
                 latest: true,
-                type: 'demimnt',
-                unoptimizedCbor: 'unp-demi'
+                type: 'demimnt'
             })
         });
     });

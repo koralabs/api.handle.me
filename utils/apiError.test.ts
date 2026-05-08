@@ -24,7 +24,6 @@ describe('ApiError', () => {
         const helpers = [
             ApiError.datumNotFound(),
             ApiError.scriptNotFound(),
-            ApiError.latestScriptNotFound(),
             ApiError.subhandleSettingsNotFound(),
             ApiError.subhandleSettingsUtxoNotFound()
         ];
