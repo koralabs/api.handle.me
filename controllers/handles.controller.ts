@@ -20,7 +20,6 @@ import { MAX_PAGINATED_RESULTS, MAX_TEXT_PLAIN_PAGINATED_RESULTS } from '../conf
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandleViewModel } from '../models/view/handle.view.model';
 import { HandlesRepository } from '../repositories/handlesRepository';
-import { getScriptByRefAddress, resolvePreferredScriptTypeForHandleName } from '../services/scripts.service';
 import { ApiError, statusCodeToErrorCode } from '../utils/apiError';
 import { wantsRawCbor, wantsTextPlain } from '../utils/contentNegotiation';
 
@@ -33,27 +32,6 @@ const setSearchTotal = (res: Response, total: number) => {
 };
 
 class HandlesController {
-    private static async getScriptByAddress(req: Request<any>, address?: string, handleName?: string): Promise<UTxO['script'] | undefined> {
-        if (!address) {
-            return;
-        }
-
-        const script = await getScriptByRefAddress(req, address, resolvePreferredScriptTypeForHandleName(handleName));
-        if (script?.cbor && script?.type) {
-            return script as unknown as UTxO['script'];
-        }
-    }
-
-    private static async attachReferenceTokenScript(req: Request<any>, utxo: UTxO, handleName?: string): Promise<UTxO> {
-        if (utxo.script) {
-            return utxo;
-        }
-
-        utxo.script = await HandlesController.getScriptByAddress(req, utxo.address, handleName);
-
-        return utxo;
-    }
-
     private static validateRecordsPerPage(recordsPerPage?: string, maxRecordsPerPage = MAX_PAGINATED_RESULTS): void {
         const count = Number(recordsPerPage);
         if (recordsPerPage && Number.isFinite(count) && count > maxRecordsPerPage) {
@@ -231,8 +209,7 @@ class HandlesController {
             const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
             const refUtxo = handleRepo.getUTxO(handle.reference_utxo)
             if (refUtxo) {
-                const reference_token = await HandlesController.attachReferenceTokenScript(req, new UTxO(refUtxo), handle.name);
-                return { reference_token, code };
+                return { reference_token: new UTxO(refUtxo), code };
             }
         }
 
@@ -325,9 +302,7 @@ class HandlesController {
         try {
             const { code, handle } = await HandlesController.getHandleFromRepo(req);
 
-            const script =
-                handle.script ??
-                await HandlesController.getScriptByAddress(req, handle.resolved_addresses?.ada, handle.name);
+            const script = handle.script;
             if (!script) {
                 throw ApiError.scriptNotFound();
             }

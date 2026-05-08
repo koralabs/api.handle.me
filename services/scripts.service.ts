@@ -114,29 +114,6 @@ export const resolveScriptTypeQuery = (type?: string): ScriptType | undefined =>
     return SCRIPT_TYPE_BY_QUERY[type.toLowerCase()] ?? LEGACY_SCRIPT_TYPE_ALIASES[type.toLowerCase()];
 };
 
-export const resolvePreferredScriptTypeForHandleName = (handleName?: string): ScriptType => {
-    const normalizedHandleName = `${handleName ?? ''}`.toLowerCase();
-    if (/^pz_contract_\d+$/i.test(normalizedHandleName)) {
-        return ScriptType.PZ_CONTRACT;
-    }
-
-    if (normalizedHandleName.endsWith(HANDLE_SUFFIX)) {
-        const slugWithOrdinal = normalizedHandleName.slice(0, -HANDLE_SUFFIX.length);
-        const match = SCRIPT_TYPES_BY_SLUG.find(([slug]) => {
-            if (!slugWithOrdinal.startsWith(slug)) {
-                return false;
-            }
-
-            return /^\d+$/.test(slugWithOrdinal.slice(slug.length));
-        });
-        if (match) {
-            return match[1];
-        }
-    }
-
-    return ScriptType.PZ_CONTRACT;
-};
-
 const fetchUnoptimizedCbor = async (type: ScriptType, cache: Map<ScriptType, Promise<string | undefined>>) => {
     const cached = cache.get(type);
     if (cached) {
@@ -333,15 +310,3 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
     return scripts;
 };
 
-export const getScriptByRefAddress = async (
-    req: Request<any>,
-    refScriptAddress?: string,
-    type?: ScriptType
-): Promise<ScriptDetails | undefined> => {
-    if (!refScriptAddress) {
-        return;
-    }
-
-    const matches = Object.values(await getScriptsIndex(req, type)).filter((script) => script.refScriptAddress === refScriptAddress);
-    return matches.find((script) => script.latest) ?? matches[0];
-};

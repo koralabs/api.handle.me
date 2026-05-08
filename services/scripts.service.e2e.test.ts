@@ -1,8 +1,8 @@
-import { bech32AddressFromHashes, blake2b, HandleType, ScriptType } from '@koralabs/kora-labs-common';
+import { bech32AddressFromHashes, blake2b, HandleType } from '@koralabs/kora-labs-common';
 import { RedisHandlesStore } from '../stores/redis';
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
-import { getScriptByRefAddress, getScriptsIndex } from './scripts.service';
+import { getScriptsIndex } from './scripts.service';
 
 const previewRefAddresses = [
     'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx',
@@ -106,37 +106,4 @@ describe('scripts service e2e', () => {
         });
     });
 
-    it('finds a script by refScriptAddress when that address is unique', async () => {
-        // Feature: non-`/scripts` callers should resolve script metadata from the handle-held reference script address.
-        // Failure mode: address enrichment paths could stop working after removing the static lookup table.
-        // Negative control: querying with an unknown refScriptAddress would return `undefined` instead of this script.
-        expect(await getScriptByRefAddress(req, previewRefAddresses[0])).toEqual(
-            expect.objectContaining({
-                handle: 'pers1@handlecontract',
-                refScriptAddress: previewRefAddresses[0],
-                latest: false,
-                unoptimizedCbor: 'unp-pz'
-            })
-        );
-    });
-
-    it('filters ref-script lookups by script family when addresses are shared', async () => {
-        // Feature: callers should be able to disambiguate same-address script handles by requesting the expected family.
-        // Failure mode: shared reference addresses could return whichever contract family happens to be encountered first.
-        // Negative control: removing the `type` filter below would make the `demimnt` assertion depend on insertion order instead of family selection.
-        expect(await getScriptByRefAddress(req, previewRefAddresses[1], ScriptType.PZ_CONTRACT)).toEqual(
-            expect.objectContaining({
-                handle: 'pers2@handlecontract',
-                type: 'pers',
-                latest: true
-            })
-        );
-        expect(await getScriptByRefAddress(req, previewRefAddresses[1], ScriptType.DEMI_MINT)).toEqual(
-            expect.objectContaining({
-                handle: 'demimnt3@handlecontract',
-                type: 'demimnt',
-                latest: true
-            })
-        );
-    });
 });
