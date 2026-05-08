@@ -144,7 +144,7 @@ export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[], datumByHash 
             }
         }, []);
 
-        for (const o of t.outputs) {
+        for (const o of t.outputs ?? []) {
             const handles = o.asset_list.reduce<[string, string[]][]>((acc, asset) => {
                 const { policy_id: policyId, asset_name: assetName } = asset;
                 if (HANDLE_POLICIES.contains(NETWORK as Network, policyId)) {
@@ -306,20 +306,16 @@ export const fetchBlockfrostTxInfo = async (txHash: string): Promise<KoiosTxInfo
             reference_script: null as { bytes: string; type: string } | null
         }));
 
-    // Fetch reference script bytes for outputs that have them
+    // Fetch reference script bytes for outputs that have them. Blockfrost said a
+    // reference_script_hash exists; if we can't fetch the cbor, persisting the
+    // UTxO with reference_script=null would silently strip a chain property that
+    // AGENTS.md requires us to keep accurate. Let the throw propagate so the
+    // scanner halts (same posture as dabea7e/6772557 for incomplete coverage).
     for (const output of outputs) {
         const bfOutput = (utxoData.outputs ?? []).find((o: any) => o.output_index === output.tx_index && !o.collateral);
         if (bfOutput?.reference_script_hash) {
-            try {
-                const scriptCbor = await blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}/cbor`);
-                output.reference_script = { bytes: scriptCbor.cbor ?? '', type: 'PlutusScriptV2' };
-            } catch (e: any) {
-                Logger.log({
-                    message: `Failed to fetch reference script ${bfOutput.reference_script_hash} for ${txHash}#${output.tx_index}: ${e?.message ?? e}`,
-                    category: LogCategory.NOTIFY,
-                    event: 'blockfrostFallback.referenceScriptFetchFailed'
-                });
-            }
+            const scriptCbor = await blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}/cbor`);
+            output.reference_script = { bytes: scriptCbor.cbor ?? '', type: 'PlutusScriptV2' };
         }
     }
 
@@ -368,7 +364,12 @@ export const fetchBlockfrostDatumCbor = async (datumHash: string): Promise<strin
     try {
         const data = await blockfrostFallbackJson(`scripts/datum/${datumHash}/cbor`);
         return data?.cbor ?? null;
-    } catch {
-        return null;
+    } catch (e: any) {
+        // Treat 404 as "datum not on this provider yet" — caller persists null and
+        // halt-on-incomplete (dabea7e/6772557) handles the coverage gap upstream.
+        // Any other error (transient 5xx, network) must throw so the scanner halts
+        // rather than silently strip a chain property.
+        if (e?.status === 404) return null;
+        throw e;
     }
 };

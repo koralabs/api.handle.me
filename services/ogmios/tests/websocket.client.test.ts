@@ -203,6 +203,36 @@ describe('OgmiosService websocket client branches', () => {
         );
     });
 
+    // Regression: a malformed frame previously rejected the fastq task without
+    // re-requesting next-block, silently stalling the scan with no NOTIFY. We
+    // now NOTIFY and exit the process — garbage from upstream is not something
+    // to recover from in-loop. The persisted cursor is untouched (setMetrics
+    // only fires on successful forward), so restart resumes cleanly via
+    // find-intersection.
+    it('logs NOTIFY and exits when an inbound message is not valid JSON', async () => {
+        const repo = createRepoMock();
+        const service = new OgmiosService(repo);
+        const loggerSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
+        // Mock exit() to throw a sentinel so the test halts at exit() the same
+        // way prod halts the process. Without this, the mock returns undefined
+        // and execution falls into the switch with response=undefined.
+        const exitSpy = jest.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+            throw new Error(`__test_process_exit_${code}`);
+        }) as any);
+        const client = (service as any)._createWebSocketClient() as any;
+
+        await expect(client.emit('message', '{ this is not json')).rejects.toThrow(/__test_process_exit_1/);
+
+        expect(loggerSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                event: 'OgmiosClient.parseError',
+                category: LogCategory.NOTIFY
+            })
+        );
+        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(repo.setMetrics).not.toHaveBeenCalled();
+    });
+
     it('logs websocket error events', () => {
         const repo = createRepoMock();
         const service = new OgmiosService(repo);

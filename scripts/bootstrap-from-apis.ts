@@ -489,6 +489,11 @@ const runPhase4 = async (work: WorkItem[]): Promise<{ results: UtxoRecord[]; sta
     const results: UtxoRecord[] = [];
     const stats: Record<string, PoolStats> = {};
 
+    // Fail-fast: any non-413 batch error or non-404 Blockfrost error throws
+    // out of the worker, rejects Promise.all, and exits the script via the
+    // top-level catch. No point spending more rate-limit budget once we know
+    // the snapshot will be incomplete. 413s are already handled inside
+    // fetchUtxoBatchKoios via recursive halving.
     const runPool = async (pool: Pool) => {
         const limiter = new RateLimiter(Math.ceil(1000 / pool.rps));
         const st: PoolStats = stats[pool.name] = { assetsAttempted: 0, assetsFound: 0, assetsMissing: 0, calls: 0, failures: 0, notFound404s: 0, elapsedMs: 0 };
@@ -502,35 +507,29 @@ const runPhase4 = async (work: WorkItem[]): Promise<{ results: UtxoRecord[]; sta
                 await limiter.acquire();
                 st.calls++;
                 st.assetsAttempted += batch.length;
-                try {
-                    if (pool.kind === 'koios') {
-                        const recs = await fetchUtxoBatchKoios(pool, batch);
-                        results.push(...recs);
-                        st.assetsFound += recs.length;
-                        st.assetsMissing += Math.max(0, batch.length - recs.length);
-                    } else {
-                        for (const w of batch) {
-                            try {
-                                const rec = await fetchUtxoBlockfrost(pool, w);
-                                if (rec) {
-                                    results.push(rec);
-                                    st.assetsFound++;
-                                } else {
-                                    st.assetsMissing++;
-                                }
-                            } catch (inner: any) {
-                                if (/\b404\b/.test(String(inner?.message ?? ''))) {
-                                    st.notFound404s++;
-                                } else {
-                                    st.failures++;
-                                    console.error(`  ${pool.name} asset ${w.assetNameHex.slice(0, 16)}… failed: ${inner?.message ?? inner}`);
-                                }
+                if (pool.kind === 'koios') {
+                    const recs = await fetchUtxoBatchKoios(pool, batch);
+                    results.push(...recs);
+                    st.assetsFound += recs.length;
+                    st.assetsMissing += Math.max(0, batch.length - recs.length);
+                } else {
+                    for (const w of batch) {
+                        try {
+                            const rec = await fetchUtxoBlockfrost(pool, w);
+                            if (rec) {
+                                results.push(rec);
+                                st.assetsFound++;
+                            } else {
+                                st.assetsMissing++;
+                            }
+                        } catch (inner: any) {
+                            if (/\b404\b/.test(String(inner?.message ?? ''))) {
+                                st.notFound404s++;
+                            } else {
+                                throw new Error(`Phase 4: ${pool.name} asset ${w.assetNameHex.slice(0, 16)}… failed: ${inner?.message ?? inner}`);
                             }
                         }
                     }
-                } catch (e: any) {
-                    st.failures++;
-                    console.error(`  ${pool.name} batch(${batch.length}) failed: ${e?.message ?? e}`);
                 }
                 if (st.calls % 10 === 0) {
                     process.stderr.write(
@@ -547,6 +546,7 @@ const runPhase4 = async (work: WorkItem[]): Promise<{ results: UtxoRecord[]; sta
 
     await Promise.all(pools.map(runPool));
     process.stderr.write('\n');
+
     return { results, stats, pools };
 };
 
@@ -598,6 +598,10 @@ const runPhase4c = async (txHashes: string[]): Promise<{ txInfo: TxInfoMap; stat
     const txInfo: TxInfoMap = new Map();
     const stats: Record<string, PoolStats> = {};
 
+    // Fail-fast: any throw out of fetchTxInfoBatchKoios propagates and aborts
+    // the phase. A snapshot with missing tx_info rows would ship handles whose
+    // minting history is incomplete — better to surface the upstream failure
+    // and re-run than spend the remaining rate-limit budget on a dead phase.
     const runPool = async (pool: Pool) => {
         const limiter = new RateLimiter(Math.ceil(1000 / pool.rps));
         const st: PoolStats = stats[pool.name] = { assetsAttempted: 0, assetsFound: 0, assetsMissing: 0, calls: 0, failures: 0, notFound404s: 0, elapsedMs: 0 };
@@ -611,17 +615,12 @@ const runPhase4c = async (txHashes: string[]): Promise<{ txInfo: TxInfoMap; stat
                 await limiter.acquire();
                 st.calls++;
                 st.assetsAttempted += batch.length;
-                try {
-                    const rows = await fetchTxInfoBatchKoios(pool, batch);
-                    for (const row of rows ?? []) {
-                        if (row?.tx_hash) txInfo.set(row.tx_hash, row);
-                    }
-                    st.assetsFound += rows?.length ?? 0;
-                    st.assetsMissing += Math.max(0, batch.length - (rows?.length ?? 0));
-                } catch (e: any) {
-                    st.failures++;
-                    console.error(`  ${pool.name} tx_info batch(${batch.length}) failed: ${e?.message ?? e}`);
+                const rows = await fetchTxInfoBatchKoios(pool, batch);
+                for (const row of rows ?? []) {
+                    if (row?.tx_hash) txInfo.set(row.tx_hash, row);
                 }
+                st.assetsFound += rows?.length ?? 0;
+                st.assetsMissing += Math.max(0, batch.length - (rows?.length ?? 0));
                 if (st.calls % 10 === 0) {
                     process.stderr.write(
                         `\r  [phase4c] queue ${cursor}/${queue.length}  ` +
@@ -637,6 +636,7 @@ const runPhase4c = async (txHashes: string[]): Promise<{ txInfo: TxInfoMap; stat
 
     await Promise.all(pools.map(runPool));
     process.stderr.write('\n');
+
     return { txInfo, stats, pools };
 };
 
