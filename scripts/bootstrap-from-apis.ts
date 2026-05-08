@@ -434,6 +434,16 @@ const fetchUtxoBatchKoios = async (pool: Pool, batch: WorkItem[]): Promise<UtxoR
 
 // Blockfrost has no /assets/{id}/utxos endpoint (confirmed against its OpenAPI
 // spec). Two-call path: /assets/{asset}/addresses → /addresses/{addr}/utxos/{asset}.
+//
+// /addresses/.../utxos returns reference_script_hash but NOT the script bytes;
+// when a handle's UTxO carries a reference script we must fetch the bytes via
+// /scripts/{hash}/cbor so groupUtxosByOutput stores a complete `script` field
+// downstream. Without this, any handle assigned to the Blockfrost pool during
+// the 4-pool dispatch lands in the snapshot with script=null, and the api's
+// /scripts index drops it (entries require handle.script.cbor). Concrete miss
+// observed on preview demimnt1/2 + demimntmpt1/2 — Koios's asset_utxos returns
+// reference_script.bytes for the same UTxO, so handles that happened to land
+// in the Koios pool got cbor while Blockfrost-pool handles didn't.
 const fetchUtxoBlockfrost = async (pool: Pool, work: WorkItem): Promise<UtxoRecord | null> => {
     const assetId = `${work.policy}${work.assetNameHex}`;
     const holders = await blockfrostFetch(`assets/${assetId}/addresses?count=1`, pool.token) as { address: string; quantity: string }[];
@@ -442,6 +452,18 @@ const fetchUtxoBlockfrost = async (pool: Pool, work: WorkItem): Promise<UtxoReco
     const utxos = await blockfrostFetch(`addresses/${encodeURIComponent(holder.address)}/utxos/${assetId}?count=1`, pool.token) as any[];
     const u = utxos?.[0];
     if (!u) return null;
+    let referenceScriptCbor: string | undefined;
+    if (u.reference_script_hash) {
+        try {
+            const cborResp = await blockfrostFetch(`scripts/${u.reference_script_hash}/cbor`, pool.token) as { cbor?: string };
+            referenceScriptCbor = cborResp?.cbor;
+        } catch (e: any) {
+            // Surface the failure but don't abort the whole record — the
+            // snapshot loader can still index the handle without a script,
+            // and a later forward scan via Koios will populate it.
+            console.error(`  ${pool.name} scripts/${u.reference_script_hash}/cbor failed: ${e?.message ?? e}`);
+        }
+    }
     return {
         handleName: work.handleName,
         policy: work.policy,
@@ -454,6 +476,7 @@ const fetchUtxoBlockfrost = async (pool: Pool, work: WorkItem): Promise<UtxoReco
         blockHeight: u.block_height,
         inlineDatumCbor: u.inline_datum,
         referenceScriptHash: u.reference_script_hash,
+        referenceScriptCbor,
         fetchedVia: 'blockfrost',
         poolName: pool.name
     };
