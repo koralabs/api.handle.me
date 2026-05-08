@@ -324,6 +324,7 @@ interface UtxoRecord {
     blockHeight?: number;
     blockTime?: number;
     inlineDatumCbor?: string;
+    datumHash?: string;
     referenceScriptHash?: string;
     referenceScriptCbor?: string;
     fetchedVia: 'koios' | 'blockfrost';
@@ -393,6 +394,7 @@ const toKoiosRecords = (rows: any[], batch: WorkItem[], poolName: string): UtxoR
                 blockHeight: r.block_height,
                 blockTime: r.block_time,
                 inlineDatumCbor: r.inline_datum?.bytes,
+                datumHash: r.datum_hash ?? undefined,
                 referenceScriptHash: r.reference_script?.hash,
                 referenceScriptCbor: r.reference_script?.bytes,
                 fetchedVia: 'koios',
@@ -475,6 +477,10 @@ const fetchUtxoBlockfrost = async (pool: Pool, work: WorkItem): Promise<UtxoReco
         lovelace: (u.amount ?? []).find((x: any) => x.unit === 'lovelace')?.quantity ?? '',
         blockHeight: u.block_height,
         inlineDatumCbor: u.inline_datum,
+        // Blockfrost's /addresses/.../utxos field name is `data_hash`, not `datum_hash`.
+        // Capture it so groupUtxosByOutput can carry the hash through to a Phase 4d
+        // datum-bytes resolution pass for non-inline datums.
+        datumHash: u.data_hash ?? undefined,
         referenceScriptHash: u.reference_script_hash,
         referenceScriptCbor,
         fetchedVia: 'blockfrost',
@@ -770,10 +776,17 @@ interface GroupedUtxo {
     lovelace: string;
     blockHeight?: number;
     inlineDatumCbor?: string;
+    datumHash?: string;
     referenceScriptCbor?: string;
     handlesByPolicy: Map<string, Set<string>>;
 }
 
+// Multiple WorkItems can describe the same on-chain UTxO (e.g. LBL_222 + LBL_100
+// in the same UTxO are two work items, sometimes dispatched to different pools).
+// Each fetch path returns its own UtxoRecord; whichever lands in the group first
+// used to set datum/script for the whole group, so a Blockfrost record whose
+// /scripts/{hash}/cbor sub-fetch errored could shadow the Koios record that did
+// have the bytes. Merge with `prev ?? incoming` so any non-null field wins.
 const groupUtxosByOutput = (records: UtxoRecord[]): GroupedUtxo[] => {
     const byKey = new Map<string, GroupedUtxo>();
     for (const r of records) {
@@ -787,10 +800,16 @@ const groupUtxosByOutput = (records: UtxoRecord[]): GroupedUtxo[] => {
                 lovelace: r.lovelace,
                 blockHeight: r.blockHeight,
                 inlineDatumCbor: r.inlineDatumCbor,
+                datumHash: r.datumHash,
                 referenceScriptCbor: r.referenceScriptCbor,
                 handlesByPolicy: new Map()
             };
             byKey.set(key, g);
+        } else {
+            g.inlineDatumCbor = g.inlineDatumCbor ?? r.inlineDatumCbor;
+            g.datumHash = g.datumHash ?? r.datumHash;
+            g.referenceScriptCbor = g.referenceScriptCbor ?? r.referenceScriptCbor;
+            g.blockHeight = g.blockHeight ?? r.blockHeight;
         }
         let set = g.handlesByPolicy.get(r.policy);
         if (!set) { set = new Set(); g.handlesByPolicy.set(r.policy, set); }
@@ -802,7 +821,8 @@ const groupUtxosByOutput = (records: UtxoRecord[]): GroupedUtxo[] => {
 const buildUtxosWithTxInfo = (
     grouped: GroupedUtxo[],
     txInfo: TxInfoMap,
-    policiesSet: Set<string>
+    policiesSet: Set<string>,
+    datumByHash: Map<string, string>
 ): UTxOWithTxInfo[] => {
     return grouped.map((g) => {
         const tx = txInfo.get(g.txHash);
@@ -838,6 +858,13 @@ const buildUtxosWithTxInfo = (
             ? filter721ForUtxo(extract721FromTxInfoMetadata(tx.metadata), policiesSet, utxoHandleNamesUtf8)
             : {};
 
+        // Datum resolution: prefer inline bytes, otherwise look up by hash. A
+        // missing-from-datumByHash hash means Koios `datum_info` legitimately
+        // had no row (e.g., the hash hasn't been resolved on chain) — leave
+        // datum undefined and let the snapshot reflect that.
+        const datum = g.inlineDatumCbor
+            ?? (g.datumHash ? datumByHash.get(g.datumHash) : undefined);
+
         const utxo: UTxOWithTxInfo = {
             id: `${g.txHash}#${g.txIndex}`,
             tx_id: g.txHash,
@@ -847,7 +874,7 @@ const buildUtxosWithTxInfo = (
             slot: Number(tx?.absolute_slot ?? 0),
             address: g.address,
             lovelace: Number(g.lovelace || 0),
-            datum: g.inlineDatumCbor,
+            datum,
             script: g.referenceScriptCbor ? { type: 'plutus', cbor: g.referenceScriptCbor } : undefined,
             handles: Array.from(g.handlesByPolicy.entries()).map(([p, set]) => [p, Array.from(set)]),
             mint: Array.from(mintByPolicy.entries()).map(([p, arr]) => [p, arr]),
@@ -868,6 +895,7 @@ interface BuildSnapshotArgs {
     handleNamesInSet: Set<string>;
     txInfo: TxInfoMap;
     policiesSet: Set<string>;
+    datumByHash: Map<string, string>;
 }
 
 const buildSnapshotFile = (args: BuildSnapshotArgs): VerifiedHandleFileContent => {
@@ -879,7 +907,7 @@ const buildSnapshotFile = (args: BuildSnapshotArgs): VerifiedHandleFileContent =
         verifiedAtUtc: new Date().toISOString()
     };
     const grouped = groupUtxosByOutput(args.utxoRecords);
-    const utxos = buildUtxosWithTxInfo(grouped, args.txInfo, args.policiesSet);
+    const utxos = buildUtxosWithTxInfo(grouped, args.txInfo, args.policiesSet, args.datumByHash);
     const mintingData = buildMintingData(args.mintSources, args.handleNamesInSet, args.txInfo, args.policiesSet);
 
     return {
@@ -1075,6 +1103,37 @@ const fmtMs = (ms: number) => `${(ms / 1000).toFixed(2)}s`;
     console.log(`  TxInfo rows collected: ${txInfoRun.txInfo.size}`);
     console.log(`  [elapsed ${fmtMs(Date.now() - t4c)}]`);
 
+    // Phase 4d: resolve datum hashes to bytes for any UTxO that stores its
+    // datum off-output (Cardano allows datum-by-hash where the bytes live in
+    // a separate witness, not the output itself). The pre-fix bootstrap had
+    // no field for the hash and no resolution step, so any handle whose
+    // canonical UTxO used datum-by-hash shipped in the snapshot with
+    // datum=undefined. Koios's datum_info POST takes _datum_hashes and
+    // returns { datum_hash, bytes }; we batch and merge into datumByHash.
+    const t4d = Date.now();
+    console.log('\nPhase 4d: resolve datum-hash bytes (for datums not stored inline)');
+    const datumHashesToResolve = new Set<string>();
+    for (const r of results) {
+        if (!r.inlineDatumCbor && r.datumHash) datumHashesToResolve.add(r.datumHash);
+    }
+    console.log(`  Datum hashes needing resolution: ${datumHashesToResolve.size}`);
+    const datumByHash = new Map<string, string>();
+    if (datumHashesToResolve.size > 0) {
+        const KOIOS_DATUM_BATCH = 50;
+        const hashList = Array.from(datumHashesToResolve);
+        for (let i = 0; i < hashList.length; i += KOIOS_DATUM_BATCH) {
+            const batch = hashList.slice(i, i + KOIOS_DATUM_BATCH);
+            const body = JSON.stringify({ _datum_hashes: batch });
+            const rows = await koiosFetch('datum_info', { method: 'POST', body }) as Array<{ datum_hash?: string; bytes?: string }>;
+            for (const row of rows ?? []) {
+                if (row?.datum_hash && row?.bytes) datumByHash.set(row.datum_hash, row.bytes);
+            }
+        }
+        const missing = hashList.filter((h) => !datumByHash.has(h));
+        console.log(`  Datum bytes resolved: ${datumByHash.size}/${datumHashesToResolve.size}${missing.length ? ` (missing ${missing.length}: ${missing.slice(0, 3).join(',')}${missing.length > 3 ? '…' : ''})` : ''}`);
+    }
+    console.log(`  [elapsed ${fmtMs(Date.now() - t4d)}]`);
+
     // Phase 5: snapshot
     const t5 = Date.now();
     console.log('\nPhase 5: build snapshot + gzip');
@@ -1087,7 +1146,8 @@ const fmtMs = (ms: number) => `${(ms / 1000).toFixed(2)}s`;
         mintSources: mintSourcesForFetch,
         handleNamesInSet: classified.handleNames,
         txInfo: txInfoRun.txInfo,
-        policiesSet
+        policiesSet,
+        datumByHash
     });
     const { bytes, gzBytes } = writeSnapshotGz(snapshot, outPath);
     const mintCount = Object.values(snapshot.mintingData).reduce((a, b) => a + b.length, 0);

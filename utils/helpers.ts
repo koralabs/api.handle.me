@@ -314,8 +314,18 @@ export const fetchBlockfrostTxInfo = async (txHash: string): Promise<KoiosTxInfo
     for (const output of outputs) {
         const bfOutput = (utxoData.outputs ?? []).find((o: any) => o.output_index === output.tx_index && !o.collateral);
         if (bfOutput?.reference_script_hash) {
-            const scriptCbor = await blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}/cbor`);
-            output.reference_script = { bytes: scriptCbor.cbor ?? '', type: 'PlutusScriptV2' };
+            // 404 = the chain has no script bytes registered for this hash.
+            // Match the fetchBlockfrostDatumCbor posture: persist no script
+            // and move on. Other errors propagate (transient 5xx, network)
+            // so the scanner halts and retries cleanly.
+            try {
+                const scriptCbor = await blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}/cbor`);
+                if (scriptCbor?.cbor) {
+                    output.reference_script = { bytes: scriptCbor.cbor, type: 'PlutusScriptV2' };
+                }
+            } catch (e: any) {
+                if (e?.status !== 404) throw e;
+            }
         }
     }
 
@@ -365,10 +375,11 @@ export const fetchBlockfrostDatumCbor = async (datumHash: string): Promise<strin
         const data = await blockfrostFallbackJson(`scripts/datum/${datumHash}/cbor`);
         return data?.cbor ?? null;
     } catch (e: any) {
-        // Treat 404 as "datum not on this provider yet" — caller persists null and
-        // halt-on-incomplete (dabea7e/6772557) handles the coverage gap upstream.
-        // Any other error (transient 5xx, network) must throw so the scanner halts
-        // rather than silently strip a chain property.
+        // 404 = the chain has no datum bytes registered for this hash. That is a
+        // legitimate state (e.g. a datum hash referenced in a tx where the bytes
+        // were never published). Persist null and move on; this is NOT a coverage
+        // gap, it's the chain saying the datum doesn't exist. Transient errors
+        // (5xx, network) must throw so the scanner halts and retries cleanly.
         if (e?.status === 404) return null;
         throw e;
     }

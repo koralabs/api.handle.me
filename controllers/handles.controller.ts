@@ -367,7 +367,20 @@ class HandlesController {
             }
 
             if (utxo) {
-                handle.subhandle_settings.utxo = new UTxO(utxo);
+                // Match the API-wide content-negotiation rule applied by
+                // getHandleUTxO / getHandleDatum: default response is
+                // JSON-decoded datum, raw CBOR is opt-in via Accept header.
+                // Embedding raw CBOR inside a JSON envelope (the prior
+                // behaviour) forced clients to second-guess the format.
+                let decodedDatum = utxo.datum;
+                if (decodedDatum) {
+                    try {
+                        decodedDatum = await decodeCborToJson({ cborString: decodedDatum, schema: {}, defaultKeyType: req.query.default_key_type as DefaultTextFormat });
+                    } catch {
+                        throw ApiError.datumDecodeFailed();
+                    }
+                }
+                handle.subhandle_settings.utxo = new UTxO({ ...utxo, datum: decodedDatum });
             }
 
             res.status(code).json(handle.subhandle_settings);
@@ -390,7 +403,18 @@ class HandlesController {
                 throw ApiError.subhandleSettingsUtxoNotFound();
             }
 
-            handle.subhandle_settings.utxo = new UTxO(utxo);
+            // Default to JSON-decoded datum to match getHandleUTxO; raw CBOR
+            // is opt-in via Accept: text/plain (or application/cbor). Same
+            // content-negotiation contract the rest of the API uses.
+            let decodedDatum = utxo.datum;
+            if (decodedDatum && !wantsRawCbor(req)) {
+                try {
+                    decodedDatum = await decodeCborToJson({ cborString: decodedDatum, schema: {}, defaultKeyType: req.query.default_key_type as DefaultTextFormat });
+                } catch {
+                    throw ApiError.datumDecodeFailed();
+                }
+            }
+            handle.subhandle_settings.utxo = new UTxO({ ...utxo, datum: decodedDatum });
 
             res.status(code).json(handle.subhandle_settings.utxo);
         } catch (error) {

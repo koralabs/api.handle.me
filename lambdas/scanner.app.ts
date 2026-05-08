@@ -407,14 +407,28 @@ const getBatchedDatumInfo = async (txInfo: KoiosTxInfo[]) => {
         maxBodyLength: KOIOS_DATUM_INFO_SOFT_BODY_LIMIT
     });
 
+    // asyncForEach (in kora-labs-common) can swallow rejected promises during
+    // its internal delay; if a fetchDatumInfoBatchWithRetry call throws after
+    // exhausting retries, the rejection ends up in the unhandled-rejection
+    // void rather than propagating here. We must NOT replace the helper, so
+    // instead capture the first error per-batch and rethrow after the loop —
+    // this turns a silent partial result into a hard halt that the next
+    // scanner tick retries cleanly (same posture as the block_txs / tx_info
+    // halts in dabea7e and 6772557).
+    let captured: unknown = null;
     await asyncForEach(batchedDatumHashes, async (hashBatch) => {
-        const datumInfo = await fetchDatumInfoBatchWithRetry(hashBatch);
-        datumInfo.forEach((datum) => {
-            if (datum?.datum_hash && datum?.bytes) {
-                datumInfoByHash.set(datum.datum_hash, datum.bytes);
-            }
-        });
+        try {
+            const datumInfo = await fetchDatumInfoBatchWithRetry(hashBatch);
+            datumInfo.forEach((datum) => {
+                if (datum?.datum_hash && datum?.bytes) {
+                    datumInfoByHash.set(datum.datum_hash, datum.bytes);
+                }
+            });
+        } catch (err) {
+            if (!captured) captured = err;
+        }
     }, KOIOS_DATUM_INFO_MIN_INTERVAL_MS);
+    if (captured) throw captured;
 
     return datumInfoByHash;
 };
