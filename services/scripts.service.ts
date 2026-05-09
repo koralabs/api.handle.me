@@ -259,12 +259,18 @@ export const getScriptSlug = (type: ScriptType) => SCRIPT_SOURCES[type]?.slug ??
 // Plutus validator hash = blake2b-224(<lang-tag> || cbor). The leading byte
 // tags the language so a script's hash differs across versions even when
 // the bytes are identical. The api stores `script.type` from upstream data
-// sources (koios `reference_script.type`, blockfrost `scripts/{hash}.type`);
-// values can be 'plutusV1'/'plutusV2'/'plutusV3' (modern) or
-// 'PlutusScriptV1'/'PlutusScriptV2' (legacy from older scans). Anything we
-// don't recognize falls back to V2 — historically the only Plutus version
-// the api ingested.
+// sources:
+//   - ogmios scanner: `script.language.replace(':', '_')` → `plutus_v1` /
+//     `plutus_v2` / `plutus_v3` (snake_case)
+//   - koios `reference_script.type`, blockfrost `scripts/{hash}.type`:
+//     `plutusV1` / `plutusV2` / `plutusV3` (camelCase)
+//   - legacy older scans: `PlutusScriptV1` / `PlutusScriptV2`
+// Anything we don't recognize falls back to V2 — historically the only
+// Plutus version the api ingested.
 const PLUTUS_LANGUAGE_PREFIX: Record<string, string> = {
+    plutus_v1: '01',
+    plutus_v2: '02',
+    plutus_v3: '03',
     plutusV1: '01',
     plutusV2: '02',
     plutusV3: '03',
