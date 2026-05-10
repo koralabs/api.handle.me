@@ -1014,20 +1014,7 @@ export class HandlesRepository {
                             if (assetDetails.assetLabel == AssetNameLabel.LBL_000) {
                                 handle.virtual = projectAttributes?.virtual ? { expires_time: projectAttributes.virtual.expires_time, public_mint: !!projectAttributes.virtual.public_mint } : undefined
                                 handle.utxo = utxo.id;
-                                // Some virtual-sub mints write resolved_addresses.ada as
-                                // ASCII-hex bytes (114 bytes containing the 0..9a..f
-                                // characters of a 57-byte address) instead of the binary
-                                // address. Detect that double-encoding and unwrap before
-                                // bech32-encoding so the final address isn't a 114-byte
-                                // garbled `addr_test1x…` string.
-                                let adaHex = `${projectAttributes!.resolved_addresses!.ada}`.replace('0x', '');
-                                if (/^[0-9a-f]+$/i.test(adaHex) && adaHex.length === 228) {
-                                    const inner = Buffer.from(adaHex, 'hex').toString('ascii');
-                                    if (/^[0-9a-f]+$/i.test(inner) && inner.length === 114) {
-                                        adaHex = inner;
-                                    }
-                                }
-                                handle.resolved_addresses!.ada = bech32FromHex(adaHex, isTestnet);
+                                handle.resolved_addresses!.ada = bech32FromHex(projectAttributes!.resolved_addresses!.ada.replace('0x', ''), isTestnet);
                                 handle.handle_type = HandleType.VIRTUAL_SUBHANDLE;
                             }
                         }
