@@ -25,9 +25,28 @@ const SCRIPT_SOURCES: Record<ScriptType, { slug: string; repo: string; deploymen
     [ScriptType.HAL_REF_SPEND]: { slug: 'halref', repo: 'hal-minting-contracts' },
     [ScriptType.HAL_ROYALTY_SPEND]: { slug: 'halroy', repo: 'hal-minting-contracts' }
 };
-const SCRIPT_TYPES_BY_SLUG = Object.entries(SCRIPT_SOURCES)
-    .sort(([, left], [, right]) => right.slug.length - left.slug.length)
-    .map(([type, source]) => [source.slug, type as ScriptType] as const);
+// V3 personalization split: persprx + 3 observers (perspz, perslfc, persdsg)
+// all share repo/sources with the legacy `pers` (PZ_CONTRACT) family but have
+// distinct on-chain validators. We expose each via its specific slug as the
+// `type` field in /scripts so the BFF can pick the right script for spend
+// vs observer roles. They all roll up to ScriptType.PZ_CONTRACT for
+// repo/deployment-state/unoptimized-cbor lookups.
+const PZ_V3_SUB_SLUGS = ['persprx', 'perspz', 'perslfc', 'persdsg'] as const;
+
+// Ordered slug → script-family mapping. Longest slug first so parser prefers
+// `persprx` over `pers`. Each entry tracks the response `type` (the specific
+// slug, exposed to callers) and the `sourceType` (ScriptType used to look up
+// SCRIPT_SOURCES for repo/url details).
+const SCRIPT_HANDLE_SLUGS: Array<{ slug: string; type: string; sourceType: ScriptType }> = [
+    ...PZ_V3_SUB_SLUGS.map((slug) => ({ slug, type: slug as string, sourceType: ScriptType.PZ_CONTRACT })),
+    ...Object.entries(SCRIPT_SOURCES).map(([type, source]) => ({
+        slug: source.slug,
+        type: type as ScriptType,
+        sourceType: type as ScriptType
+    }))
+].sort((a, b) => b.slug.length - a.slug.length);
+
+const SCRIPT_TYPES_BY_SLUG = SCRIPT_HANDLE_SLUGS.map((entry) => [entry.slug, entry.sourceType] as const);
 const LEGACY_SCRIPT_TYPE_ALIASES: Record<string, ScriptType> = {
     pz_contract: ScriptType.PZ_CONTRACT,
     sub_handle_settings: ScriptType.SUB_HANDLE_SETTINGS,
@@ -44,9 +63,14 @@ const LEGACY_SCRIPT_TYPE_ALIASES: Record<string, ScriptType> = {
     hal_ref_spend: ScriptType.HAL_REF_SPEND,
     hal_royalty_spend: ScriptType.HAL_ROYALTY_SPEND
 };
-const SCRIPT_TYPE_BY_QUERY = Object.fromEntries(
-    Object.entries(SCRIPT_SOURCES).flatMap(([type, source]) => [[source.slug, type as ScriptType]])
-) as Record<string, ScriptType>;
+// Resolve `?type=X` query param to the ScriptType used for the candidate
+// search. V3 sub-slugs (persprx etc.) all map to PZ_CONTRACT so the search
+// returns every `pers*@handlecontract` candidate; the per-handle parser then
+// records the specific sub-slug.
+const SCRIPT_TYPE_BY_QUERY: Record<string, ScriptType> = {
+    ...Object.fromEntries(Object.entries(SCRIPT_SOURCES).map(([type, source]) => [source.slug, type as ScriptType])),
+    ...Object.fromEntries(PZ_V3_SUB_SLUGS.map((slug) => [slug, ScriptType.PZ_CONTRACT]))
+};
 
 const createRepo = (req: Request<any>): HandlesRepository | null => {
     const registry = req.app?.get?.('registry') as IRegistry | undefined;
@@ -57,25 +81,30 @@ const createRepo = (req: Request<any>): HandlesRepository | null => {
     return new HandlesRepository(new registry.handlesStore());
 };
 
-const parseScriptHandle = (handleName: string): { type: ScriptType; ordinal: number } | null => {
+const parseScriptHandle = (handleName: string): { type: ScriptType; responseType: string; ordinal: number } | null => {
     const normalizedName = `${handleName}`.toLowerCase();
     if (!normalizedName.endsWith(HANDLE_SUFFIX)) {
         return null;
     }
 
     const slugWithOrdinal = normalizedName.slice(0, -HANDLE_SUFFIX.length);
-    for (const [slug, type] of SCRIPT_TYPES_BY_SLUG) {
+    // SCRIPT_HANDLE_SLUGS is longest-first so persprx wins over pers, etc.
+    // Continue past non-digit-suffix matches instead of returning null —
+    // a longer slug like `persprx` could shadow a still-valid shorter
+    // slug like `pers`, but only the digit-suffix variant is a real handle.
+    for (const { slug, sourceType, type } of SCRIPT_HANDLE_SLUGS) {
         if (!slugWithOrdinal.startsWith(slug)) {
             continue;
         }
 
         const ordinal = slugWithOrdinal.slice(slug.length);
         if (!/^\d+$/.test(ordinal)) {
-            return null;
+            continue;
         }
 
         return {
-            type,
+            type: sourceType,
+            responseType: type,
             ordinal: Number.parseInt(ordinal, 10)
         };
     }
@@ -262,7 +291,8 @@ const buildScriptEntry = async (
     type: ScriptType,
     latest: boolean,
     unoptimizedCbor: string | undefined,
-    scriptSourceHandle: StoredHandle = handle
+    scriptSourceHandle: StoredHandle = handle,
+    responseType: string = type
 ): Promise<[string, ScriptDetails] | null> => {
     const refScriptAddress = scriptSourceHandle.resolved_addresses?.ada;
     const cbor = scriptSourceHandle.script?.cbor;
@@ -302,7 +332,7 @@ const buildScriptEntry = async (
             unoptimizedCbor,
             validatorHash,
             latest,
-            type
+            type: responseType as ScriptType
         }
     ];
 };
@@ -330,7 +360,7 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
         return {};
     }
 
-    const matchesByType = new Map<ScriptType, { handle: StoredHandle; ordinal: number }[]>();
+    const matchesByType = new Map<ScriptType, { handle: StoredHandle; ordinal: number; responseType: string }[]>();
 
     for (const handle of getCandidateHandles(req, type)) {
         const match = parseScriptHandle(handle.name);
@@ -339,7 +369,7 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
         }
 
         const matches = matchesByType.get(match.type) ?? [];
-        matches.push({ handle, ordinal: match.ordinal });
+        matches.push({ handle, ordinal: match.ordinal, responseType: match.responseType });
         matchesByType.set(match.type, matches);
     }
 
@@ -359,14 +389,37 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
             .find((handle): handle is StoredHandle => !!handle?.script?.cbor)
             ?.name
             ?.toLowerCase();
-        for (const { handle, ordinal } of matches) {
+        // For PZ V3 we have multiple sub-slug families (persprx, perspz,
+        // perslfc, persdsg) all sharing scriptType=PZ_CONTRACT. Each
+        // sub-family needs its own latest ordinal, otherwise persdsg2's
+        // higher ordinal would shadow persprx2 etc. Group by responseType
+        // for the latest-ordinal computation.
+        const matchesByResponseType = new Map<string, typeof matches>();
+        for (const m of matches) {
+            const arr = matchesByResponseType.get(m.responseType) ?? [];
+            arr.push(m);
+            matchesByResponseType.set(m.responseType, arr);
+        }
+        const latestOrdinalByResponseType = new Map<string, number>();
+        for (const [respType, arr] of matchesByResponseType.entries()) {
+            const arrWithScript = arr.filter(({ handle }) => !!handle.script?.cbor);
+            const latest = arrWithScript.length > 0
+                ? Math.max(...arrWithScript.map(({ ordinal }) => ordinal))
+                : Math.max(...arr.map(({ ordinal }) => ordinal));
+            latestOrdinalByResponseType.set(respType, latest);
+        }
+
+        for (const { handle, ordinal, responseType } of matches) {
+            const familyLatestOrdinal = latestOrdinalByResponseType.get(responseType) ?? latestOrdinal;
             const scriptEntry = await buildScriptEntry(
                 handle,
                 scriptType,
                 activeAssignedHandleName
                     ? handle.name.toLowerCase() === activeAssignedHandleName
-                    : ordinal === latestOrdinal,
-                unoptimizedCbor
+                    : ordinal === familyLatestOrdinal,
+                unoptimizedCbor,
+                handle,
+                responseType
             );
             if (scriptEntry) {
                 scripts[scriptEntry[0]] = scriptEntry[1];
@@ -376,7 +429,15 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
         if (activeAssignedHandleName && !matches.some(({ handle }) => handle.name.toLowerCase() === activeAssignedHandleName)) {
             const activeAssignedHandle = handleRepo.getHandle(activeAssignedHandleName);
             if (activeAssignedHandle?.script?.cbor) {
-                const scriptEntry = await buildScriptEntry(activeAssignedHandle, scriptType, true, unoptimizedCbor);
+                const activeMatch = parseScriptHandle(activeAssignedHandle.name);
+                const scriptEntry = await buildScriptEntry(
+                    activeAssignedHandle,
+                    scriptType,
+                    true,
+                    unoptimizedCbor,
+                    activeAssignedHandle,
+                    activeMatch?.responseType ?? scriptType
+                );
                 if (scriptEntry) {
                     scripts[scriptEntry[0]] = scriptEntry[1];
                 }
