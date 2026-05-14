@@ -311,8 +311,24 @@ export const fetchBlockfrostTxInfo = async (txHash: string): Promise<KoiosTxInfo
         const bfOutput = (utxoData.outputs ?? []).find((o: any) => o.output_index === output.tx_index && !o.collateral);
         if (bfOutput?.reference_script_hash) {
             try {
-                const scriptCbor = await blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}/cbor`);
-                output.reference_script = { bytes: scriptCbor.cbor ?? '', type: 'PlutusScriptV2' };
+                // Fetch BOTH the script type metadata and the cbor — type
+                // identifies whether it's plutusV1/V2/V3, which the indexer
+                // and downstream consumers (scripts.service.ts) need to
+                // compute the correct on-chain script_hash. Hardcoding V2
+                // (the previous behavior) computed the wrong hash for V3
+                // scripts, breaking BFF tx builders that look up the script
+                // address by validatorHash.
+                const [scriptMeta, scriptCbor] = await Promise.all([
+                    blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}`),
+                    blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}/cbor`)
+                ]);
+                const bfType = (scriptMeta?.type ?? '').toString();
+                const ogmiosType =
+                    bfType === 'plutusV1' ? 'PlutusScriptV1'
+                    : bfType === 'plutusV2' ? 'PlutusScriptV2'
+                    : bfType === 'plutusV3' ? 'PlutusScriptV3'
+                    : 'PlutusScriptV2'; // legacy fallback
+                output.reference_script = { bytes: scriptCbor.cbor ?? '', type: ogmiosType };
             } catch (e: any) {
                 Logger.log({
                     message: `Failed to fetch reference script ${bfOutput.reference_script_hash} for ${txHash}#${output.tx_index}: ${e?.message ?? e}`,

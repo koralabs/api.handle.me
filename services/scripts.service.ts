@@ -207,21 +207,58 @@ const fetchAssignedScriptHandles = async (type: ScriptType, cache: Map<ScriptTyp
 
 export const getScriptSlug = (type: ScriptType) => SCRIPT_SOURCES[type]?.slug ?? type;
 
+// Map possible script.type strings (varies by indexer / fallback path) to
+// the canonical Plutus language tag byte. Cardano on-chain Plutus script_hash
+// = blake2b-224(language_tag || cbor_bytes); V1=0x01, V2=0x02, V3=0x03.
 const PLUTUS_LANGUAGE_TAGS: Record<string, string> = {
     plutusV1: '01',
     plutusV2: '02',
-    plutusV3: '03'
+    plutusV3: '03',
+    PlutusScriptV1: '01',
+    PlutusScriptV2: '02',
+    PlutusScriptV3: '03',
+    'plutus:v1': '01',
+    'plutus:v2': '02',
+    'plutus:v3': '03'
 };
 
 const getValidatorHashFromScriptCbor = (scriptCbor?: string, scriptType?: string) => {
     if (!scriptCbor || !/^[0-9a-f]+$/i.test(scriptCbor) || scriptCbor.length % 2 !== 0) {
         return null;
     }
-    // Cardano on-chain Plutus script_hash = blake2b-224(language_tag || cbor_bytes).
-    // V1 = 0x01, V2 = 0x02, V3 = 0x03. Default to V2 for back-compat when
-    // scriptType is unknown (pre-V3-cutover behavior of the api).
     const tag = (scriptType && PLUTUS_LANGUAGE_TAGS[scriptType]) || '02';
     return blake2b(Buffer.from(`${tag}${scriptCbor}`, 'hex'), 28);
+};
+
+const computeAllPlutusHashes = (scriptCbor: string) => {
+    return {
+        v1: blake2b(Buffer.from(`01${scriptCbor}`, 'hex'), 28),
+        v2: blake2b(Buffer.from(`02${scriptCbor}`, 'hex'), 28),
+        v3: blake2b(Buffer.from(`03${scriptCbor}`, 'hex'), 28)
+    };
+};
+
+// Resolve the script's actual on-chain plutus version by querying Blockfrost
+// for which of {V1,V2,V3}-tagged hash exists. The api's stored
+// `script.type` field is unreliable (the koios-fallback path historically
+// hardcoded PlutusScriptV2 regardless of actual). The chain is the source
+// of truth — only one of the three hashes will resolve.
+const resolveOnChainScriptVersion = async (scriptCbor: string): Promise<string | null> => {
+    const hashes = computeAllPlutusHashes(scriptCbor);
+    const network = (process.env.NETWORK?.toLowerCase() ?? 'preview');
+    const apiKey = process.env.BLOCKFROST_API_KEY ?? '';
+    if (!apiKey) return null;
+    const baseUrl = `https://cardano-${network}.blockfrost.io/api/v0`;
+    for (const [v, hash] of Object.entries(hashes)) {
+        try {
+            const r = await fetch(`${baseUrl}/scripts/${hash.toString('hex')}`, { headers: { project_id: apiKey } });
+            if (r.ok) {
+                const j = await r.json() as { type?: string };
+                if (j.type === `plutus${v.toUpperCase()}`) return `plutus${v.toUpperCase()}`;
+            }
+        } catch { /* ignore */ }
+    }
+    return null;
 };
 
 const buildScriptEntry = async (
@@ -232,8 +269,16 @@ const buildScriptEntry = async (
     scriptSourceHandle: StoredHandle = handle
 ): Promise<[string, ScriptDetails] | null> => {
     const refScriptAddress = scriptSourceHandle.resolved_addresses?.ada;
-    const validatorHash = getValidatorHashFromScriptCbor(scriptSourceHandle.script?.cbor, scriptSourceHandle.script?.type);
-    if (!refScriptAddress || !validatorHash || !scriptSourceHandle.script?.cbor) {
+    const cbor = scriptSourceHandle.script?.cbor;
+    if (!cbor) return null;
+    // Try the stored type first; if it's missing OR the resulting hash isn't
+    // on chain, fall back to a Blockfrost lookup that tries V1/V2/V3 in order.
+    let scriptType = scriptSourceHandle.script?.type;
+    if (!scriptType || !PLUTUS_LANGUAGE_TAGS[scriptType]) {
+        scriptType = await resolveOnChainScriptVersion(cbor) ?? 'plutusV2';
+    }
+    const validatorHash = getValidatorHashFromScriptCbor(cbor, scriptType);
+    if (!refScriptAddress || !validatorHash) {
         return null;
     }
 
