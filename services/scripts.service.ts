@@ -267,12 +267,16 @@ const buildScriptEntry = async (
     const refScriptAddress = scriptSourceHandle.resolved_addresses?.ada;
     const cbor = scriptSourceHandle.script?.cbor;
     if (!cbor) return null;
-    // Try the stored type first; if it's missing OR the resulting hash isn't
-    // on chain, fall back to a Blockfrost lookup that tries V1/V2/V3 in order.
-    let scriptType = scriptSourceHandle.script?.type;
-    if (!scriptType || !PLUTUS_LANGUAGE_TAGS[scriptType]) {
-        scriptType = await resolveOnChainScriptVersion(cbor) ?? 'plutusV2';
-    }
+    // Always probe Blockfrost for the actual on-chain plutus version.
+    // We can't trust scriptSourceHandle.script.type because the
+    // historical koios-fallback indexing path hardcoded PlutusScriptV2
+    // for every reference script, regardless of its actual on-chain type.
+    // Only fall back to the stored type if the probe fails (no API key,
+    // network error). Cached in memory at the module level for the request
+    // lifetime so we don't hammer Blockfrost on every /scripts call.
+    let scriptType = await resolveOnChainScriptVersion(cbor)
+        ?? scriptSourceHandle.script?.type
+        ?? 'plutusV2';
     const validatorHash = getValidatorHashFromScriptCbor(cbor, scriptType);
     if (!refScriptAddress || !validatorHash) {
         return null;
