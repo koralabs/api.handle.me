@@ -384,6 +384,22 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
             : Math.max(...matches.map(({ ordinal }) => ordinal));
         const unoptimizedCbor = await fetchUnoptimizedCbor(scriptType, unoptimizedCborCache);
         const assignedScriptHandles = await fetchAssignedScriptHandles(scriptType, assignedScriptHandlesCache);
+        // Build a per-response-type map of active assigned handle name so the
+        // V3 PZ split (persprx/perspz/perslfc/persdsg) each marks its own
+        // family head as latest, not just whichever the legacy single-handle
+        // `.find()` happened to return first.
+        const activeAssignedHandleByResponseType = new Map<string, string>();
+        for (const assignedName of assignedScriptHandles ?? []) {
+            const assigned = handleRepo.getHandle(assignedName);
+            if (!assigned?.script?.cbor) continue;
+            const parsed = parseScriptHandle(assigned.name);
+            if (!parsed) continue;
+            if (!activeAssignedHandleByResponseType.has(parsed.responseType)) {
+                activeAssignedHandleByResponseType.set(parsed.responseType, assigned.name.toLowerCase());
+            }
+        }
+        // Back-compat single-name for downstream fallback below. Picks the
+        // first active assigned handle of any family.
         const activeAssignedHandleName = assignedScriptHandles
             ?.map((handleName) => handleRepo.getHandle(handleName))
             .find((handle): handle is StoredHandle => !!handle?.script?.cbor)
@@ -411,12 +427,14 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
 
         for (const { handle, ordinal, responseType } of matches) {
             const familyLatestOrdinal = latestOrdinalByResponseType.get(responseType) ?? latestOrdinal;
+            const familyActive = activeAssignedHandleByResponseType.get(responseType);
+            const isLatest = familyActive
+                ? handle.name.toLowerCase() === familyActive
+                : ordinal === familyLatestOrdinal;
             const scriptEntry = await buildScriptEntry(
                 handle,
                 scriptType,
-                activeAssignedHandleName
-                    ? handle.name.toLowerCase() === activeAssignedHandleName
-                    : ordinal === familyLatestOrdinal,
+                isLatest,
                 unoptimizedCbor,
                 handle,
                 responseType
@@ -426,23 +444,32 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
             }
         }
 
-        if (activeAssignedHandleName && !matches.some(({ handle }) => handle.name.toLowerCase() === activeAssignedHandleName)) {
-            const activeAssignedHandle = handleRepo.getHandle(activeAssignedHandleName);
+        // For each response-type family with an active assigned handle that
+        // wasn't included in the search matches, load and add it explicitly.
+        for (const [familyResponseType, familyActiveName] of activeAssignedHandleByResponseType.entries()) {
+            if (matches.some(({ handle, responseType }) =>
+                responseType === familyResponseType && handle.name.toLowerCase() === familyActiveName
+            )) {
+                continue;
+            }
+            const activeAssignedHandle = handleRepo.getHandle(familyActiveName);
             if (activeAssignedHandle?.script?.cbor) {
-                const activeMatch = parseScriptHandle(activeAssignedHandle.name);
                 const scriptEntry = await buildScriptEntry(
                     activeAssignedHandle,
                     scriptType,
                     true,
                     unoptimizedCbor,
                     activeAssignedHandle,
-                    activeMatch?.responseType ?? scriptType
+                    familyResponseType
                 );
                 if (scriptEntry) {
                     scripts[scriptEntry[0]] = scriptEntry[1];
                 }
             }
         }
+
+        // Suppress unused-variable lint for the back-compat name.
+        void activeAssignedHandleName;
     }
 
     return scripts;
