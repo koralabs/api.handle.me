@@ -21,8 +21,12 @@ class ScriptsController {
                 ? requestedType
                     ? Object.entries(indexedScripts).filter(([_, value]) => {
                         const valueType = typeof value.type === 'string' ? value.type.toLowerCase() : '';
-                        if (querySlug && valueType.startsWith(querySlug)) {
-                            return true;
+                        // Documented startsWith semantics: `?type=pers` matches
+                        // both 'pers' (V2) and the V3 sub-slugs (persprx,
+                        // perspz, perslfc, persdsg). `?type=persprx` narrows
+                        // strictly to that family.
+                        if (querySlug) {
+                            return valueType.startsWith(querySlug);
                         }
                         return valueType === getScriptSlug(requestedType);
                     })
