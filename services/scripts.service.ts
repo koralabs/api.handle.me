@@ -230,31 +230,27 @@ const getValidatorHashFromScriptCbor = (scriptCbor?: string, scriptType?: string
     return blake2b(Buffer.from(`${tag}${scriptCbor}`, 'hex'), 28);
 };
 
-const computeAllPlutusHashes = (scriptCbor: string) => {
-    return {
-        v1: blake2b(Buffer.from(`01${scriptCbor}`, 'hex'), 28),
-        v2: blake2b(Buffer.from(`02${scriptCbor}`, 'hex'), 28),
-        v3: blake2b(Buffer.from(`03${scriptCbor}`, 'hex'), 28)
-    };
-};
-
 // Resolve the script's actual on-chain plutus version by querying Blockfrost
 // for which of {V1,V2,V3}-tagged hash exists. The api's stored
 // `script.type` field is unreliable (the koios-fallback path historically
 // hardcoded PlutusScriptV2 regardless of actual). The chain is the source
 // of truth — only one of the three hashes will resolve.
 const resolveOnChainScriptVersion = async (scriptCbor: string): Promise<string | null> => {
-    const hashes = computeAllPlutusHashes(scriptCbor);
+    const hashes: Array<[string, string]> = [
+        ['plutusV1', blake2b(Buffer.from(`01${scriptCbor}`, 'hex'), 28)],
+        ['plutusV2', blake2b(Buffer.from(`02${scriptCbor}`, 'hex'), 28)],
+        ['plutusV3', blake2b(Buffer.from(`03${scriptCbor}`, 'hex'), 28)]
+    ];
     const network = (process.env.NETWORK?.toLowerCase() ?? 'preview');
     const apiKey = process.env.BLOCKFROST_API_KEY ?? '';
     if (!apiKey) return null;
     const baseUrl = `https://cardano-${network}.blockfrost.io/api/v0`;
-    for (const [v, hash] of Object.entries(hashes)) {
+    for (const [version, hash] of hashes) {
         try {
-            const r = await fetch(`${baseUrl}/scripts/${hash.toString('hex')}`, { headers: { project_id: apiKey } });
+            const r = await fetch(`${baseUrl}/scripts/${hash}`, { headers: { project_id: apiKey } });
             if (r.ok) {
                 const j = await r.json() as { type?: string };
-                if (j.type === `plutus${v.toUpperCase()}`) return `plutus${v.toUpperCase()}`;
+                if (j.type === version) return version;
             }
         } catch { /* ignore */ }
     }
@@ -298,7 +294,7 @@ const buildScriptEntry = async (
             handleHex: handle.hex,
             refScriptAddress,
             refScriptUtxo: scriptSourceHandle.utxo,
-            cbor: scriptSourceHandle.script.cbor,
+            cbor,
             unoptimizedCbor,
             validatorHash,
             latest,
