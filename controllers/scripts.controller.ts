@@ -10,9 +10,22 @@ class ScriptsController {
             const requestedType = typeof type === 'string' ? resolveScriptTypeQuery(type) : undefined;
 
             const indexedScripts = await getScriptsIndex(req, requestedType);
+            // `?type=X` is documented as a startsWith filter on the script
+            // family slug, so `?type=pers` should match the V3 sub-slugs
+            // (persprx, perspz, perslfc, persdsg) as well as the legacy
+            // `pers` slug. When the query is a specific sub-slug like
+            // `?type=persprx`, the same startsWith filter naturally
+            // narrows to that single family.
+            const querySlug = typeof type === 'string' ? type.toLowerCase() : null;
             const allScripts = type
                 ? requestedType
-                    ? Object.entries(indexedScripts).filter(([_, value]) => value.type === getScriptSlug(requestedType))
+                    ? Object.entries(indexedScripts).filter(([_, value]) => {
+                        const valueType = typeof value.type === 'string' ? value.type.toLowerCase() : '';
+                        if (querySlug && valueType.startsWith(querySlug)) {
+                            return true;
+                        }
+                        return valueType === getScriptSlug(requestedType);
+                    })
                     : []
                 : Object.entries(indexedScripts);
 
