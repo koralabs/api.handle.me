@@ -207,12 +207,21 @@ const fetchAssignedScriptHandles = async (type: ScriptType, cache: Map<ScriptTyp
 
 export const getScriptSlug = (type: ScriptType) => SCRIPT_SOURCES[type]?.slug ?? type;
 
-const getValidatorHashFromScriptCbor = (scriptCbor?: string) => {
+const PLUTUS_LANGUAGE_TAGS: Record<string, string> = {
+    plutusV1: '01',
+    plutusV2: '02',
+    plutusV3: '03'
+};
+
+const getValidatorHashFromScriptCbor = (scriptCbor?: string, scriptType?: string) => {
     if (!scriptCbor || !/^[0-9a-f]+$/i.test(scriptCbor) || scriptCbor.length % 2 !== 0) {
         return null;
     }
-
-    return blake2b(Buffer.from(`02${scriptCbor}`, 'hex'), 28);
+    // Cardano on-chain Plutus script_hash = blake2b-224(language_tag || cbor_bytes).
+    // V1 = 0x01, V2 = 0x02, V3 = 0x03. Default to V2 for back-compat when
+    // scriptType is unknown (pre-V3-cutover behavior of the api).
+    const tag = (scriptType && PLUTUS_LANGUAGE_TAGS[scriptType]) || '02';
+    return blake2b(Buffer.from(`${tag}${scriptCbor}`, 'hex'), 28);
 };
 
 const buildScriptEntry = async (
@@ -223,7 +232,7 @@ const buildScriptEntry = async (
     scriptSourceHandle: StoredHandle = handle
 ): Promise<[string, ScriptDetails] | null> => {
     const refScriptAddress = scriptSourceHandle.resolved_addresses?.ada;
-    const validatorHash = getValidatorHashFromScriptCbor(scriptSourceHandle.script?.cbor);
+    const validatorHash = getValidatorHashFromScriptCbor(scriptSourceHandle.script?.cbor, scriptSourceHandle.script?.type);
     if (!refScriptAddress || !validatorHash || !scriptSourceHandle.script?.cbor) {
         return null;
     }
