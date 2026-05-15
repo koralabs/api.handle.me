@@ -970,6 +970,40 @@ const fmtMs = (ms: number) => `${(ms / 1000).toFixed(2)}s`;
         console.log(`    ${p.name.padEnd(12)} rps=${p.rps} batch=${p.batchSize}  attempted=${s.assetsAttempted} found=${s.assetsFound} missing=${s.assetsMissing} 404s=${s.notFound404s} calls=${s.calls} fails=${s.failures} elapsed=${fmtMs(s.elapsedMs)} effRps=${effRps}`);
     }
     console.log(`  Total UTxO records: ${results.length}`);
+
+    // Phase 4b: per-handle Blockfrost rescue.
+    // Koios sometimes returns no UTxO for an asset that exists on chain (we've
+    // observed ~50 LBL_222/LBL_000 holders silently dropped per preprod run).
+    // The on-chain MPT keys these asset names regardless of where Koios's
+    // index thinks the UTxO is, so dropping them produces a snapshot whose
+    // computed root then misses chain by one entry per drop. After the main
+    // dispatch finishes, walk the original work set, find items that didn't
+    // yield a UtxoRecord, and re-fetch via Blockfrost (which has them).
+    const foundKeys = new Set(results.map((r) => `${r.policy}|${r.assetNameHex}`));
+    const stillMissing = work.filter((w) => !foundKeys.has(`${w.policy}|${w.assetNameHex}`));
+    if (stillMissing.length > 0) {
+        console.log(`  Phase 4b: ${stillMissing.length} work items dropped by Koios — rescuing via Blockfrost`);
+        const rescuePool: Pool = { name: 'bf-rescue', kind: 'blockfrost', apiKey: BF_HIGH, rps: BF_HIGH_RPS, batchSize: 1 };
+        let rescued = 0;
+        let rescuedFails = 0;
+        for (const w of stillMissing) {
+            try {
+                const rec = await fetchUtxoBlockfrost(rescuePool, w);
+                if (rec) {
+                    results.push(rec);
+                    rescued++;
+                }
+            } catch (e: any) {
+                rescuedFails++;
+                console.error(`  bf-rescue ${w.policy.slice(0, 10)}…/${w.assetNameHex.slice(0, 16)}…: ${e?.message ?? e}`);
+            }
+            if (rescued > 0 && rescued % 20 === 0) process.stderr.write(`\r  [phase4b] rescued ${rescued}/${stillMissing.length}`);
+        }
+        process.stderr.write('\n');
+        console.log(`  Phase 4b done: rescued=${rescued} fails=${rescuedFails} stillMissing=${stillMissing.length - rescued}`);
+        console.log(`  Total UTxO records (post-rescue): ${results.length}`);
+    }
+
     console.log(`  [elapsed ${fmtMs(Date.now() - t4)}]`);
 
     // Phase 2b: per-asset first-mint-tx
