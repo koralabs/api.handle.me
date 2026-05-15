@@ -963,14 +963,36 @@ const processReindex = async () => {
 // A failed inline repair retries on the next invocation via the normal scan path.
 // Full S3 reimports are only for schema version changes or manual resets, never for rollbacks.
 
+// Snapshot reimport peaks around 7GB working set on mainnet. Below 8GB the
+// process Runtime.OutOfMemory's mid-import — Lambda kills it silently, partial
+// state remains in Valkey, the next invocation overwrites partial state with
+// partial state, and the scanner eventually settles at a corrupt-but-stable
+// handle_count short of chain truth (incident 2026-05-15: east landed at
+// 237,645 vs west's 265,649). Refuse to start the import in that environment
+// so the operator gets a loud signal instead of silent corruption. See
+// docs/spec/scanner-recovery-runbook.md.
+const SNAPSHOT_REIMPORT_MIN_MEMORY_MB = 8192;
+
 const ensureUTxOsReady = async () => {
     const { currentBlockHash, currentSlot, utxoSchemaVersion = 0 } = handlesRepo.getMetrics();
     const currentUTxOSchemaVersion = Number(store.getUTxOSchemaVersion());
     if (currentUTxOSchemaVersion <= Number(utxoSchemaVersion) && currentBlockHash && currentSlot) return;
 
+    // AWS Lambda exposes its memory limit (MB) at runtime via this env var.
+    // Missing/non-numeric → not running in Lambda (local dev, tests) → skip.
+    const lambdaMemoryMb = Number(process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE);
+    if (Number.isFinite(lambdaMemoryMb) && lambdaMemoryMb > 0 && lambdaMemoryMb < SNAPSHOT_REIMPORT_MIN_MEMORY_MB) {
+        Logger.log({
+            message: `Snapshot reimport refused: scanner Lambda memory is ${lambdaMemoryMb}MB, need >= ${SNAPSHOT_REIMPORT_MIN_MEMORY_MB}MB. Bump memory + republish + update alias before reimport will proceed (see docs/spec/scanner-recovery-runbook.md). Holding state at currentBlockHash=${currentBlockHash ?? ''} currentSlot=${currentSlot ?? ''}.`,
+            category: LogCategory.NOTIFY,
+            event: 'scannerLambda.repopulateBlocked.lowMemory'
+        });
+        return;
+    }
+
     handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.UTXO_IMPORT, lockLambdasTimestamp: Date.now() });
     Logger.log({
-        message: `UTxOs are repopulating. currentBlockHash=${currentBlockHash ?? ''} currentSlot=${currentSlot ?? ''} storedUTxOSchemaVersion=${utxoSchemaVersion} targetUTxOSchemaVersion=${currentUTxOSchemaVersion}`,
+        message: `UTxOs are repopulating. currentBlockHash=${currentBlockHash ?? ''} currentSlot=${currentSlot ?? ''} storedUTxOSchemaVersion=${utxoSchemaVersion} targetUTxOSchemaVersion=${currentUTxOSchemaVersion} lambdaMemoryMb=${lambdaMemoryMb || 'unknown'}`,
         category: LogCategory.WARN,
         event: 'scannerLambda.repopulateUTxOs'
     });
