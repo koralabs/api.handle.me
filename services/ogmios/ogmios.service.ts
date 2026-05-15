@@ -101,7 +101,23 @@ class OgmiosService {
     private _createWebSocketClient(): WebSocket {
         const client = new WebSocket(new url.URL(OGMIOS_HOST).toString(), {allowSynchronousEvents: false});
         client.on('message', fastq.promise(async (msg: string) => {
-            const response = JSON.parse(msg);
+            let response: any;
+            try {
+                response = JSON.parse(msg);
+            } catch (error: any) {
+                // A malformed Ogmios frame means the upstream is sending us
+                // garbage — there's nothing useful to do but stop. NOTIFY so
+                // someone investigates, then exit; the persisted cursor is
+                // unchanged (setMetrics only runs on successful forward), so
+                // the dropped block is picked up cleanly on restart via
+                // find-intersection.
+                Logger.log({
+                    message: `Failed to parse Ogmios message; halting: ${error?.message ?? error}`,
+                    category: LogCategory.NOTIFY,
+                    event: 'OgmiosClient.parseError'
+                });
+                process.exit(1);
+            }
             switch (response.id) {
                 case 'find-intersection':
                     for (let i=1; i<=100; i++) {

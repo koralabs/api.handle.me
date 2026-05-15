@@ -144,7 +144,7 @@ export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[], datumByHash 
             }
         }, []);
 
-        for (const o of t.outputs) {
+        for (const o of t.outputs ?? []) {
             const handles = o.asset_list.reduce<[string, string[]][]>((acc, asset) => {
                 const { policy_id: policyId, asset_name: assetName } = asset;
                 if (HANDLE_POLICIES.contains(NETWORK as Network, policyId)) {
@@ -247,13 +247,13 @@ const blockfrostFallbackJson = async (endpointSegment: string): Promise<any> => 
     return response.json();
 };
 
-export const fetchBlockfrostTxHashes = async (blockHashes: string[]): Promise<string[]> => {
-    const allTxHashes: string[] = [];
+export const fetchBlockfrostTxHashes = async (blockHashes: string[]): Promise<{ block_hash: string; tx_hash: string }[]> => {
+    const rows: { block_hash: string; tx_hash: string }[] = [];
     for (const blockHash of blockHashes) {
         const txHashes = await fetchPaginatedResults<string>(`blocks/${blockHash}/txs`);
-        allTxHashes.push(...txHashes);
+        for (const tx_hash of txHashes) rows.push({ block_hash: blockHash, tx_hash });
     }
-    return allTxHashes;
+    return rows;
 };
 
 export const fetchBlockfrostTxInfo = async (txHash: string): Promise<KoiosTxInfo> => {
@@ -312,13 +312,19 @@ export const fetchBlockfrostTxInfo = async (txHash: string): Promise<KoiosTxInfo
             reference_script: null as { bytes: string; type: string } | null
         }));
 
-    // Fetch reference script bytes (and language tag) for outputs that have
-    // them. The /cbor endpoint only returns the bytes — the language is on
-    // the /scripts/{hash} metadata endpoint and we need it so the api
-    // computes the right validator hash for V3 scripts (was hardcoded V2).
+    // Fetch reference script bytes AND the language-tag metadata for outputs
+    // that have them. The /cbor endpoint only returns the bytes — the language
+    // lives on /scripts/{hash} and we need it so the api computes the right
+    // validator hash for V1/V2/V3 scripts (was hardcoded V2). If the cbor
+    // fetch fails with anything but 404 the throw propagates so the scanner
+    // halts cleanly (same posture as dabea7e/6772557 for incomplete coverage).
     for (const output of outputs) {
         const bfOutput = (utxoData.outputs ?? []).find((o: any) => o.output_index === output.tx_index && !o.collateral);
         if (bfOutput?.reference_script_hash) {
+            // 404 = the chain has no script bytes registered for this hash.
+            // Match the fetchBlockfrostDatumCbor posture: persist no script
+            // and move on. Other errors propagate (transient 5xx, network)
+            // so the scanner halts and retries cleanly.
             try {
                 // Fetch BOTH the cbor and the script-type metadata. The type
                 // (plutusV1/V2/V3, camelCase from Blockfrost) flows into
@@ -332,16 +338,14 @@ export const fetchBlockfrostTxInfo = async (txHash: string): Promise<KoiosTxInfo
                     blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}/cbor`),
                     blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}`).catch(() => ({}))
                 ]);
-                output.reference_script = {
-                    bytes: scriptCbor.cbor ?? '',
-                    type: scriptMeta?.type ?? 'plutusV2'
-                };
+                if (scriptCbor?.cbor) {
+                    output.reference_script = {
+                        bytes: scriptCbor.cbor,
+                        type: scriptMeta?.type ?? 'plutusV2'
+                    };
+                }
             } catch (e: any) {
-                Logger.log({
-                    message: `Failed to fetch reference script ${bfOutput.reference_script_hash} for ${txHash}#${output.tx_index}: ${e?.message ?? e}`,
-                    category: LogCategory.NOTIFY,
-                    event: 'blockfrostFallback.referenceScriptFetchFailed'
-                });
+                if (e?.status !== 404) throw e;
             }
         }
     }
@@ -391,7 +395,13 @@ export const fetchBlockfrostDatumCbor = async (datumHash: string): Promise<strin
     try {
         const data = await blockfrostFallbackJson(`scripts/datum/${datumHash}/cbor`);
         return data?.cbor ?? null;
-    } catch {
-        return null;
+    } catch (e: any) {
+        // 404 = the chain has no datum bytes registered for this hash. That is a
+        // legitimate state (e.g. a datum hash referenced in a tx where the bytes
+        // were never published). Persist null and move on; this is NOT a coverage
+        // gap, it's the chain saying the datum doesn't exist. Transient errors
+        // (5xx, network) must throw so the scanner halts and retries cleanly.
+        if (e?.status === 404) return null;
+        throw e;
     }
 };

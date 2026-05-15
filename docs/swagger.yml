@@ -1087,32 +1087,38 @@ paths:
       - utils
       summary: List script metadata by network
       description: |
-        Returns script metadata derived from subhandles under `@handlecontract`.
-        Response object keys are the script addresses derived from each validator hash.
-        `refScriptAddress` is the on-chain address of the handle that holds the reference script UTxO.
-        When available, `unoptimizedCbor` is fetched from the owning contract repo at `deploy/<network>/<slug>.unoptimized.cbor`.
+        Returns one entry for every `<slug><ordinal>@handlecontract` subhandle that has inline script CBOR. There is no curated allow-list of contract families — whatever is on chain shows up here.
+
+        Response object keys are the script addresses derived from each validator hash. `refScriptAddress` is the on-chain address of the handle that holds the reference script UTxO. `type` is the family slug (the slug minus its trailing digits) — `pers1@handlecontract` has type `pers`, `persprx1@handlecontract` has type `persprx`.
+
+        Within each family the highest ordinal that has script CBOR is marked `latest: true`. Latest entries are emitted first so JSON-iteration order surfaces them up front.
       parameters:
       - name: latest
         in: query
-        description: If true, return only the latest script for the requested `type` (or latest `pz_contract` when `type` is omitted)
+        description: When `true`, only entries marked `latest` are returned (one per family that has a script). Combine with `type` to scope to specific families.
         required: false
         schema:
           type: boolean
       - name: type
         in: query
-        description: Filter scripts by canonical contract slug. Preferred values are canonical slugs such as `mkpl`, `demimntprx`, and `halmntprx`. Deprecated legacy aliases such as `marketplace_contract`, `demi_mint_proxy`, and `hal_mint_proxy` are still accepted during the migration window.
+        description: |
+          Optional `startsWith` filter on the slug part of the handle name (everything before `@handlecontract`).
+
+          - `type=pers` returns every family whose slug begins with `pers` — `pers`, `persprx`, `perspz`, `perslfc`, `persdsg`, …
+          - `type=persprx` returns only `persprx<n>` entries.
+
+          The match is case-insensitive and applied to the full slug including its ordinal, so any prefix that uniquely identifies a family also works.
         required: false
         schema:
-          $ref: "#/components/schemas/ScriptQueryType"
+          type: string
+          example: pers
       responses:
         '200':
-          description: Script metadata
+          description: Script metadata keyed by derived script address. Returns `{}` if no families match the filter.
           content:
             application/json:
               schema:
                 type: object
-        '404':
-          description: Latest script not found
   "/deployment":
     get:
       tags:
@@ -1807,40 +1813,9 @@ components:
       - virtual_subhandle
     ScriptType:
       type: string
-      description: Canonical contract slug names returned by `/scripts` response payloads.
-      enum:
-      - pers
-      - subh
-      - mkpl
-      - demimntprx
-      - demimnt
-      - demimntmpt
-      - demiord
-      - halmntprx
-      - halmnt
-      - halmntmpt
-      - halord
-      - halrefprx
-      - halref
-      - halroy
-    ScriptQueryType:
-      type: string
-      description: Canonical slug names accepted by the `/scripts` `type` query parameter. Deprecated legacy aliases remain accepted for a transition period.
-      enum:
-      - pers
-      - subh
-      - mkpl
-      - demimntprx
-      - demimnt
-      - demimntmpt
-      - demiord
-      - halmntprx
-      - halmnt
-      - halmntmpt
-      - halord
-      - halrefprx
-      - halref
-      - halroy
+      description: |
+        Family slug emitted in `/scripts` response payloads. The slug is the part of the deployment-handle name (`<slug><ordinal>@handlecontract`) that comes before the trailing digits — `pers1@handlecontract` has slug `pers`, `persprx1@handlecontract` has slug `persprx`. Any slug that exists on chain can appear; there is no fixed enum.
+      example: pers
     HexString:
       type: string
       example: "0x1a3dfb"

@@ -1,9 +1,8 @@
-import { ERROR_TEXT, HandleType, HttpException, ScriptType } from '@koralabs/kora-labs-common';
+import { ERROR_TEXT, HandleType, HttpException } from '@koralabs/kora-labs-common';
 import * as cbor from '@koralabs/kora-labs-common/utils/cbor';
 import request from 'supertest';
 import App from '../app';
 import * as config from '../config';
-import * as scriptsService from '../services/scripts.service';
 
 jest.mock('../services/ogmios/ogmios.service');
 
@@ -926,25 +925,12 @@ describe('Testing Handles Routes', () => {
             expect(response.headers.link).toContain('rel="successor-version"');
         });
 
-        it('should attach configured script when handle has no inline script', async () => {
-            const getScriptByRefAddressSpy = jest.spyOn(scriptsService, 'getScriptByRefAddress').mockResolvedValue({
-                handle: 'pz_script_01',
-                handleHex: 'hex',
-                validatorHash: 'abc',
-                type: 'pz_contract',
-                cbor: 'deadbeef'
-            } as any);
-
+        it('should return script_not_found when handle has no inline script', async () => {
             const response = await request(app?.getServer()).get('/handles/missing_handle_script/script');
-            expect(response.status).toEqual(200);
-            expect(response.body).toEqual({
-                handle: 'pz_script_01',
-                handleHex: 'hex',
-                validatorHash: 'abc',
-                type: 'pz_contract',
-                cbor: 'deadbeef'
-            });
-            expect(getScriptByRefAddressSpy).toHaveBeenCalledWith(expect.anything(), 'addr1_script_lookup', ScriptType.PZ_CONTRACT);
+            expect(response.status).toEqual(404);
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'script_not_found'
+            }));
         });
 
         it('should return script not found', async () => {
@@ -972,15 +958,7 @@ describe('Testing Handles Routes', () => {
             expect(response.body).toEqual({ address: 'addr1_ref_token', datum: '', index: 0, lovelace: 0, tx_id: 'tx_id', script:{ 'cbor': 'a247', type: 'plutus_v2' }});
         });
 
-        it('should attach configured script when reference token utxo has no script', async () => {
-            const getScriptByRefAddressSpy = jest.spyOn(scriptsService, 'getScriptByRefAddress').mockResolvedValue({
-                handle: 'pz_script_01',
-                handleHex: 'hex',
-                validatorHash: 'abc',
-                type: 'pz_contract',
-                cbor: 'deadbeef'
-            } as any);
-
+        it('returns the reference token utxo as-is when it has no inline script', async () => {
             const response = await request(app?.getServer()).get('/handles/missing_ref_script/reference_token');
             expect(response.status).toEqual(200);
             expect(response.body).toEqual({
@@ -988,16 +966,8 @@ describe('Testing Handles Routes', () => {
                 datum: '',
                 index: 0,
                 lovelace: 0,
-                tx_id: 'tx_id_missing_script',
-                script: {
-                    handle: 'pz_script_01',
-                    handleHex: 'hex',
-                    validatorHash: 'abc',
-                    type: 'pz_contract',
-                    cbor: 'deadbeef'
-                }
+                tx_id: 'tx_id_missing_script'
             });
-            expect(getScriptByRefAddressSpy).toHaveBeenCalledWith(expect.anything(), 'addr1_script_lookup', ScriptType.PZ_CONTRACT);
         });
 
         it('should return empty object when reference token cannot be found', async () => {

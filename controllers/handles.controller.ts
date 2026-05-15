@@ -20,7 +20,6 @@ import { MAX_PAGINATED_RESULTS, MAX_TEXT_PLAIN_PAGINATED_RESULTS } from '../conf
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandleViewModel } from '../models/view/handle.view.model';
 import { HandlesRepository } from '../repositories/handlesRepository';
-import { getScriptByRefAddress, resolvePreferredScriptTypeForHandleName } from '../services/scripts.service';
 import { ApiError, statusCodeToErrorCode } from '../utils/apiError';
 import { wantsRawCbor, wantsTextPlain } from '../utils/contentNegotiation';
 
@@ -33,27 +32,6 @@ const setSearchTotal = (res: Response, total: number) => {
 };
 
 class HandlesController {
-    private static async getScriptByAddress(req: Request<any>, address?: string, handleName?: string): Promise<UTxO['script'] | undefined> {
-        if (!address) {
-            return;
-        }
-
-        const script = await getScriptByRefAddress(req, address, resolvePreferredScriptTypeForHandleName(handleName));
-        if (script?.cbor && script?.type) {
-            return script as unknown as UTxO['script'];
-        }
-    }
-
-    private static async attachReferenceTokenScript(req: Request<any>, utxo: UTxO, handleName?: string): Promise<UTxO> {
-        if (utxo.script) {
-            return utxo;
-        }
-
-        utxo.script = await HandlesController.getScriptByAddress(req, utxo.address, handleName);
-
-        return utxo;
-    }
-
     private static validateRecordsPerPage(recordsPerPage?: string, maxRecordsPerPage = MAX_PAGINATED_RESULTS): void {
         const count = Number(recordsPerPage);
         if (recordsPerPage && Number.isFinite(count) && count > maxRecordsPerPage) {
@@ -231,8 +209,7 @@ class HandlesController {
             const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
             const refUtxo = handleRepo.getUTxO(handle.reference_utxo)
             if (refUtxo) {
-                const reference_token = await HandlesController.attachReferenceTokenScript(req, new UTxO(refUtxo), handle.name);
-                return { reference_token, code };
+                return { reference_token: new UTxO(refUtxo), code };
             }
         }
 
@@ -325,9 +302,7 @@ class HandlesController {
         try {
             const { code, handle } = await HandlesController.getHandleFromRepo(req);
 
-            const script =
-                handle.script ??
-                await HandlesController.getScriptByAddress(req, handle.resolved_addresses?.ada, handle.name);
+            const script = handle.script;
             if (!script) {
                 throw ApiError.scriptNotFound();
             }
@@ -367,7 +342,20 @@ class HandlesController {
             }
 
             if (utxo) {
-                handle.subhandle_settings.utxo = new UTxO(utxo);
+                // Match the API-wide content-negotiation rule applied by
+                // getHandleUTxO / getHandleDatum: default response is
+                // JSON-decoded datum, raw CBOR is opt-in via Accept header.
+                // Embedding raw CBOR inside a JSON envelope (the prior
+                // behaviour) forced clients to second-guess the format.
+                let decodedDatum = utxo.datum;
+                if (decodedDatum) {
+                    try {
+                        decodedDatum = await decodeCborToJson({ cborString: decodedDatum, schema: {}, defaultKeyType: req.query.default_key_type as DefaultTextFormat });
+                    } catch {
+                        throw ApiError.datumDecodeFailed();
+                    }
+                }
+                handle.subhandle_settings.utxo = new UTxO({ ...utxo, datum: decodedDatum });
             }
 
             res.status(code).json(handle.subhandle_settings);
@@ -390,7 +378,18 @@ class HandlesController {
                 throw ApiError.subhandleSettingsUtxoNotFound();
             }
 
-            handle.subhandle_settings.utxo = new UTxO(utxo);
+            // Default to JSON-decoded datum to match getHandleUTxO; raw CBOR
+            // is opt-in via Accept: text/plain (or application/cbor). Same
+            // content-negotiation contract the rest of the API uses.
+            let decodedDatum = utxo.datum;
+            if (decodedDatum && !wantsRawCbor(req)) {
+                try {
+                    decodedDatum = await decodeCborToJson({ cborString: decodedDatum, schema: {}, defaultKeyType: req.query.default_key_type as DefaultTextFormat });
+                } catch {
+                    throw ApiError.datumDecodeFailed();
+                }
+            }
+            handle.subhandle_settings.utxo = new UTxO({ ...utxo, datum: decodedDatum });
 
             res.status(code).json(handle.subhandle_settings.utxo);
         } catch (error) {

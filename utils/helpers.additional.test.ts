@@ -90,4 +90,24 @@ describe('helpers additional tests', () => {
             cbor: 'ef01'
         });
     });
+
+    // Regression: previously `for (const o of t.outputs)` threw if Koios ever
+    // returned outputs:undefined for a tx — the surrounding scanner caught the
+    // throw and silently advanced the cursor past the block.
+    it('buildUTxOsFromKoiosTxs treats a tx with no outputs as zero UTxOs (no throw)', () => {
+        const txs = [
+            {
+                tx_hash: 'tx-no-outputs',
+                block_hash: 'block-1',
+                block_height: 10,
+                absolute_slot: 100,
+                assets_minted: [],
+                outputs: undefined,
+                metadata: {}
+            }
+        ] as any;
+
+        expect(() => buildUTxOsFromKoiosTxs(txs)).not.toThrow();
+        expect(buildUTxOsFromKoiosTxs(txs)).toEqual([]);
+    });
 });

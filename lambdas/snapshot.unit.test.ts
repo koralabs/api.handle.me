@@ -83,19 +83,50 @@ describe('snapshot unit branches', () => {
         expect(redisClientCall).toHaveBeenCalledWith('scan', '0', { match: getApiIndexScanPattern(IndexNames.MINT), count: 10000 });
     });
 
-    it('logs and returns empty snapshot content when redis enumeration fails', async () => {
+    // Regression: previously a redis-init failure was caught, logged at ERROR
+    // (not NOTIFY), and getRedisItems returned partial/empty state. processSnapshot
+    // would then write that partial state to S3, silently shipping a corrupted
+    // snapshot. We now throw to halt the snapshot publish.
+    it('throws (does not silently return empty) when redis enumeration fails', async () => {
         const snapshot = await loadSnapshotModule(() => ({
             initialize: jest.fn().mockRejectedValue('redis down'),
             getKeysFromIndex: jest.fn().mockReturnValue([]),
             listAllScannedBlocks: jest.fn().mockReturnValue([])
         }));
 
-        const result = await snapshot.processSnapshot('preview');
+        await expect(snapshot.processSnapshot('preview')).rejects.toBeDefined();
+    });
 
-        expect(result.slot).toBe(0);
-        expect(result.hash).toBe('');
-        expect(result.utxos).toEqual([]);
-        expect(result.mintingData).toEqual({});
+    // Regression: a corrupt mint JSON used to throw inside .map(JSON.parse) and
+    // hit the function-scope catch which logged ERROR and returned PARTIAL state,
+    // then processSnapshot wrote it to S3. Now the catch re-throws so the publish
+    // is aborted — even one unparseable record halts the whole process.
+    it('throws when a mint record cannot be parsed', async () => {
+        let scanCall = 0;
+        const snapshot = await loadSnapshotModule(() => ({
+            initialize: jest.fn().mockResolvedValue(undefined),
+            getMetrics: jest.fn().mockReturnValue({
+                currentSlot: 10,
+                currentBlockHash: 'head',
+                utxoSchemaVersion: 2
+            }),
+            redisClientCall: jest.fn().mockImplementation(() => {
+                scanCall += 1;
+                if (scanCall === 1) return ['0', []];
+                if (scanCall === 2) return ['0', [getApiIndexKey(IndexNames.MINT, 'corruptHandle')]];
+                return ['0', []];
+            }),
+            pipeline: jest.fn().mockImplementation((commands: CallableFunction) => {
+                commands();
+                return [new Set(['{this is not json'])];
+            }),
+            getHashFromIndex: jest.fn(),
+            getValuesFromIndexedSet: jest.fn(),
+            getKeysFromIndex: jest.fn().mockReturnValue(['corruptHandle']),
+            listAllScannedBlocks: jest.fn().mockReturnValue([])
+        }));
+
+        await expect(snapshot.processSnapshot('preview')).rejects.toThrow(SyntaxError);
     });
 
     it('handles undefined mint pipeline entries by emitting empty arrays', async () => {

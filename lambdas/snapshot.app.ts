@@ -183,7 +183,16 @@ const getRedisItems = async () => {
             }
         } while (cursor !== '0');
     } catch (error: any) {
-        Logger.log({ message: `Error counting keys: ${error?.message ?? error}`, category: LogCategory.ERROR, event: 'snapshot.getRedisItems' });
+        // Don't swallow — the prior NOTIFY-less ERROR + return-partial behavior
+        // shipped corrupted snapshots to S3 on any failure (redis down, malformed
+        // mint JSON, etc). Halt the snapshot publish; better to skip a run than
+        // ship bad state. Matches the dabea7e/6772557 posture.
+        Logger.log({
+            message: `Snapshot getRedisItems failed: ${error?.message ?? error}`,
+            category: LogCategory.NOTIFY,
+            event: 'snapshot.getRedisItems'
+        });
+        throw error;
     }
 
     Logger.local(`Total UTxOs: ${utxos.size.toLocaleString()}`);

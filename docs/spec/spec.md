@@ -109,13 +109,13 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - `GET /mpt-root` compares the API's computed Merkle Patricia Trie root hash against the on-chain root from the `handle_root@handle_settings` datum; returns `verified: true` when they match
 - `POST /datum` CBOR/JSON encode/decode utility
 - `GET /policies` normalized handle policy settings derived from `handle_policies`
-- `GET /scripts` network script catalog (`latest`, `type` query support)
-  - script entries are resolved from canonical `<slug><ordinal>@handlecontract` subhandles
-  - the `type` query parameter accepts canonical slugs: `pers`, `subh`, `mkpl`, `demimntprx`, `demimnt`, `demimntmpt`, `demiord`, `halmntprx`, `halmnt`, `halmntmpt`, `halord`, `halrefprx`, `halref`, `halroy`
-  - deprecated legacy aliases (`pz_contract`, `sub_handle_settings`, `marketplace_contract`, `demi_mint_proxy`, `hal_mint_proxy`, etc.) are still accepted
-  - response payload `type` values use the canonical slugs
-  - response keys are validator-hash-derived script addresses, while `refScriptAddress` points to the handle-held reference script UTxO address
-  - `unoptimizedCbor`, when present, is loaded from the owning contract repo at `deploy/<network>/<slug>.unoptimized.cbor`
+- `GET /scripts` network script catalog
+  - lists every `<slug><ordinal>@handlecontract` subhandle that has inline script CBOR — no curated family allow-list
+  - response keys are validator-hash-derived script addresses; `refScriptAddress` points to the handle-held reference script UTxO address
+  - response `type` is the family slug (the slug minus its trailing digits): `pers1@handlecontract` → `pers`, `persprx1@handlecontract` → `persprx`
+  - `?type=X` is a case-insensitive `startsWith` match on the slug — `type=pers` returns every family beginning with `pers`; `type=persprx` returns only `persprx<n>`
+  - `?latest=true` filters to entries marked `latest: true` (highest ordinal per family that has script CBOR); combine with `?type=X` to scope to specific families
+  - latest entries are emitted first so JSON-iteration order surfaces the active deployments up front
 - `POST /mcp` Model Context Protocol JSON-RPC endpoint with read-only tools:
   - `get_handle`
   - `get_handle_utxo`
@@ -145,10 +145,8 @@ Rules:
 - canonical slugs must be 10 characters or fewer and must not contain `-` or `_`.
 
 API transition rule:
-- canonical slug naming is the long-term source of truth for new deployment handles and new repo-owned contract identifiers.
-- `/scripts` `type=` query values now prefer canonical slugs such as `mkpl`, `demimntprx`, and `halmntprx`.
-- `/scripts` still accepts legacy query aliases such as `marketplace_contract`, `demi_mint_proxy`, and `hal_mint_proxy` during the migration window.
-- handle-backed discovery maps new ordinalized `*.handlecontract` names and repo-owned `deploy/<network>/<slug>.unoptimized.cbor` artifacts onto canonical slug response `type` values while still accepting legacy query aliases during migration.
+- canonical slug naming is the source of truth for deployment handles and repo-owned contract identifiers.
+- `/scripts` accepts any string for `type=` — legacy aliases like `marketplace_contract` no longer match because there is no alias map. Use the canonical slug (e.g. `mkpl`).
 
 ## Search and Pagination Behavior
 - Handles endpoints support:

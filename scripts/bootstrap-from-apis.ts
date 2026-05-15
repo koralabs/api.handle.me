@@ -324,6 +324,7 @@ interface UtxoRecord {
     blockHeight?: number;
     blockTime?: number;
     inlineDatumCbor?: string;
+    datumHash?: string;
     referenceScriptHash?: string;
     referenceScriptCbor?: string;
     // Plutus language tag (`plutusV1` / `plutusV2` / `plutusV3`). Required so
@@ -397,6 +398,7 @@ const toKoiosRecords = (rows: any[], batch: WorkItem[], poolName: string): UtxoR
                 blockHeight: r.block_height,
                 blockTime: r.block_time,
                 inlineDatumCbor: r.inline_datum?.bytes,
+                datumHash: r.datum_hash ?? undefined,
                 referenceScriptHash: r.reference_script?.hash,
                 referenceScriptCbor: r.reference_script?.bytes,
                 referenceScriptType: r.reference_script?.type,
@@ -408,13 +410,33 @@ const toKoiosRecords = (rows: any[], batch: WorkItem[], poolName: string): UtxoR
     return records;
 };
 
+// Koios's asset_utxos enforces a 5120-byte body limit and returns 413 when a
+// batch's assets serialize past it. @-subhandle names are long enough that a
+// 50-item batch can hit the cap; the previous catch in runWorker logged the
+// 413 and dropped the entire batch's work items, leaving e.g. 15 handles from
+// the stale-preview list missing from the snapshot's utxos despite their
+// minting data being present. Recursively halve the batch on 413 so every
+// work item still ends up attempted.
 const fetchUtxoBatchKoios = async (pool: Pool, batch: WorkItem[]): Promise<UtxoRecord[]> => {
     const body = JSON.stringify({
         _asset_list: batch.map((w) => [w.policy, w.assetNameHex]),
         _extended: true
     });
-    const rows = await koiosFetch('asset_utxos', { method: 'POST', body, token: pool.token }) as any[];
-    return toKoiosRecords(rows, batch, pool.name);
+    try {
+        const rows = await koiosFetch('asset_utxos', { method: 'POST', body, token: pool.token }) as any[];
+        return toKoiosRecords(rows, batch, pool.name);
+    } catch (e: any) {
+        const msg = String(e?.message ?? '');
+        if (/\b413\b/.test(msg) && batch.length > 1) {
+            const mid = Math.ceil(batch.length / 2);
+            const [left, right] = await Promise.all([
+                fetchUtxoBatchKoios(pool, batch.slice(0, mid)),
+                fetchUtxoBatchKoios(pool, batch.slice(mid))
+            ]);
+            return [...left, ...right];
+        }
+        throw e;
+    }
 };
 
 // Koios `asset_utxos` rejects POST bodies > 5120 bytes with HTTP 413. A batch
@@ -441,6 +463,16 @@ const fetchUtxoBatchKoiosWithSplit = async (pool: Pool, batch: WorkItem[]): Prom
 
 // Blockfrost has no /assets/{id}/utxos endpoint (confirmed against its OpenAPI
 // spec). Two-call path: /assets/{asset}/addresses → /addresses/{addr}/utxos/{asset}.
+//
+// /addresses/.../utxos returns reference_script_hash but NOT the script bytes;
+// when a handle's UTxO carries a reference script we must fetch the bytes via
+// /scripts/{hash}/cbor so groupUtxosByOutput stores a complete `script` field
+// downstream. Without this, any handle assigned to the Blockfrost pool during
+// the 4-pool dispatch lands in the snapshot with script=null, and the api's
+// /scripts index drops it (entries require handle.script.cbor). Concrete miss
+// observed on preview demimnt1/2 + demimntmpt1/2 — Koios's asset_utxos returns
+// reference_script.bytes for the same UTxO, so handles that happened to land
+// in the Koios pool got cbor while Blockfrost-pool handles didn't.
 const fetchUtxoBlockfrost = async (pool: Pool, work: WorkItem): Promise<UtxoRecord | null> => {
     const assetId = `${work.policy}${work.assetNameHex}`;
     const holders = await blockfrostFetch(`assets/${assetId}/addresses?count=1`, pool.token) as { address: string; quantity: string }[];
@@ -449,6 +481,18 @@ const fetchUtxoBlockfrost = async (pool: Pool, work: WorkItem): Promise<UtxoReco
     const utxos = await blockfrostFetch(`addresses/${encodeURIComponent(holder.address)}/utxos/${assetId}?count=1`, pool.token) as any[];
     const u = utxos?.[0];
     if (!u) return null;
+    let referenceScriptCbor: string | undefined;
+    if (u.reference_script_hash) {
+        try {
+            const cborResp = await blockfrostFetch(`scripts/${u.reference_script_hash}/cbor`, pool.token) as { cbor?: string };
+            referenceScriptCbor = cborResp?.cbor;
+        } catch (e: any) {
+            // Surface the failure but don't abort the whole record — the
+            // snapshot loader can still index the handle without a script,
+            // and a later forward scan via Koios will populate it.
+            console.error(`  ${pool.name} scripts/${u.reference_script_hash}/cbor failed: ${e?.message ?? e}`);
+        }
+    }
     return {
         handleName: work.handleName,
         policy: work.policy,
@@ -460,7 +504,12 @@ const fetchUtxoBlockfrost = async (pool: Pool, work: WorkItem): Promise<UtxoReco
         lovelace: (u.amount ?? []).find((x: any) => x.unit === 'lovelace')?.quantity ?? '',
         blockHeight: u.block_height,
         inlineDatumCbor: u.inline_datum,
+        // Blockfrost's /addresses/.../utxos field name is `data_hash`, not `datum_hash`.
+        // Capture it so groupUtxosByOutput can carry the hash through to a Phase 4d
+        // datum-bytes resolution pass for non-inline datums.
+        datumHash: u.data_hash ?? undefined,
         referenceScriptHash: u.reference_script_hash,
+        referenceScriptCbor,
         fetchedVia: 'blockfrost',
         poolName: pool.name
     };
@@ -496,6 +545,11 @@ const runPhase4 = async (work: WorkItem[]): Promise<{ results: UtxoRecord[]; sta
     const results: UtxoRecord[] = [];
     const stats: Record<string, PoolStats> = {};
 
+    // Fail-fast: any non-413 batch error or non-404 Blockfrost error throws
+    // out of the worker, rejects Promise.all, and exits the script via the
+    // top-level catch. No point spending more rate-limit budget once we know
+    // the snapshot will be incomplete. 413s are already handled inside
+    // fetchUtxoBatchKoios via recursive halving.
     const runPool = async (pool: Pool) => {
         const limiter = new RateLimiter(Math.ceil(1000 / pool.rps));
         const st: PoolStats = stats[pool.name] = { assetsAttempted: 0, assetsFound: 0, assetsMissing: 0, calls: 0, failures: 0, notFound404s: 0, elapsedMs: 0 };
@@ -509,35 +563,29 @@ const runPhase4 = async (work: WorkItem[]): Promise<{ results: UtxoRecord[]; sta
                 await limiter.acquire();
                 st.calls++;
                 st.assetsAttempted += batch.length;
-                try {
-                    if (pool.kind === 'koios') {
-                        const recs = await fetchUtxoBatchKoiosWithSplit(pool, batch);
-                        results.push(...recs);
-                        st.assetsFound += recs.length;
-                        st.assetsMissing += Math.max(0, batch.length - recs.length);
-                    } else {
-                        for (const w of batch) {
-                            try {
-                                const rec = await fetchUtxoBlockfrost(pool, w);
-                                if (rec) {
-                                    results.push(rec);
-                                    st.assetsFound++;
-                                } else {
-                                    st.assetsMissing++;
-                                }
-                            } catch (inner: any) {
-                                if (/\b404\b/.test(String(inner?.message ?? ''))) {
-                                    st.notFound404s++;
-                                } else {
-                                    st.failures++;
-                                    console.error(`  ${pool.name} asset ${w.assetNameHex.slice(0, 16)}… failed: ${inner?.message ?? inner}`);
-                                }
+                if (pool.kind === 'koios') {
+                    const recs = await fetchUtxoBatchKoiosWithSplit(pool, batch);
+                    results.push(...recs);
+                    st.assetsFound += recs.length;
+                    st.assetsMissing += Math.max(0, batch.length - recs.length);
+                } else {
+                    for (const w of batch) {
+                        try {
+                            const rec = await fetchUtxoBlockfrost(pool, w);
+                            if (rec) {
+                                results.push(rec);
+                                st.assetsFound++;
+                            } else {
+                                st.assetsMissing++;
+                            }
+                        } catch (inner: any) {
+                            if (/\b404\b/.test(String(inner?.message ?? ''))) {
+                                st.notFound404s++;
+                            } else {
+                                throw new Error(`Phase 4: ${pool.name} asset ${w.assetNameHex.slice(0, 16)}… failed: ${inner?.message ?? inner}`);
                             }
                         }
                     }
-                } catch (e: any) {
-                    st.failures++;
-                    console.error(`  ${pool.name} batch(${batch.length}) failed: ${e?.message ?? e}`);
                 }
                 if (st.calls % 10 === 0) {
                     process.stderr.write(
@@ -554,6 +602,7 @@ const runPhase4 = async (work: WorkItem[]): Promise<{ results: UtxoRecord[]; sta
 
     await Promise.all(pools.map(runPool));
     process.stderr.write('\n');
+
     return { results, stats, pools };
 };
 
@@ -605,6 +654,10 @@ const runPhase4c = async (txHashes: string[]): Promise<{ txInfo: TxInfoMap; stat
     const txInfo: TxInfoMap = new Map();
     const stats: Record<string, PoolStats> = {};
 
+    // Fail-fast: any throw out of fetchTxInfoBatchKoios propagates and aborts
+    // the phase. A snapshot with missing tx_info rows would ship handles whose
+    // minting history is incomplete — better to surface the upstream failure
+    // and re-run than spend the remaining rate-limit budget on a dead phase.
     const runPool = async (pool: Pool) => {
         const limiter = new RateLimiter(Math.ceil(1000 / pool.rps));
         const st: PoolStats = stats[pool.name] = { assetsAttempted: 0, assetsFound: 0, assetsMissing: 0, calls: 0, failures: 0, notFound404s: 0, elapsedMs: 0 };
@@ -618,17 +671,12 @@ const runPhase4c = async (txHashes: string[]): Promise<{ txInfo: TxInfoMap; stat
                 await limiter.acquire();
                 st.calls++;
                 st.assetsAttempted += batch.length;
-                try {
-                    const rows = await fetchTxInfoBatchKoios(pool, batch);
-                    for (const row of rows ?? []) {
-                        if (row?.tx_hash) txInfo.set(row.tx_hash, row);
-                    }
-                    st.assetsFound += rows?.length ?? 0;
-                    st.assetsMissing += Math.max(0, batch.length - (rows?.length ?? 0));
-                } catch (e: any) {
-                    st.failures++;
-                    console.error(`  ${pool.name} tx_info batch(${batch.length}) failed: ${e?.message ?? e}`);
+                const rows = await fetchTxInfoBatchKoios(pool, batch);
+                for (const row of rows ?? []) {
+                    if (row?.tx_hash) txInfo.set(row.tx_hash, row);
                 }
+                st.assetsFound += rows?.length ?? 0;
+                st.assetsMissing += Math.max(0, batch.length - (rows?.length ?? 0));
                 if (st.calls % 10 === 0) {
                     process.stderr.write(
                         `\r  [phase4c] queue ${cursor}/${queue.length}  ` +
@@ -644,6 +692,7 @@ const runPhase4c = async (txHashes: string[]): Promise<{ txInfo: TxInfoMap; stat
 
     await Promise.all(pools.map(runPool));
     process.stderr.write('\n');
+
     return { txInfo, stats, pools };
 };
 
@@ -754,11 +803,18 @@ interface GroupedUtxo {
     lovelace: string;
     blockHeight?: number;
     inlineDatumCbor?: string;
+    datumHash?: string;
     referenceScriptCbor?: string;
     referenceScriptType?: string;
     handlesByPolicy: Map<string, Set<string>>;
 }
 
+// Multiple WorkItems can describe the same on-chain UTxO (e.g. LBL_222 + LBL_100
+// in the same UTxO are two work items, sometimes dispatched to different pools).
+// Each fetch path returns its own UtxoRecord; whichever lands in the group first
+// used to set datum/script for the whole group, so a Blockfrost record whose
+// /scripts/{hash}/cbor sub-fetch errored could shadow the Koios record that did
+// have the bytes. Merge with `prev ?? incoming` so any non-null field wins.
 const groupUtxosByOutput = (records: UtxoRecord[]): GroupedUtxo[] => {
     const byKey = new Map<string, GroupedUtxo>();
     for (const r of records) {
@@ -772,11 +828,17 @@ const groupUtxosByOutput = (records: UtxoRecord[]): GroupedUtxo[] => {
                 lovelace: r.lovelace,
                 blockHeight: r.blockHeight,
                 inlineDatumCbor: r.inlineDatumCbor,
+                datumHash: r.datumHash,
                 referenceScriptCbor: r.referenceScriptCbor,
                 referenceScriptType: r.referenceScriptType,
                 handlesByPolicy: new Map()
             };
             byKey.set(key, g);
+        } else {
+            g.inlineDatumCbor = g.inlineDatumCbor ?? r.inlineDatumCbor;
+            g.datumHash = g.datumHash ?? r.datumHash;
+            g.referenceScriptCbor = g.referenceScriptCbor ?? r.referenceScriptCbor;
+            g.blockHeight = g.blockHeight ?? r.blockHeight;
         }
         let set = g.handlesByPolicy.get(r.policy);
         if (!set) { set = new Set(); g.handlesByPolicy.set(r.policy, set); }
@@ -788,7 +850,8 @@ const groupUtxosByOutput = (records: UtxoRecord[]): GroupedUtxo[] => {
 const buildUtxosWithTxInfo = (
     grouped: GroupedUtxo[],
     txInfo: TxInfoMap,
-    policiesSet: Set<string>
+    policiesSet: Set<string>,
+    datumByHash: Map<string, string>
 ): UTxOWithTxInfo[] => {
     return grouped.map((g) => {
         const tx = txInfo.get(g.txHash);
@@ -824,6 +887,13 @@ const buildUtxosWithTxInfo = (
             ? filter721ForUtxo(extract721FromTxInfoMetadata(tx.metadata), policiesSet, utxoHandleNamesUtf8)
             : {};
 
+        // Datum resolution: prefer inline bytes, otherwise look up by hash. A
+        // missing-from-datumByHash hash means Koios `datum_info` legitimately
+        // had no row (e.g., the hash hasn't been resolved on chain) — leave
+        // datum undefined and let the snapshot reflect that.
+        const datum = g.inlineDatumCbor
+            ?? (g.datumHash ? datumByHash.get(g.datumHash) : undefined);
+
         const utxo: UTxOWithTxInfo = {
             id: `${g.txHash}#${g.txIndex}`,
             tx_id: g.txHash,
@@ -833,7 +903,7 @@ const buildUtxosWithTxInfo = (
             slot: Number(tx?.absolute_slot ?? 0),
             address: g.address,
             lovelace: Number(g.lovelace || 0),
-            datum: g.inlineDatumCbor,
+            datum,
             script: g.referenceScriptCbor ? { type: g.referenceScriptType ?? 'plutusV2', cbor: g.referenceScriptCbor } : undefined,
             handles: Array.from(g.handlesByPolicy.entries()).map(([p, set]) => [p, Array.from(set)]),
             mint: Array.from(mintByPolicy.entries()).map(([p, arr]) => [p, arr]),
@@ -854,6 +924,7 @@ interface BuildSnapshotArgs {
     handleNamesInSet: Set<string>;
     txInfo: TxInfoMap;
     policiesSet: Set<string>;
+    datumByHash: Map<string, string>;
 }
 
 const buildSnapshotFile = (args: BuildSnapshotArgs): VerifiedHandleFileContent => {
@@ -865,7 +936,7 @@ const buildSnapshotFile = (args: BuildSnapshotArgs): VerifiedHandleFileContent =
         verifiedAtUtc: new Date().toISOString()
     };
     const grouped = groupUtxosByOutput(args.utxoRecords);
-    const utxos = buildUtxosWithTxInfo(grouped, args.txInfo, args.policiesSet);
+    const utxos = buildUtxosWithTxInfo(grouped, args.txInfo, args.policiesSet, args.datumByHash);
     const mintingData = buildMintingData(args.mintSources, args.handleNamesInSet, args.txInfo, args.policiesSet);
 
     return {
@@ -1095,6 +1166,37 @@ const fmtMs = (ms: number) => `${(ms / 1000).toFixed(2)}s`;
     console.log(`  TxInfo rows collected: ${txInfoRun.txInfo.size}`);
     console.log(`  [elapsed ${fmtMs(Date.now() - t4c)}]`);
 
+    // Phase 4d: resolve datum hashes to bytes for any UTxO that stores its
+    // datum off-output (Cardano allows datum-by-hash where the bytes live in
+    // a separate witness, not the output itself). The pre-fix bootstrap had
+    // no field for the hash and no resolution step, so any handle whose
+    // canonical UTxO used datum-by-hash shipped in the snapshot with
+    // datum=undefined. Koios's datum_info POST takes _datum_hashes and
+    // returns { datum_hash, bytes }; we batch and merge into datumByHash.
+    const t4d = Date.now();
+    console.log('\nPhase 4d: resolve datum-hash bytes (for datums not stored inline)');
+    const datumHashesToResolve = new Set<string>();
+    for (const r of results) {
+        if (!r.inlineDatumCbor && r.datumHash) datumHashesToResolve.add(r.datumHash);
+    }
+    console.log(`  Datum hashes needing resolution: ${datumHashesToResolve.size}`);
+    const datumByHash = new Map<string, string>();
+    if (datumHashesToResolve.size > 0) {
+        const KOIOS_DATUM_BATCH = 50;
+        const hashList = Array.from(datumHashesToResolve);
+        for (let i = 0; i < hashList.length; i += KOIOS_DATUM_BATCH) {
+            const batch = hashList.slice(i, i + KOIOS_DATUM_BATCH);
+            const body = JSON.stringify({ _datum_hashes: batch });
+            const rows = await koiosFetch('datum_info', { method: 'POST', body }) as Array<{ datum_hash?: string; bytes?: string }>;
+            for (const row of rows ?? []) {
+                if (row?.datum_hash && row?.bytes) datumByHash.set(row.datum_hash, row.bytes);
+            }
+        }
+        const missing = hashList.filter((h) => !datumByHash.has(h));
+        console.log(`  Datum bytes resolved: ${datumByHash.size}/${datumHashesToResolve.size}${missing.length ? ` (missing ${missing.length}: ${missing.slice(0, 3).join(',')}${missing.length > 3 ? '…' : ''})` : ''}`);
+    }
+    console.log(`  [elapsed ${fmtMs(Date.now() - t4d)}]`);
+
     // Phase 5: snapshot
     const t5 = Date.now();
     console.log('\nPhase 5: build snapshot + gzip');
@@ -1107,7 +1209,8 @@ const fmtMs = (ms: number) => `${(ms / 1000).toFixed(2)}s`;
         mintSources: mintSourcesForFetch,
         handleNamesInSet: classified.handleNames,
         txInfo: txInfoRun.txInfo,
-        policiesSet
+        policiesSet,
+        datumByHash
     });
     const { bytes, gzBytes } = writeSnapshotGz(snapshot, outPath);
     const mintCount = Object.values(snapshot.mintingData).reduce((a, b) => a + b.length, 0);

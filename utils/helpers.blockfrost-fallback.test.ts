@@ -30,7 +30,11 @@ describe('Blockfrost fallback functions', () => {
 
             const result = await fetchBlockfrostTxHashes(['block1', 'block2']);
 
-            expect(result).toEqual(['tx1', 'tx2', 'tx3']);
+            expect(result).toEqual([
+                { block_hash: 'block1', tx_hash: 'tx1' },
+                { block_hash: 'block1', tx_hash: 'tx2' },
+                { block_hash: 'block2', tx_hash: 'tx3' }
+            ]);
         });
 
         it('returns empty array when blocks have no transactions', async () => {
@@ -330,6 +334,60 @@ describe('Blockfrost fallback functions', () => {
             const result = await fetchBlockfrostDatumCbor('nonexistent');
 
             expect(result).toBeNull();
+        });
+
+        // Regression: previously a transient 5xx was caught and returned null,
+        // making it indistinguishable from "not found" — the caller would persist
+        // a null datum on a UTxO that on-chain has one, breaking AGENTS.md's
+        // chain-accuracy rule. Now we throw on anything non-404 so the scanner
+        // halts (matching dabea7e/6772557 posture).
+        it('throws when Blockfrost returns a transient 5xx', async () => {
+            global.fetch = jest.fn().mockResolvedValue({
+                ok: false,
+                status: 503,
+                statusText: 'Service Unavailable'
+            }) as any;
+
+            await expect(fetchBlockfrostDatumCbor('hash_abc')).rejects.toThrow(/503/);
+        });
+    });
+
+    describe('fetchBlockfrostTxInfo reference_script propagation', () => {
+        // Regression: the prior catch around the reference-script fetch logged
+        // NOTIFY and persisted reference_script=null even though Blockfrost said a
+        // hash existed. Now the throw propagates so the scanner halts on
+        // chain-accuracy violations rather than shipping a stripped UTxO.
+        it('throws when reference_script_hash is set but cbor fetch fails', async () => {
+            const fetchMock = jest.fn().mockImplementation(async (url: string) => {
+                if (url.includes('/txs/tx_with_ref_script') && !url.includes('/utxos') && !url.includes('/metadata')) {
+                    return { ok: true, status: 200, json: async () => ({ block: 'b', block_height: 1, slot: 1, asset_mint_or_burn_count: 0 }) };
+                }
+                if (url.includes('/txs/tx_with_ref_script/utxos')) {
+                    return {
+                        ok: true,
+                        status: 200,
+                        json: async () => ({
+                            inputs: [],
+                            outputs: [{
+                                address: 'addr1',
+                                output_index: 0,
+                                amount: [{ unit: 'lovelace', quantity: '2000000' }],
+                                data_hash: null,
+                                inline_datum: null,
+                                collateral: false,
+                                reference_script_hash: 'script_hash_xyz'
+                            }]
+                        })
+                    };
+                }
+                if (url.includes('/scripts/script_hash_xyz/cbor')) {
+                    return { ok: false, status: 503, statusText: 'Service Unavailable' };
+                }
+                return { ok: true, status: 200, json: async () => ({}) };
+            });
+            global.fetch = fetchMock as any;
+
+            await expect(fetchBlockfrostTxInfo('tx_with_ref_script')).rejects.toThrow(/503/);
         });
     });
 });

@@ -48,7 +48,7 @@ Reading Handle state directly from chain providers for every request is expensiv
   - `/holders` and `/holders/:address` holder reverse lookup and aggregation
   - `/root-handles` for root handle inventory and filtering
 - Utility endpoints:
-  - `/scripts` for network script catalog and “latest per type”
+  - `/scripts` for the deployed-script catalog (every `*@handlecontract` subhandle with inline CBOR), with `?type=` slug `startsWith` filtering and `?latest=true` to scope to the highest ordinal per family
   - `/datum` CBOR/JSON encode/decode utility
   - `/policies` for normalized handle policy settings
   - `/deployment` for deployment metadata
