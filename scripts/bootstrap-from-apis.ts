@@ -482,15 +482,26 @@ const fetchUtxoBlockfrost = async (pool: Pool, work: WorkItem): Promise<UtxoReco
     const u = utxos?.[0];
     if (!u) return null;
     let referenceScriptCbor: string | undefined;
+    let referenceScriptType: string | undefined;
     if (u.reference_script_hash) {
+        // Fetch BOTH the cbor and the script-type metadata. /scripts/{hash}/cbor
+        // returns only bytes; the Plutus language version (plutusV1/V2/V3)
+        // lives on /scripts/{hash} and is the language tag the ledger uses to
+        // derive the validator hash. Without it we'd default to plutusV2 at
+        // snapshot reconstruction, hashing V3 bytes as V2 and advertising
+        // /scripts entries at addresses that don't exist on chain.
         try {
-            const cborResp = await blockfrostFetch(`scripts/${u.reference_script_hash}/cbor`, pool.token) as { cbor?: string };
+            const [cborResp, metaResp] = await Promise.all([
+                blockfrostFetch(`scripts/${u.reference_script_hash}/cbor`, pool.token) as Promise<{ cbor?: string }>,
+                (blockfrostFetch(`scripts/${u.reference_script_hash}`, pool.token) as Promise<{ type?: string }>).catch(() => ({} as { type?: string }))
+            ]);
             referenceScriptCbor = cborResp?.cbor;
+            referenceScriptType = metaResp?.type;
         } catch (e: any) {
             // Surface the failure but don't abort the whole record — the
             // snapshot loader can still index the handle without a script,
             // and a later forward scan via Koios will populate it.
-            console.error(`  ${pool.name} scripts/${u.reference_script_hash}/cbor failed: ${e?.message ?? e}`);
+            console.error(`  ${pool.name} scripts/${u.reference_script_hash} failed: ${e?.message ?? e}`);
         }
     }
     return {
@@ -510,6 +521,7 @@ const fetchUtxoBlockfrost = async (pool: Pool, work: WorkItem): Promise<UtxoReco
         datumHash: u.data_hash ?? undefined,
         referenceScriptHash: u.reference_script_hash,
         referenceScriptCbor,
+        referenceScriptType,
         fetchedVia: 'blockfrost',
         poolName: pool.name
     };
@@ -838,6 +850,7 @@ const groupUtxosByOutput = (records: UtxoRecord[]): GroupedUtxo[] => {
             g.inlineDatumCbor = g.inlineDatumCbor ?? r.inlineDatumCbor;
             g.datumHash = g.datumHash ?? r.datumHash;
             g.referenceScriptCbor = g.referenceScriptCbor ?? r.referenceScriptCbor;
+            g.referenceScriptType = g.referenceScriptType ?? r.referenceScriptType;
             g.blockHeight = g.blockHeight ?? r.blockHeight;
         }
         let set = g.handlesByPolicy.get(r.policy);
