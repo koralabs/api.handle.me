@@ -1,6 +1,6 @@
 import { ScriptDetails } from '@koralabs/kora-labs-common';
 import { NextFunction, Request, Response } from 'express';
-import { getScriptSlug, getScriptsIndex, resolveScriptTypeQuery } from '../services/scripts.service';
+import { findPrimaryLatestScript, getScriptSlug, getScriptsIndex, resolveScriptTypeQuery } from '../services/scripts.service';
 import { ApiError } from '../utils/apiError';
 
 class ScriptsController {
@@ -46,7 +46,7 @@ class ScriptsController {
                     return;
                 }
 
-                const latestScript = allScripts.find(([_, value]) => value.latest);
+                const latestScript = findPrimaryLatestScript(allScripts);
 
                 if (!latestScript) {
                     throw ApiError.latestScriptNotFound();

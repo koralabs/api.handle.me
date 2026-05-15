@@ -1874,7 +1874,7 @@ describe('Scanner lambda unit tests', () => {
         expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
     });
 
-    // Invariant: function-url reindex/repair shortcuts must NOT run concurrently with a
+    // Invariant: the function-url reindex shortcut must NOT run concurrently with a
     // cron-triggered scan. The lease is the mutex; if a shortcut request can't acquire it,
     // the scanner is actively writing to Valkey and we refuse the shortcut with 409 rather
     // than racing the writer. Failure mode: before the fix, the shortcut bypassed the lease
@@ -1893,23 +1893,6 @@ describe('Scanner lambda unit tests', () => {
 
         expect(result).toEqual(expect.objectContaining({ statusCode: 409 }));
         expect(JSON.parse(result.body)).toEqual(expect.objectContaining({ shortcut: 'reindex' }));
-        expect(store.repopulateIndexesFromUTxOs).not.toHaveBeenCalled();
-    });
-
-    it('lambdaHandler refuses repair shortcut with 409 when lease is held', async () => {
-        const { handlesRepo, scannerModule, store } = setup({ whitelistedApiKeys: 'allowed-a' });
-        handlesRepo.getMetrics.mockReturnValue({ lockLambdas: LockedLambdaReason.UNLOCKED });
-        scannerModule.Internal.acquireScannerLease('existing-owner');
-        const functionUrlEvent = {
-            requestContext: { http: { method: 'POST', path: '/repair-handles' } },
-            headers: { 'api-key': 'allowed-a' },
-            body: JSON.stringify({ handles: ['alpha'] })
-        } as any;
-
-        const result = await scannerModule.lambdaHandler(functionUrlEvent, {} as any);
-
-        expect(result).toEqual(expect.objectContaining({ statusCode: 409 }));
-        expect(JSON.parse(result.body)).toEqual(expect.objectContaining({ shortcut: 'repair' }));
         expect(store.repopulateIndexesFromUTxOs).not.toHaveBeenCalled();
     });
 

@@ -28,13 +28,29 @@ const buildScriptAddress = (scriptCbor: string) => {
     );
 };
 
-const buildHandle = (name: string, refScriptAddress: string, cbor = '4e4d0100') => ({
+const buildHandle = (name: string, refScriptAddress: string, cbor = '4e4d0100', scriptType = 'plutus_v2') => ({
     name,
     hex: Buffer.from(name).toString('hex'),
     utxo: `${Buffer.from(name).toString('hex').slice(0, 16)}#0`,
     resolved_addresses: { ada: refScriptAddress },
-    script: { cbor, type: 'plutus_v2' }
+    script: { cbor, type: scriptType }
 });
+
+const buildScriptAddressV3 = (scriptCbor: string) => {
+    if (!/^[0-9a-f]+$/i.test(scriptCbor) || scriptCbor.length % 2 !== 0) {
+        throw new Error(`Unable to derive validator hash from ${scriptCbor}`);
+    }
+    const validatorHash = blake2b(Buffer.from(`03${scriptCbor}`, 'hex'), 28);
+
+    return bech32AddressFromHashes(
+        validatorHash,
+        'script',
+        '',
+        'key',
+        'addr',
+        (process.env.NETWORK?.toLowerCase() ?? 'preview') !== 'mainnet'
+    );
+};
 
 const mockFetch = (cbors: Record<string, string>) => jest.spyOn(global, 'fetch').mockImplementation(async (input: any) => {
     const url = `${input}`;
@@ -258,6 +274,64 @@ describe('Scripts Routes Test', () => {
                 latest: true,
                 cbor: '4e4d0201',
                 unoptimizedCbor: 'pers-unoptimized'
+            }));
+        });
+
+        it('derives script address from PlutusV3 hash prefix (0x03) when script.type is plutusV3', async () => {
+            // Feature: a PlutusV3 script's validator hash is blake2b-224(0x03 || cbor) — the language tag differs
+            // from V2 (0x02). The api stores `script.type` from upstream data sources (koios reference_script.type
+            // or blockfrost scripts/{hash}.type) and must use the matching prefix when computing addresses.
+            // Failure mode: hardcoding 0x02 — the historical default — derived a V2 hash from V3 bytes, advertising
+            // the script at an address that doesn't exist on chain. The migrate handler then sent the LBL_100
+            // reference token to that ghost address; the V2 helios validator's `is_valid_contract` check
+            // rejected the migrate because the V2-prefix hash was not in `pz_settings.valid_contracts`.
+            // Negative control: removing the language-aware prefix would derive a different address from these bytes.
+            mockFetch({ pers: 'pers-unoptimized' });
+            const handles = {
+                'persprx1@handlecontract': buildHandle('persprx1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d03aa', 'plutusV3')
+            };
+
+            const response = mockResponse();
+            await new ScriptsController().index(
+                mockRequest({ latest: true, type: 'pers' }, { get: () => mockRegistry(handles) }),
+                response as any,
+                () => {}
+            );
+
+            expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+                scriptAddress: buildScriptAddressV3('4e4d03aa'),
+                handle: 'persprx1@handlecontract',
+                latest: true
+            }));
+        });
+
+        it('prefers persprx (spend proxy) when multiple PZ V3 handles are all marked latest', async () => {
+            // Feature: PZ V3 splits one PZ_CONTRACT family across four validators (proxy + three withdraw observers),
+            // and all four can be marked `latest: true`. `latest=true&type=pers` is consumed by the BFF migrate handler
+            // as the migration target — that is unambiguously the spend proxy (`persprx`), since observers don't have a spend side.
+            // Failure mode: returning `persdsg` / `perspz` / `perslfc` would send the LBL_100 ref token to a withdraw-only
+            //  contract that cannot be spent, bricking the migrated handle.
+            // Negative control: removing the persprx preference would let object-key iteration order win, which is alphabetical
+            //  (`persdsg1` first) — that's the failure we are guarding against.
+            mockFetch({ pers: 'pers-unoptimized' });
+            const handles = {
+                'persdsg1@handlecontract': buildHandle('persdsg1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d03dd'),
+                'perslfc1@handlecontract': buildHandle('perslfc1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d03ff'),
+                'persprx1@handlecontract': buildHandle('persprx1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d03aa'),
+                'perspz1@handlecontract': buildHandle('perspz1@handlecontract', 'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx', '4e4d03cc')
+            };
+
+            const response = mockResponse();
+            await new ScriptsController().index(
+                mockRequest({ latest: true, type: 'pers' }, { get: () => mockRegistry(handles) }),
+                response as any,
+                () => {}
+            );
+
+            expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+                scriptAddress: buildScriptAddress(handles['persprx1@handlecontract'].script.cbor),
+                handle: 'persprx1@handlecontract',
+                latest: true
             }));
         });
 

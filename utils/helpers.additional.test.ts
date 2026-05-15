@@ -86,7 +86,7 @@ describe('helpers additional tests', () => {
         expect(utxos[0].handles?.[0]?.[1]?.[0]).toBe(ownerToken);
         expect(utxos.some((utxo) => utxo.metadata?.['721']?.version === '2')).toBe(true);
         expect(utxos[1].script).toEqual({
-            type: 'PlutusScriptV2',
+            type: 'plutusV2',
             cbor: 'ef01'
         });
     });

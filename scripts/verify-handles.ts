@@ -52,52 +52,6 @@ const getOutputArg = (): string | null => {
     return idx > 0 && process.argv[idx + 1] ? process.argv[idx + 1] : null;
 };
 
-const getRepairArgs = (): { endpoint: string; apiKey: string; chunkSize: number } | null => {
-    if (!process.argv.includes('--repair')) return null;
-    const endpoint = process.env.SCANNER_REPAIR_URL;
-    const apiKey = process.env.SCANNER_REPAIR_API_KEY;
-    if (!endpoint || !apiKey) {
-        console.error('ERROR: --repair requires SCANNER_REPAIR_URL and SCANNER_REPAIR_API_KEY env vars');
-        process.exit(1);
-    }
-    const chunkIdx = process.argv.indexOf('--repair-chunk-size');
-    const chunkSize = chunkIdx > 0 && process.argv[chunkIdx + 1]
-        ? Math.max(1, Number(process.argv[chunkIdx + 1]))
-        : 100;
-    return { endpoint, apiKey, chunkSize };
-};
-
-const repairStaleHandles = async (stale: StaleHandle[], config: { endpoint: string; apiKey: string; chunkSize: number }) => {
-    console.error(`\n=== Repairing ${stale.length} stale handles in chunks of ${config.chunkSize} ===`);
-    const url = config.endpoint.replace(/\/$/, '') + '/repair-handles';
-    let totalRepaired = 0;
-    let totalNotFound = 0;
-    for (let i = 0; i < stale.length; i += config.chunkSize) {
-        const chunk = stale.slice(i, i + config.chunkSize);
-        const handles = chunk.map((s) => s.name);
-        const resp = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'content-type': 'application/json',
-                'api-key': config.apiKey
-            },
-            body: JSON.stringify({ handles })
-        });
-        if (!resp.ok) {
-            console.error(`  chunk ${i}: repair failed ${resp.status} ${await resp.text()}`);
-            continue;
-        }
-        const result = (await resp.json()) as { checked: number; repaired: number; notFound: number };
-        totalRepaired += result.repaired;
-        totalNotFound += result.notFound;
-        process.stderr.write(
-            `\r  chunk ${Math.min(i + config.chunkSize, stale.length)}/${stale.length} · total repaired=${totalRepaired} notFound=${totalNotFound}`
-        );
-    }
-    process.stderr.write('\n');
-    console.error(`Repair complete: repaired=${totalRepaired} notFound=${totalNotFound}`);
-};
-
 interface ApiHandle {
     name: string;
     hex: string;
@@ -230,13 +184,8 @@ const run = async () => {
     if (outputPath) {
         writeFileSync(outputPath, jsonOutput);
         console.error(`\nWrote ${stale.length} stale handles to ${outputPath}`);
-    } else if (!getRepairArgs()) {
+    } else {
         process.stdout.write(jsonOutput);
-    }
-
-    const repairConfig = getRepairArgs();
-    if (repairConfig && stale.length) {
-        await repairStaleHandles(stale, repairConfig);
     }
 };
 

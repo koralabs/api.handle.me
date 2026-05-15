@@ -195,7 +195,13 @@ export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[], datumByHash 
                 datum: resolveKoiosOutputDatum(o, datumByHash),
                 script: o.reference_script
                     ? {
-                        type: 'PlutusScriptV2',
+                        // Preserve Plutus language version from koios so the
+                        // /scripts hash computation can pick the right tag.
+                        // Hardcoding 'PlutusScriptV2' broke V3 deployments —
+                        // the resulting validator hash was wrong, and the
+                        // /scripts response advertised V3 scripts at a
+                        // V2-derived address that didn't exist on chain.
+                        type: o.reference_script.type ?? 'plutusV2',
                         cbor: o.reference_script.bytes
                     }
                     : undefined
@@ -306,29 +312,30 @@ export const fetchBlockfrostTxInfo = async (txHash: string): Promise<KoiosTxInfo
             reference_script: null as { bytes: string; type: string } | null
         }));
 
-    // Fetch reference script bytes for outputs that have them
+    // Fetch reference script bytes (and language tag) for outputs that have
+    // them. The /cbor endpoint only returns the bytes — the language is on
+    // the /scripts/{hash} metadata endpoint and we need it so the api
+    // computes the right validator hash for V3 scripts (was hardcoded V2).
     for (const output of outputs) {
         const bfOutput = (utxoData.outputs ?? []).find((o: any) => o.output_index === output.tx_index && !o.collateral);
         if (bfOutput?.reference_script_hash) {
             try {
-                // Fetch BOTH the script type metadata and the cbor — type
-                // identifies whether it's plutusV1/V2/V3, which the indexer
-                // and downstream consumers (scripts.service.ts) need to
-                // compute the correct on-chain script_hash. Hardcoding V2
-                // (the previous behavior) computed the wrong hash for V3
-                // scripts, breaking BFF tx builders that look up the script
-                // address by validatorHash.
-                const [scriptMeta, scriptCbor] = await Promise.all([
-                    blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}`),
-                    blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}/cbor`)
+                // Fetch BOTH the cbor and the script-type metadata. The type
+                // (plutusV1/V2/V3, camelCase from Blockfrost) flows into
+                // handle.script.type and feeds the validator-hash language
+                // tag in scripts.service.ts. Hardcoding 'plutusV2' (the
+                // historical default) produced wrong hashes for V3 scripts
+                // and broke BFF tx builders that look up the script address
+                // by validatorHash. Mirror the koios path which also passes
+                // through Blockfrost's camelCase type raw.
+                const [scriptCbor, scriptMeta] = await Promise.all([
+                    blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}/cbor`),
+                    blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}`).catch(() => ({}))
                 ]);
-                const bfType = (scriptMeta?.type ?? '').toString();
-                const ogmiosType =
-                    bfType === 'plutusV1' ? 'PlutusScriptV1'
-                    : bfType === 'plutusV2' ? 'PlutusScriptV2'
-                    : bfType === 'plutusV3' ? 'PlutusScriptV3'
-                    : 'PlutusScriptV2'; // legacy fallback
-                output.reference_script = { bytes: scriptCbor.cbor ?? '', type: ogmiosType };
+                output.reference_script = {
+                    bytes: scriptCbor.cbor ?? '',
+                    type: scriptMeta?.type ?? 'plutusV2'
+                };
             } catch (e: any) {
                 Logger.log({
                     message: `Failed to fetch reference script ${bfOutput.reference_script_hash} for ${txHash}#${output.tx_index}: ${e?.message ?? e}`,

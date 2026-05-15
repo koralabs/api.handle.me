@@ -326,6 +326,10 @@ interface UtxoRecord {
     inlineDatumCbor?: string;
     referenceScriptHash?: string;
     referenceScriptCbor?: string;
+    // Plutus language tag (`plutusV1` / `plutusV2` / `plutusV3`). Required so
+    // /scripts can derive the right validator hash — without it, V3 scripts
+    // were hashed as V2 and exposed at non-existent script addresses.
+    referenceScriptType?: string;
     fetchedVia: 'koios' | 'blockfrost';
     poolName: string;
 }
@@ -395,6 +399,7 @@ const toKoiosRecords = (rows: any[], batch: WorkItem[], poolName: string): UtxoR
                 inlineDatumCbor: r.inline_datum?.bytes,
                 referenceScriptHash: r.reference_script?.hash,
                 referenceScriptCbor: r.reference_script?.bytes,
+                referenceScriptType: r.reference_script?.type,
                 fetchedVia: 'koios',
                 poolName
             });
@@ -410,6 +415,28 @@ const fetchUtxoBatchKoios = async (pool: Pool, batch: WorkItem[]): Promise<UtxoR
     });
     const rows = await koiosFetch('asset_utxos', { method: 'POST', body, token: pool.token }) as any[];
     return toKoiosRecords(rows, batch, pool.name);
+};
+
+// Koios `asset_utxos` rejects POST bodies > 5120 bytes with HTTP 413. A batch
+// of 50 CIP-67 assets with long handle names (e.g. virtual subhandle UTF-8
+// names) routinely overshoots that. Without this split-retry, every 413 batch
+// silently dropped up to 50 items — manifesting later as MPT root mismatches
+// (the snapshot's mintingData listed handles whose UTxOs never arrived in the
+// snapshot, so the api index had fewer keys than the chain MPT).
+const fetchUtxoBatchKoiosWithSplit = async (pool: Pool, batch: WorkItem[]): Promise<UtxoRecord[]> => {
+    try {
+        return await fetchUtxoBatchKoios(pool, batch);
+    } catch (e: any) {
+        const msg = String(e?.message ?? '');
+        const isOversize = /\b413\b/.test(msg) || /Payload too large/i.test(msg);
+        if (!isOversize || batch.length <= 1) throw e;
+        const mid = Math.floor(batch.length / 2);
+        const [a, b] = await Promise.all([
+            fetchUtxoBatchKoiosWithSplit(pool, batch.slice(0, mid)),
+            fetchUtxoBatchKoiosWithSplit(pool, batch.slice(mid))
+        ]);
+        return [...a, ...b];
+    }
 };
 
 // Blockfrost has no /assets/{id}/utxos endpoint (confirmed against its OpenAPI
@@ -484,7 +511,7 @@ const runPhase4 = async (work: WorkItem[]): Promise<{ results: UtxoRecord[]; sta
                 st.assetsAttempted += batch.length;
                 try {
                     if (pool.kind === 'koios') {
-                        const recs = await fetchUtxoBatchKoios(pool, batch);
+                        const recs = await fetchUtxoBatchKoiosWithSplit(pool, batch);
                         results.push(...recs);
                         st.assetsFound += recs.length;
                         st.assetsMissing += Math.max(0, batch.length - recs.length);
@@ -728,6 +755,7 @@ interface GroupedUtxo {
     blockHeight?: number;
     inlineDatumCbor?: string;
     referenceScriptCbor?: string;
+    referenceScriptType?: string;
     handlesByPolicy: Map<string, Set<string>>;
 }
 
@@ -745,6 +773,7 @@ const groupUtxosByOutput = (records: UtxoRecord[]): GroupedUtxo[] => {
                 blockHeight: r.blockHeight,
                 inlineDatumCbor: r.inlineDatumCbor,
                 referenceScriptCbor: r.referenceScriptCbor,
+                referenceScriptType: r.referenceScriptType,
                 handlesByPolicy: new Map()
             };
             byKey.set(key, g);
@@ -805,7 +834,7 @@ const buildUtxosWithTxInfo = (
             address: g.address,
             lovelace: Number(g.lovelace || 0),
             datum: g.inlineDatumCbor,
-            script: g.referenceScriptCbor ? { type: 'plutus', cbor: g.referenceScriptCbor } : undefined,
+            script: g.referenceScriptCbor ? { type: g.referenceScriptType ?? 'plutusV2', cbor: g.referenceScriptCbor } : undefined,
             handles: Array.from(g.handlesByPolicy.entries()).map(([p, set]) => [p, Array.from(set)]),
             mint: Array.from(mintByPolicy.entries()).map(([p, arr]) => [p, arr]),
             metadata

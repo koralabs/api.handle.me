@@ -81,7 +81,23 @@ const createRepo = (req: Request<any>): HandlesRepository | null => {
     return new HandlesRepository(new registry.handlesStore());
 };
 
-const parseScriptHandle = (handleName: string): { type: ScriptType; responseType: string; ordinal: number } | null => {
+// PZ V3 splits the `pers` family into a spend proxy + three observer
+// validators (persprx + perspz/perslfc/persdsg). Each is exposed in
+// /scripts as its own slug — the BFF picks the right validator by name.
+// Only `persprx` is the spend script (migration target); observers are
+// withdraw-zero validators delegated to from the proxy.
+type ScriptRole = 'proxy' | 'observer';
+
+const PERS_V3_ROLE_KIND: Record<string, ScriptRole> = {
+    persprx: 'proxy',
+    perspz: 'observer',
+    perslfc: 'observer',
+    persdsg: 'observer'
+};
+
+const parseScriptHandle = (
+    handleName: string
+): { type: ScriptType; responseType: string; ordinal: number; role?: ScriptRole } | null => {
     const normalizedName = `${handleName}`.toLowerCase();
     if (!normalizedName.endsWith(HANDLE_SUFFIX)) {
         return null;
@@ -105,7 +121,8 @@ const parseScriptHandle = (handleName: string): { type: ScriptType; responseType
         return {
             type: sourceType,
             responseType: type,
-            ordinal: Number.parseInt(ordinal, 10)
+            ordinal: Number.parseInt(ordinal, 10),
+            role: PERS_V3_ROLE_KIND[slug]
         };
     }
 
@@ -117,13 +134,20 @@ const getNetwork = () => {
     return network === 'mainnet' || network === 'preprod' ? network : DEFAULT_NETWORK;
 };
 
-const getUnoptimizedCborUrl = (type: ScriptType) => {
+const getUnoptimizedCborUrl = (type: ScriptType, slugOverride?: string) => {
     const source = SCRIPT_SOURCES[type];
     if (!source) {
         return null;
     }
 
-    return `${GITHUB_RAW_BASE_URL}/${source.repo}/master/deploy/${getNetwork()}/${source.slug}.unoptimized.cbor`;
+    // For families that split one ScriptType across multiple validators
+    // (notably PZ V3 — persprx + perspz + perslfc + persdsg all map to
+    // PZ_CONTRACT), each validator publishes its own unoptimized cbor at
+    // `deploy/<network>/<role-slug>.unoptimized.cbor`. The caller passes
+    // the role slug parsed from the handle name. Without an override we
+    // fall back to the family-level `<type-slug>.unoptimized.cbor`.
+    const slug = slugOverride ?? source.slug;
+    return `${GITHUB_RAW_BASE_URL}/${source.repo}/master/deploy/${getNetwork()}/${slug}.unoptimized.cbor`;
 };
 
 const getDeploymentStateUrl = (type: ScriptType) => {
@@ -166,13 +190,18 @@ export const resolvePreferredScriptTypeForHandleName = (handleName?: string): Sc
     return ScriptType.PZ_CONTRACT;
 };
 
-const fetchUnoptimizedCbor = async (type: ScriptType, cache: Map<ScriptType, Promise<string | undefined>>) => {
-    const cached = cache.get(type);
+const fetchUnoptimizedCbor = async (
+    type: ScriptType,
+    cache: Map<string, Promise<string | undefined>>,
+    slugOverride?: string
+) => {
+    const cacheKey = `${type}::${slugOverride ?? ''}`;
+    const cached = cache.get(cacheKey);
     if (cached) {
         return cached;
     }
 
-    const url = getUnoptimizedCborUrl(type);
+    const url = getUnoptimizedCborUrl(type, slugOverride);
     const request = (async () => {
         if (!url) {
             return;
@@ -191,7 +220,7 @@ const fetchUnoptimizedCbor = async (type: ScriptType, cache: Map<ScriptType, Pro
         }
     })();
 
-    cache.set(type, request);
+    cache.set(cacheKey, request);
     return request;
 };
 
@@ -236,10 +265,22 @@ const fetchAssignedScriptHandles = async (type: ScriptType, cache: Map<ScriptTyp
 
 export const getScriptSlug = (type: ScriptType) => SCRIPT_SOURCES[type]?.slug ?? type;
 
-// Map possible script.type strings (varies by indexer / fallback path) to
-// the canonical Plutus language tag byte. Cardano on-chain Plutus script_hash
-// = blake2b-224(language_tag || cbor_bytes); V1=0x01, V2=0x02, V3=0x03.
+// Plutus validator hash = blake2b-224(<lang-tag> || cbor). The leading byte
+// tags the language so a script's hash differs across versions even when
+// the bytes are identical. The api stores `script.type` from upstream data
+// sources, each of which uses a different casing/punctuation:
+//   - ogmios scanner: `script.language.replace(':', '_')` → `plutus_v1` /
+//     `plutus_v2` / `plutus_v3` (snake_case)
+//   - koios `reference_script.type`, blockfrost `scripts/{hash}.type`:
+//     `plutusV1` / `plutusV2` / `plutusV3` (camelCase)
+//   - legacy older scans: `PlutusScriptV1` / `PlutusScriptV2` / `PlutusScriptV3`
+//   - raw ogmios (pre-normalization): `plutus:v1` / `plutus:v2` / `plutus:v3`
+// Anything we don't recognize falls back to V2 — historically the only
+// Plutus version the api ingested.
 const PLUTUS_LANGUAGE_TAGS: Record<string, string> = {
+    plutus_v1: '01',
+    plutus_v2: '02',
+    plutus_v3: '03',
     plutusV1: '01',
     plutusV2: '02',
     plutusV3: '03',
@@ -297,14 +338,12 @@ const buildScriptEntry = async (
     const refScriptAddress = scriptSourceHandle.resolved_addresses?.ada;
     const cbor = scriptSourceHandle.script?.cbor;
     if (!cbor) return null;
-    // Always probe Blockfrost for the actual on-chain plutus version.
-    // We can't trust scriptSourceHandle.script.type because the
-    // historical koios-fallback indexing path hardcoded PlutusScriptV2
-    // for every reference script, regardless of its actual on-chain type.
-    // Only fall back to the stored type if the probe fails (no API key,
-    // network error). Cached in memory at the module level for the request
-    // lifetime so we don't hammer Blockfrost on every /scripts call.
-    let scriptType = await resolveOnChainScriptVersion(cbor)
+    // Probe Blockfrost for the actual on-chain plutus version when possible.
+    // The stored script.type is unreliable on legacy entries — the historical
+    // koios-fallback indexing path hardcoded PlutusScriptV2 for every
+    // reference script regardless of its actual on-chain type. Only fall
+    // back to the stored type if the probe fails (no API key, network error).
+    const scriptType = await resolveOnChainScriptVersion(cbor)
         ?? scriptSourceHandle.script?.type
         ?? 'plutusV2';
     const validatorHash = getValidatorHashFromScriptCbor(cbor, scriptType);
@@ -374,20 +413,39 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
     }
 
     const scripts: { [scriptAddress: string]: ScriptDetails } = {};
-    const unoptimizedCborCache = new Map<ScriptType, Promise<string | undefined>>();
+    const unoptimizedCborCache = new Map<string, Promise<string | undefined>>();
     const assignedScriptHandlesCache = new Map<ScriptType, Promise<string[] | undefined>>();
+
+    // Extract the per-validator role slug from a SubHandle name when one is
+    // present. e.g., `persprx1@handlecontract` → `persprx`. Returns undefined
+    // for monolithic-validator handles like `pers6@handlecontract` so the
+    // family-level `<type-slug>.unoptimized.cbor` is used.
+    const HANDLECONTRACT_SUFFIX = '@handlecontract';
+    const getRoleSlug = (handleName: string): string | undefined => {
+        const lower = handleName.toLowerCase();
+        if (!lower.endsWith(HANDLECONTRACT_SUFFIX)) return undefined;
+        const stem = lower.slice(0, -HANDLECONTRACT_SUFFIX.length);
+        // Match `<slug-with-letters><digits>` — the digit suffix is the
+        // ordinal. The role slug is the letter prefix when it has letters
+        // beyond the family slug.
+        const m = stem.match(/^([a-z]+)\d+$/);
+        if (!m) return undefined;
+        return m[1];
+    };
 
     for (const [scriptType, matches] of matchesByType.entries()) {
         const matchesWithScript = matches.filter(({ handle }) => !!handle.script?.cbor);
         const latestOrdinal = matchesWithScript.length > 0
             ? Math.max(...matchesWithScript.map(({ ordinal }) => ordinal))
             : Math.max(...matches.map(({ ordinal }) => ordinal));
-        const unoptimizedCbor = await fetchUnoptimizedCbor(scriptType, unoptimizedCborCache);
+        const familyUnoptimizedCbor = await fetchUnoptimizedCbor(scriptType, unoptimizedCborCache);
+        const familySlug = SCRIPT_SOURCES[scriptType]?.slug;
         const assignedScriptHandles = await fetchAssignedScriptHandles(scriptType, assignedScriptHandlesCache);
-        // Build a per-response-type map of active assigned handle name so the
-        // V3 PZ split (persprx/perspz/perslfc/persdsg) each marks its own
-        // family head as latest, not just whichever the legacy single-handle
-        // `.find()` happened to return first.
+        // Per-response-type active assigned-handle name. PZ V3 splits one
+        // ScriptType (PZ_CONTRACT) into four sub-families (persprx/perspz/
+        // perslfc/persdsg), so each sub-family must mark its OWN deployment
+        // head as `latest` — a single shared name would let one family's
+        // head shadow another's.
         const activeAssignedHandleByResponseType = new Map<string, string>();
         for (const assignedName of assignedScriptHandles ?? []) {
             const assigned = handleRepo.getHandle(assignedName);
@@ -398,25 +456,15 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
                 activeAssignedHandleByResponseType.set(parsed.responseType, assigned.name.toLowerCase());
             }
         }
-        // Back-compat single-name for downstream fallback below. Picks the
-        // first active assigned handle of any family.
-        const activeAssignedHandleName = assignedScriptHandles
-            ?.map((handleName) => handleRepo.getHandle(handleName))
-            .find((handle): handle is StoredHandle => !!handle?.script?.cbor)
-            ?.name
-            ?.toLowerCase();
-        // For PZ V3 we have multiple sub-slug families (persprx, perspz,
-        // perslfc, persdsg) all sharing scriptType=PZ_CONTRACT. Each
-        // sub-family needs its own latest ordinal, otherwise persdsg2's
-        // higher ordinal would shadow persprx2 etc. Group by responseType
-        // for the latest-ordinal computation.
+        // Per-response-type latest ordinal — otherwise persdsg2's higher
+        // ordinal would shadow persprx2, etc.
+        const latestOrdinalByResponseType = new Map<string, number>();
         const matchesByResponseType = new Map<string, typeof matches>();
         for (const m of matches) {
             const arr = matchesByResponseType.get(m.responseType) ?? [];
             arr.push(m);
             matchesByResponseType.set(m.responseType, arr);
         }
-        const latestOrdinalByResponseType = new Map<string, number>();
         for (const [respType, arr] of matchesByResponseType.entries()) {
             const arrWithScript = arr.filter(({ handle }) => !!handle.script?.cbor);
             const latest = arrWithScript.length > 0
@@ -424,6 +472,16 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
                 : Math.max(...arr.map(({ ordinal }) => ordinal));
             latestOrdinalByResponseType.set(respType, latest);
         }
+        // Resolve per-handle unoptimized cbor (used for split-validator
+        // families like PZ V3). When the role slug differs from the family
+        // slug we fetch a separate file; otherwise reuse the family-level cbor.
+        const unoptimizedCborFor = async (handleName: string): Promise<string | undefined> => {
+            const role = getRoleSlug(handleName);
+            if (!role || role === familySlug) {
+                return familyUnoptimizedCbor;
+            }
+            return fetchUnoptimizedCbor(scriptType, unoptimizedCborCache, role);
+        };
 
         for (const { handle, ordinal, responseType } of matches) {
             const familyLatestOrdinal = latestOrdinalByResponseType.get(responseType) ?? latestOrdinal;
@@ -431,6 +489,7 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
             const isLatest = familyActive
                 ? handle.name.toLowerCase() === familyActive
                 : ordinal === familyLatestOrdinal;
+            const unoptimizedCbor = await unoptimizedCborFor(handle.name);
             const scriptEntry = await buildScriptEntry(
                 handle,
                 scriptType,
@@ -454,6 +513,7 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
             }
             const activeAssignedHandle = handleRepo.getHandle(familyActiveName);
             if (activeAssignedHandle?.script?.cbor) {
+                const unoptimizedCbor = await unoptimizedCborFor(activeAssignedHandle.name);
                 const scriptEntry = await buildScriptEntry(
                     activeAssignedHandle,
                     scriptType,
@@ -467,12 +527,24 @@ export const getScriptsIndex = async (req: Request<any>, type?: ScriptType): Pro
                 }
             }
         }
-
-        // Suppress unused-variable lint for the back-compat name.
-        void activeAssignedHandleName;
     }
 
     return scripts;
+};
+
+// `latest=true&type=X` answers "what is the canonical spend script of type X?"
+// For legacy single-validator types (no role), the only latest entry is the
+// answer. For V3 split types, every role is `latest: true` (so consumers like
+// the BFF can discover the full quartet by name pattern), but only the proxy
+// is the migration target — observers have no spend side.
+export const findPrimaryLatestScript = (
+    scripts: [string, ScriptDetails][]
+): [string, ScriptDetails] | undefined => {
+    const latestEntries = scripts.filter(([, value]) => value.latest);
+    const proxy = latestEntries.find(([, value]) => parseScriptHandle(value.handle ?? '')?.role === 'proxy');
+    if (proxy) return proxy;
+    const legacy = latestEntries.find(([, value]) => parseScriptHandle(value.handle ?? '')?.role === undefined);
+    return legacy ?? latestEntries[0];
 };
 
 export const getScriptByRefAddress = async (

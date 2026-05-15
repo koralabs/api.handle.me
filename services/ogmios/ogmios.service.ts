@@ -242,10 +242,27 @@ class OgmiosService {
                         address: o?.address!,
                         lovelace: Number(o?.value!.ada.lovelace!),
                         datum,
-                        script: o?.script?.cbor ? {
-                            type: o?.script?.language.replace(':', '_'),
-                            cbor: o?.script?.cbor
-                        } : undefined,
+                        // Normalize the language to one of plutus_v1/v2/v3 (snake_case
+                        // canonical, matched by services/scripts.service.ts
+                        // PLUTUS_LANGUAGE_PREFIX). Refuse to store a bare/unknown
+                        // value — that's how the V3 family ended up indexed as
+                        // `plutus` and the api fell back to a V2-tag hash, see
+                        // scripts/backfill-script-types.ts.
+                        script: (() => {
+                            const cbor = o?.script?.cbor;
+                            if (!cbor) return undefined;
+                            const raw = `${o?.script?.language ?? ''}`.toLowerCase().replace(':', '_');
+                            const normalized = raw === 'plutus_v1' || raw === 'plutusv1' ? 'plutus_v1'
+                                : raw === 'plutus_v2' || raw === 'plutusv2' ? 'plutus_v2'
+                                : raw === 'plutus_v3' || raw === 'plutusv3' ? 'plutus_v3'
+                                : null;
+                            if (!normalized) {
+                                throw new Error(
+                                    `ogmios script at ${txId}#${i} has unrecognized language ${JSON.stringify(o?.script?.language)} — refusing to store; downstream hash compute would fall back to PlutusV2 and produce the wrong scriptAddress`
+                                );
+                            }
+                            return { type: normalized, cbor };
+                        })(),
                         handles: handleAssets,
                         mint: mintAssets, // filtered for the minted assets in this UTxO
                         metadata, // filtered for the minted assets in this UTxO
