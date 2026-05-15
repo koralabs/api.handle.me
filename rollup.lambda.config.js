@@ -10,7 +10,6 @@ export default (async () => ({
         'lambdas/api.ts',
         'lambdas/scanner.ts',
         'lambdas/snapshot.ts',
-        'lambdas/valkeyutility.ts',
         'ioc/*.registry.ts',
         'middlewares/*.middleware.ts',
         'routes/*.route.ts',
