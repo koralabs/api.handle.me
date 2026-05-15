@@ -972,50 +972,24 @@ export class HandlesRepository {
                             handle = new UpdatedOwnerHandle(handle);
                         }
                         break;
-                    case AssetNameLabel.LBL_100:
                     case AssetNameLabel.LBL_000:
                     {
                         if (utxo.slot >= handle.updated_slot_number) {
-                            if (!utxo.datum) {
-                                Logger.log({ message: `No datum for reference token ${handle.name}`, category: LogCategory.ERROR, event: 'processScannedHandleInfo.referenceToken.noDatum' });
-                                // For LBL_000 (virtual subhandle) the on-chain MPT
-                                // includes this name regardless of datum presence
-                                // (engine indexes by asset name, not datum). If we
-                                // skip the save, our computed MPT diverges from
-                                // chain by one entry — see datum-less LBL_000s
-                                // like n4@sh_settings_011 on preview. Set the
-                                // minimum fields needed to land in IndexNames.HANDLE
-                                // and fall through to save; resolved_addresses
-                                // stays whatever _buildHandle gave us (the script
-                                // address holding the token).
-                                if (assetDetails.assetLabel === AssetNameLabel.LBL_000) {
-                                    handle.updated_slot_number = utxo.slot;
-                                    handle.utxo = utxo.id;
-                                    handle.handle_type = HandleType.VIRTUAL_SUBHANDLE;
-                                    break;
-                                }
-                                // LBL_100 datum-less is genuinely broken (a ref
-                                // token without personalization data has nothing
-                                // to contribute); the LBL_222 owner pass for the
-                                // same handle handles the index entry.
-                                continue;
-                            }
-
-                            const { projectAttributes } = this.buildPersonalizationData(handle, utxo.datum); // <- handle is mutated
-
+                            handle.handle_type = HandleType.VIRTUAL_SUBHANDLE;
                             handle.updated_slot_number = utxo.slot;
                             handle.reference_utxo = utxo.id;
-                            handle.resolved_addresses = {
-                                ...projectAttributes?.resolved_addresses,
-                                ada: existingHandle?.resolved_addresses?.ada ?? ''
-                            }
+                            handle.utxo = utxo.id;
 
-                            // VIRTUAL_SUBHANDLE
-                            if (assetDetails.assetLabel == AssetNameLabel.LBL_000) {
+                            if (!utxo.datum) {
+                                Logger.log({ message: `No datum for Virtual SubHandle token ${handle.name}`, category: LogCategory.NOTIFY, event: 'processScannedHandleInfo.virtualSubHandle.noDatum' });
+                            }
+                            else {
+                                const { projectAttributes } = this.buildPersonalizationData(handle, utxo.datum); // <- handle is mutated
+                                handle.resolved_addresses = {
+                                    ...projectAttributes?.resolved_addresses,
+                                    ada: bech32FromHex(projectAttributes!.resolved_addresses!.ada.replace('0x', ''), isTestnet)
+                                }
                                 handle.virtual = projectAttributes?.virtual ? { expires_time: projectAttributes.virtual.expires_time, public_mint: !!projectAttributes.virtual.public_mint } : undefined
-                                handle.utxo = utxo.id;
-                                handle.resolved_addresses!.ada = bech32FromHex(projectAttributes!.resolved_addresses!.ada.replace('0x', ''), isTestnet);
-                                handle.handle_type = HandleType.VIRTUAL_SUBHANDLE;
                             }
                         }
                         break;
@@ -1047,6 +1021,24 @@ export class HandlesRepository {
                             }
                         }
                         break;
+                    case AssetNameLabel.LBL_100:
+                    {
+                        if (utxo.slot >= handle.updated_slot_number) {
+                            handle.reference_utxo = utxo.id;
+                            if (!utxo.datum) {
+                                Logger.log({ message: `No datum for reference token ${handle.name}`, category: LogCategory.NOTIFY, event: 'processScannedHandleInfo.referenceToken.noDatum' });
+                                continue;
+                            }
+
+                            const { projectAttributes } = this.buildPersonalizationData(handle, utxo.datum); // <- handle is mutated
+
+                            handle.resolved_addresses = {
+                                ...projectAttributes?.resolved_addresses,
+                                ada: existingHandle?.resolved_addresses?.ada ?? ''
+                            }
+                        }
+                        break;
+                    }
                     default:
                         Logger.log({ message: `Unknown asset: ${handle.name}`, category: LogCategory.ERROR, event: 'processScannedHandleInfo.unknownAssetName' });
                 }
