@@ -152,11 +152,29 @@ type RedisConfig = {
 
 const jsonReplacer = (_: string, value: any) => (typeof value === 'bigint' ? value.toString() : value);
 
-const normalizeNetwork = (network = process.env.NETWORK || 'mainnet') => `${network}`.toLowerCase();
+// Networks recognized by the api stack. The Lambda refuses to operate
+// without an explicit `network` on the event payload — see requireNetwork
+// below — so any silent default would be a footgun: e.g. an empty/probe
+// payload would mutate the wrong network's keys. (This bit us once in
+// production: an empty {} invocation defaulted to mainnet and cleared
+// currentSlot/lockLambdas. Don't restore the default.)
+const ALLOWED_NETWORKS = ['mainnet', 'preprod', 'preview'] as const;
+type AllowedNetwork = typeof ALLOWED_NETWORKS[number];
 
-const getApiCacheTag = (network = process.env.NETWORK || 'mainnet') => `{api:${normalizeNetwork(network)}}`;
+const requireNetwork = (event: { network?: string }): AllowedNetwork => {
+    const raw = `${event.network ?? ''}`.trim().toLowerCase();
+    if (!raw) {
+        throw new Error(`network is required (one of ${ALLOWED_NETWORKS.join(', ')}) — pass {"network":"<name>"} on the event payload`);
+    }
+    if (!(ALLOWED_NETWORKS as readonly string[]).includes(raw)) {
+        throw new Error(`network=${JSON.stringify(raw)} is not allowed; expected one of ${ALLOWED_NETWORKS.join(', ')}`);
+    }
+    return raw as AllowedNetwork;
+};
 
-const getApiMetricsKey = (network = process.env.NETWORK || 'mainnet') => `${getApiCacheTag(network)}:metrics`;
+const getApiCacheTag = (network: string) => `{api:${network}}`;
+
+const getApiMetricsKey = (network: string) => `${getApiCacheTag(network)}:metrics`;
 
 const getScannerLeaseKey = (network: string) => `${getApiCacheTag(network)}:scanner:lease`;
 
@@ -353,19 +371,20 @@ const buildNamespacePairs = async (
 };
 
 const inspectMetrics = async (event: ValkeyEvent) => {
+    const network = requireNetwork(event);
+    const metricsKey = getApiMetricsKey(network);
     const client = createClient(getRedisConfig(event, 'source'));
     await client.connect();
     try {
-        const result = await client.hgetall(getApiMetricsKey());
-        return { command: 'hgetall', args: [getApiMetricsKey()], result };
+        const result = await client.hgetall(metricsKey);
+        return { command: 'hgetall', network, args: [metricsKey], result };
     } finally {
         client.disconnect();
     }
 };
 
 const setCheckpoint = async (event: ValkeyEvent) => {
-    const network = `${event.network || ''}`.toLowerCase();
-    if (!network) throw new Error('network is required for action=set_checkpoint');
+    const network = requireNetwork(event);
 
     const checkpointBlockHash = `${event.checkpointBlockHash || ''}`.trim();
     const checkpointSlot = toInt(event.checkpointSlot, 0);
@@ -390,8 +409,7 @@ const setCheckpoint = async (event: ValkeyEvent) => {
 };
 
 const copyNamespace = async (event: ValkeyEvent) => {
-    const network = `${event.network || ''}`.toLowerCase();
-    if (!network) throw new Error('network is required for action=copy_namespace');
+    const network = requireNetwork(event);
 
     const sourcePrefix = event.sourcePrefix ?? '{root}';
     const scanCount = toInt(event.scanCount, 1000);
@@ -460,8 +478,7 @@ const copyNamespace = async (event: ValkeyEvent) => {
 };
 
 const renameNamespace = async (event: ValkeyEvent) => {
-    const network = `${event.network || ''}`.toLowerCase();
-    if (!network) throw new Error('network is required for action=rename_namespace');
+    const network = requireNetwork(event);
 
     const sourcePrefix = event.sourcePrefix ?? '{root}';
     const scanCount = toInt(event.scanCount, 1000);
@@ -513,8 +530,7 @@ const renameNamespace = async (event: ValkeyEvent) => {
 };
 
 const deleteNamespace = async (event: ValkeyEvent) => {
-    const network = `${event.network || ''}`.toLowerCase();
-    if (!network) throw new Error('network is required for action=delete_namespace');
+    const network = requireNetwork(event);
 
     const sourcePrefix = event.sourcePrefix ?? '{root}';
     const scanCount = toInt(event.scanCount, 1000);
@@ -559,8 +575,7 @@ const deleteNamespace = async (event: ValkeyEvent) => {
 };
 
 const addMintData = async (event: ValkeyEvent) => {
-    const network = normalizeNetwork(event.network);
-    if (!network) throw new Error('network is required for action=add_mint_data');
+    const network = requireNetwork(event);
 
     const handleName = `${event.handleName || ''}`.trim();
     if (!handleName) throw new Error('handleName is required for action=add_mint_data');
@@ -594,8 +609,7 @@ const addMintData = async (event: ValkeyEvent) => {
 };
 
 const seedMptRoot = async (event: ValkeyEvent) => {
-    const network = normalizeNetwork(event.network);
-    if (!network) throw new Error('network is required for action=seed_mpt_root');
+    const network = requireNetwork(event);
 
     const tag = getApiCacheTag(network);
     const handleIndexKey = `${tag}:handle`;
@@ -641,7 +655,7 @@ const seedMptRoot = async (event: ValkeyEvent) => {
 // Returns every handle in {api:network}:handle:* whose `script.cbor` field is set.
 // Read-only enumerator for the script-type backfill (see scripts/backfill-script-types.ts).
 const scriptsWithCbor = async (event: ValkeyEvent) => {
-    const network = normalizeNetwork(event.network);
+    const network = requireNetwork(event);
     const handleIndexKey = getHandleIndexRootKey(network);
     const target = createClient(getRedisConfig(event, 'target'));
     await target.connect();
@@ -704,7 +718,7 @@ const scriptsWithCbor = async (event: ValkeyEvent) => {
 // Lease-gated against the scanner so a partial concurrent write can't race the writer.
 // Read-modify-write per handle: HMGET, mutate, HSET.
 const updateScriptTypes = async (event: ValkeyEvent) => {
-    const network = normalizeNetwork(event.network);
+    const network = requireNetwork(event);
     if (!Array.isArray(event.updates) || !event.updates.length) {
         throw new Error('updates is required for action=update_script_types and must be non-empty');
     }
@@ -844,7 +858,7 @@ const inspect = async (event: ValkeyEvent) => {
             return { redis: a.size, expected: expected.size, inApiNotExpected, inExpectedNotApi };
         }
         if (action === 'reset_scanner') {
-            const network = normalizeNetwork(event.network);
+            const network = requireNetwork(event);
             const metricsKey = getApiMetricsKey(network);
             const progressKey = `${getApiCacheTag(network)}:snapshot_loader:progress`;
             const before = await target.hgetall(metricsKey);
@@ -858,11 +872,14 @@ const inspect = async (event: ValkeyEvent) => {
             const after = await target.hgetall(metricsKey);
             return { network, metricsKey, progressKey, progressDeleted, before, after };
         }
-        // Default status: read mainnet's MPT root + scanner-relevant metrics fields.
-        const tag = getApiCacheTag('mainnet');
+        // Default status: read the requested network's MPT root + scanner metrics.
+        // Network is required — no silent default. (See requireNetwork: a missing
+        // network used to default to mainnet, so an empty {} payload mutated mainnet.)
+        const network = requireNetwork(event);
+        const tag = getApiCacheTag(network);
         const mptRoot = await target.get(`${tag}:mpt_root_hash`);
         const metrics = await target.hgetall(`${tag}:metrics`);
-        return { mptRoot, slot: metrics.currentSlot, lock: metrics.lockLambdas };
+        return { network, mptRoot, slot: metrics.currentSlot, lock: metrics.lockLambdas };
     } finally {
         target.disconnect();
     }
