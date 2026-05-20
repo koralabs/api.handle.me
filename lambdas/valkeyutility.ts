@@ -858,6 +858,16 @@ const inspect = async (event: ValkeyEvent) => {
             return { redis: a.size, expected: expected.size, inApiNotExpected, inExpectedNotApi };
         }
         if (action === 'reset_scanner') {
+            // Set lockLambdas: UTXO_IMPORT immediately so consumers
+            // (minting.handle.me, etc.) that gate on `health.lock_lambdas` pause
+            // from the moment the operator triggers the reimport, not after the
+            // next scanner tick observes the cleared state and sets the lock
+            // itself. The scanner's ensureUTxOsReady will re-set the same value
+            // on its first invocation, so this is a no-op for that path — but
+            // it closes the window where mints were attempted against an empty
+            // index (incident 2026-05-20: minting service kept trying during a
+            // manual mainnet reimport because the lock was '' between the
+            // reset_scanner call and the first scanner tick).
             const network = requireNetwork(event);
             const metricsKey = getApiMetricsKey(network);
             const progressKey = `${getApiCacheTag(network)}:snapshot_loader:progress`;
@@ -865,8 +875,8 @@ const inspect = async (event: ValkeyEvent) => {
             await target.hset(metricsKey, {
                 currentBlockHash: '',
                 currentSlot: '0',
-                lockLambdas: '',
-                lockLambdasTimestamp: '0'
+                lockLambdas: 'UTXO_IMPORT',
+                lockLambdasTimestamp: `${Date.now()}`
             });
             const progressDeleted = await target.del(progressKey);
             const after = await target.hgetall(metricsKey);
