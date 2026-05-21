@@ -24,6 +24,16 @@ const errorMiddleware = (error: Error | HttpException | ApiError, req: Request, 
         } else if (error instanceof HttpException) {
             status = error.status;
             code = statusCodeToErrorCode(status);
+        } else {
+            // body-parser (and similar middleware) tag client-fault errors with
+            // a numeric .status / .statusCode in the 4xx range — e.g. malformed
+            // JSON bodies raise SyntaxError with status=400, type=entity.parse.failed.
+            // Honor that instead of defaulting to 500.
+            const tagged = (error as any).status ?? (error as any).statusCode;
+            if (typeof tagged === 'number' && tagged >= 400 && tagged < 500) {
+                status = tagged;
+                code = statusCodeToErrorCode(status);
+            }
         }
 
         if (status >= 500) {

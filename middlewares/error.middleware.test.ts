@@ -105,6 +105,30 @@ describe('error middleware', () => {
         expect(logSpy).toHaveBeenCalled();
     });
 
+    it('honors a body-parser style .status (400) on a plain Error without logging', () => {
+        const req = { method: 'POST', path: '/' } as any;
+        const res = makeRes();
+        const logSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
+
+        // Mimic body-parser's malformed-JSON error: SyntaxError with .status=400
+        // and .type='entity.parse.failed'. Object.assign avoids `any` gymnastics.
+        const err = Object.assign(new SyntaxError('Unexpected token b in JSON'), {
+            status: 400,
+            statusCode: 400,
+            type: 'entity.parse.failed'
+        });
+
+        errorMiddleware(err as any, req, res, jest.fn());
+
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+            error: 'bad_request',
+            message: 'Unexpected token b in JSON',
+            docs: DEFAULT_DOCS_URL
+        });
+        expect(logSpy).not.toHaveBeenCalled();
+    });
+
     it('forwards errors to next when writing the response fails', () => {
         const req = { method: 'GET', path: '/v1/handles' } as any;
         const next = jest.fn();
