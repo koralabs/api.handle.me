@@ -70,7 +70,7 @@ describe('scripts service e2e', () => {
         // Feature: the script resolver should read real indexed subhandles and key the catalog by derived script address.
         // Failure mode: a resolver bug could key entries by refScriptAddress or miss the highest ordinal latest selection.
         // Negative control: if `pers2@handlecontract` were renamed to ordinal `1`, the latest assertion below would fail.
-        const scripts = getScriptsIndex(req);
+        const scripts = await getScriptsIndex(req);
 
         expect(scripts).toEqual({
             [buildScriptAddress('4e4d1001')]: expect.objectContaining({
