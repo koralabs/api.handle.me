@@ -1026,7 +1026,7 @@ export class HandlesRepository {
                         if (utxo.slot >= handle.updated_slot_number) {
                             handle.reference_utxo = utxo.id;
                             if (!utxo.datum) {
-                                Logger.log({ message: `No datum for reference token ${handle.name}`, category: LogCategory.NOTIFY, event: 'processScannedHandleInfo.referenceToken.noDatum' });
+                                Logger.log({ message: `No datum for reference token ${handle.name}`, category: LogCategory.ERROR, event: 'processScannedHandleInfo.referenceToken.noDatum' });
                                 continue;
                             }
 
