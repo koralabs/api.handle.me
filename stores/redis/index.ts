@@ -588,11 +588,29 @@ export class RedisHandlesStore implements IApiStore {
     }
 
     public getUTxOSchemaVersion(): number {
-        return Number(process.env.UTXO_SCHEMA_VERSION);
+        return this.requireSchemaVersion('UTXO_SCHEMA_VERSION');
     }
 
     public getIndexSchemaVersion(): number {
-        return Number(process.env.INDEX_SCHEMA_VERSION);
+        return this.requireSchemaVersion('INDEX_SCHEMA_VERSION');
+    }
+
+    // Resolve a schema-version env var, throwing if it is unset/invalid instead of returning
+    // NaN. An unset UTXO_SCHEMA_VERSION previously made tryPopulateFromS3UTxOs() build the URL
+    // `${SNAPSHOT_BASE_URL}/${NETWORK}/utxo-snapshot/NaN/handles_utxos.gz`, fetch an empty
+    // object, and clearNamespace() — silently WIPING the handle index. Failing loud here
+    // aborts before clearNamespace() runs, so a misconfigured deploy can't destroy the index.
+    private requireSchemaVersion(envName: 'UTXO_SCHEMA_VERSION' | 'INDEX_SCHEMA_VERSION'): number {
+        const raw = process.env[envName];
+        const value = Number(raw);
+        if (raw === undefined || raw === '' || !Number.isInteger(value) || value < 1) {
+            throw new Error(
+                `${envName} must be a positive integer (got ${JSON.stringify(raw)}). ` +
+                    `Refusing to proceed: an unset/invalid schema version resolves the snapshot URL to ` +
+                    `'.../utxo-snapshot/NaN/...', which loads an empty snapshot and wipes the handle index.`
+            );
+        }
+        return value;
     }
 
     // #endregion
