@@ -3,7 +3,7 @@ import { GlideString, HashDataType, SortOptions } from '@valkey/valkey-glide';
 import { promisify } from 'util';
 import { MessageChannel, receiveMessageOnPort, Worker } from 'worker_threads';
 import { inflate } from 'zlib';
-import { DISABLE_HANDLES_SNAPSHOT, NODE_ENV } from '../../config';
+import { DISABLE_HANDLES_SNAPSHOT, NODE_ENV, SNAPSHOT_BASE_URL } from '../../config';
 import { handleEraBoundaries, MAX_SETS_PER_PIPE, META_INDEXES, ORDERED_SLOTS } from '../../config/constants';
 import { getHandleNameFromAssetName } from '../../services/ogmios/utils';
 import { canonicalJsonStringify } from '../../utils/helpers';
@@ -178,7 +178,7 @@ export class RedisHandlesStore implements IApiStore {
         const startTime = Date.now();
         const currentUTxOSchemaVersion = this.getUTxOSchemaVersion();
         const fileName = 'handles_utxos.gz';
-        const url = `http://api.handle.me.s3-website-us-west-2.amazonaws.com/${NETWORK}/utxo-snapshot/${this.getUTxOSchemaVersion()}/${fileName}`;
+        const url = `${SNAPSHOT_BASE_URL}/${NETWORK}/utxo-snapshot/${this.getUTxOSchemaVersion()}/${fileName}`;
 
         // Resume-capable loader. Progress marker lives in the namespace as a
         // hash at {api:NETWORK}:snapshot_loader:progress. On fresh start we

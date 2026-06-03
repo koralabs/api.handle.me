@@ -10,6 +10,7 @@ export const {
     OGMIOS_HOST = 'http://localhost:1337',
     NETWORK = '',
     DISABLE_HANDLES_SNAPSHOT = '',
+    SNAPSHOT_BASE_URL = 'http://api.handle.me.s3-website-us-west-2.amazonaws.com',
     WHITELISTED_API_KEYS = ''
 } = process.env;
 
