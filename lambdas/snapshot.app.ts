@@ -1,5 +1,5 @@
 import { DeleteObjectsCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { awaitForEach, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { awaitForEach, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, objectStoreConfig, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import fs from 'fs';
 import stdOut from 'node:readline';
 import zlib from 'zlib';
@@ -30,7 +30,9 @@ const SNAPSHOT_STALE_NOTIFY_WINDOW_MS = 48 * 60 * 60 * 1000;
 const SNAPSHOT_RETENTION_DAYS = 5;
 const SNAPSHOT_RETENTION_MS = SNAPSHOT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 const SNAPSHOT_SCAN_COUNT = 10_000;
-const SNAPSHOT_BUCKET = 'api.handle.me';
+// Snapshot store bucket. On AWS this was the api.handle.me S3 bucket; self-host sets
+// SNAPSHOT_BUCKET (e.g. kora-snapshots in R2). Default preserves the AWS behavior (reversible).
+const SNAPSHOT_BUCKET = process.env.SNAPSHOT_BUCKET || 'api.handle.me';
 
 const delayMs = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const getSnapshotUrl = (network: string, utxoSchemaVersion: number) => `http://api.handle.me.s3-website-us-west-2.amazonaws.com/${network}/utxo-snapshot/${utxoSchemaVersion}/handles_utxos.gz`;
@@ -257,7 +259,7 @@ export const handler = async (event: any) => {
 
             const { utxoSchemaVersion = 1 } = verifiedFileJson;
             const fileName = `${network}/utxo-snapshot/${utxoSchemaVersion}/handles_utxos.gz`;
-            const s3Client = new S3Client({ region: 'us-west-2' });
+            const s3Client = new S3Client(objectStoreConfig());
             const now = new Date(Date.now());
 
             const compressedBody = zlib.deflateSync(JSON.stringify(verifiedFileJson));
