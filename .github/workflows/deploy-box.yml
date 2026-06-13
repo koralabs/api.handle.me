@@ -1,0 +1,52 @@
+name: api.handle.me (box / service-fn-push, no AWS)
+# Self-hosted box deploy (BACKEND service — no static). A GitHub-hosted runner builds api box-mode,
+# stages {bff-dist, manifest siteType:service} to the trusted R2 bucket, and best-effort sends the
+# signed /v1/deploy trigger to the box. The box pulls + applies: api -> proxy route; scanner +
+# snapshot -> systemd timers. NO AWS, NO self-hosted runner, NO source build on the box. The build
+# logic is the shared adahandle-deployments/common/service-fn-push.sh.
+on:
+  push:
+    branches: [preview]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment environment
+        required: true
+        type: choice
+        options: [preview]
+        default: preview
+jobs:
+  deploy-box:
+    name: Box deploy (service) from ${{ github.ref_name }}
+    runs-on: ubuntu-22.04          # x86_64/glibc — matches the box triple (native addons in dist)
+    concurrency:
+      group: deploy-box-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build (box/service) + stage to R2 + signed deploy trigger
+        env:
+          DEPLOYABLE: api.handle.me
+          BOX_ENV: ${{ github.event.inputs.environment || 'preview' }}
+          NODE_VERSION: '22'
+          SERVICE_INSTALL_CMD: npm install
+          SERVICE_BUILD_CMD: npm run build:lambda && cp -r ./dist/lambdas/* ./dist
+          SERVICE_DIST: dist
+          # == apps.json .fn.functions for api.handle.me (handlers relative to dist/) ==
+          FN_FUNCTIONS: '[{"name":"api","handler":"lambdas/api.js","kind":"http","memory":512,"export":"handler"},{"name":"scanner","handler":"lambdas/scanner.js","kind":"worker","schedule":"*:0/2","memory":1024,"export":"lambdaHandler"},{"name":"snapshot","handler":"lambdas/snapshot.js","kind":"worker","schedule":"*-*-* 00,06,12,18:00:00","memory":1024,"export":"handler"}]'
+          ADAHANDLE_DEPLOYMENTS_REF: master
+          DEPLOYMENT_ACCESS_TOKEN: ${{ secrets.DEPLOYMENT_ACCESS_TOKEN }}
+          KORA_DEPLOY_URL: https://deploy-preview.handle.me
+          KORA_DEPLOY_HMAC_SECRET: ${{ secrets.KORA_DEPLOY_HMAC_SECRET }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -eu
+          B="https://raw.githubusercontent.com/koralabs/adahandle-deployments/${ADAHANDLE_DEPLOYMENTS_REF}"
+          curl -fsS -H "Authorization: Bearer ${DEPLOYMENT_ACCESS_TOKEN}" "$B/common/build-koralabs-deps.sh" -o build-koralabs-deps.sh
+          curl -fsS -H "Authorization: Bearer ${DEPLOYMENT_ACCESS_TOKEN}" "$B/common/service-fn-push.sh" -o service-fn-push.sh
+          chmod +x service-fn-push.sh && ./service-fn-push.sh
