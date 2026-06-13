@@ -1,0 +1,53 @@
+name: api.handle.me (box / service-fn-push, no AWS)
+# Self-hosted box deploy (BACKEND service — no static). THIS REPO IS PUBLIC, so it names nothing
+# sensitive: the deploy LOGIC is the private adahandle-deployments service-fn-push.sh (fetched via
+# the vars.DEPLOY_FETCH_BASE repo variable); the box deploy endpoint is derived privately in that
+# script; paths/account/creds are repo variables + secrets. Only the build commands (already public
+# in this repo) and the fn list (handlers are public source) appear in the clear.
+#
+# TEMPLATE for any PUBLIC repo: copy this, set the repo's FN_FUNCTIONS/build cmds, and provide the
+# vars.DEPLOY_FETCH_BASE variable + the R2_*/KORA_DEPLOY_HMAC_SECRET/DEPLOYMENT_ACCESS_TOKEN secrets.
+on:
+  push:
+    branches: [preview]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment environment
+        required: true
+        type: choice
+        options: [preview]
+        default: preview
+jobs:
+  deploy-box:
+    name: Box deploy (service) from ${{ github.ref_name }}
+    runs-on: ubuntu-22.04
+    concurrency:
+      group: deploy-box-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build (box/service) + stage to R2 + signed deploy trigger
+        env:
+          DEPLOYABLE: api.handle.me
+          BOX_ENV: ${{ github.event.inputs.environment || 'preview' }}
+          NODE_VERSION: '22'
+          SERVICE_INSTALL_CMD: npm install
+          SERVICE_BUILD_CMD: npm run build:lambda && cp -r ./dist/lambdas/* ./dist
+          SERVICE_DIST: dist
+          FN_FUNCTIONS: '[{"name":"api","handler":"lambdas/api.js","kind":"http","memory":512,"export":"handler"},{"name":"scanner","handler":"lambdas/scanner.js","kind":"worker","schedule":"*:0/2","memory":1024,"export":"lambdaHandler"},{"name":"snapshot","handler":"lambdas/snapshot.js","kind":"worker","schedule":"*-*-* 00,06,12,18:00:00","memory":1024,"export":"handler"}]'
+          # --- everything below is a variable/secret so this public repo leaks nothing ---
+          DEPLOY_FETCH_BASE: ${{ vars.DEPLOY_FETCH_BASE }}
+          DEPLOYMENT_ACCESS_TOKEN: ${{ secrets.DEPLOYMENT_ACCESS_TOKEN }}
+          KORA_DEPLOY_HMAC_SECRET: ${{ secrets.KORA_DEPLOY_HMAC_SECRET }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -eu
+          curl -fsS -H "Authorization: Bearer ${DEPLOYMENT_ACCESS_TOKEN}" "${DEPLOY_FETCH_BASE}/build-koralabs-deps.sh" -o build-koralabs-deps.sh
+          curl -fsS -H "Authorization: Bearer ${DEPLOYMENT_ACCESS_TOKEN}" "${DEPLOY_FETCH_BASE}/service-fn-push.sh" -o service-fn-push.sh
+          chmod +x service-fn-push.sh && ./service-fn-push.sh
