@@ -38,24 +38,37 @@ export const blockfrostApiCall = async (endpointSegment: string) => {
 
 export const fetchPaginatedResults = async <T>(endpointSegment: string, maxResults = Infinity): Promise<T[]> => {
     const maxCount = 100;
+    const maxRetries = 5;
     let page = 1;
     let hasMorePages = true;
 
     let results: T[] = [];
     try {
         while (hasMorePages && results.length < maxResults) {
-            const response = await blockfrostApiCall(`${endpointSegment}?order=asc&count=${maxCount}&page=${page}`);
+            // Retry transient/rate-limit/auth failures with backoff and SURFACE a persistent
+            // failure, instead of silently treating any non-2xx as "no more pages". Swallowing a
+            // 403 into blocks=0 is what let a missing/exhausted BLOCKFROST_API_KEY wedge the
+            // scanner invisibly for ~24h — it kept reporting success while indexing nothing.
+            let response: Awaited<ReturnType<typeof blockfrostApiCall>> | undefined;
+            for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+                response = await blockfrostApiCall(`${endpointSegment}?order=asc&count=${maxCount}&page=${page}`);
+                if (response.status === 404 || response.status < 300) break;
+                const retriable = response.status === 429 || response.status === 403 || response.status >= 500;
+                if (!retriable || attempt === maxRetries) {
+                    const body = await response.text().catch(() => '');
+                    throw new Error(
+                        `Blockfrost ${response.status} for ${endpointSegment} (page ${page})${retriable ? ` after ${maxRetries} retries` : ''}: ${body.slice(0, 200)}`
+                    );
+                }
+                await delay(Math.min(2000, 200 * 2 ** attempt));
+            }
 
-            if (response.status == 404) {
+            if (!response || response.status === 404) {
                 return [];
             }
-            if (response.status >= 300) {
-                hasMorePages = false;
-            } else {
-                const items = await response.json();
-                results = results.concat(items);
-                hasMorePages = items.length == maxCount;
-            }
+            const items = await response.json();
+            results = results.concat(items);
+            hasMorePages = items.length === maxCount;
             page += 1;
             await delay(100);
         }
