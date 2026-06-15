@@ -9,6 +9,7 @@ export default (async () => ({
         'express.ts',
         'lambdas/api.ts',
         'lambdas/scanner.ts',
+        'lambdas/scanner-sideload.ts',
         'lambdas/snapshot.ts',
         'ioc/*.registry.ts',
         'middlewares/*.middleware.ts',
