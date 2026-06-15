@@ -17,7 +17,7 @@ on:
         description: Deployment environment
         required: true
         type: choice
-        options: [preprod]
+        options: [preprod, mainnet]
         default: preprod
 jobs:
   deploy-box:
