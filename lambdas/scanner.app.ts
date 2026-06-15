@@ -973,6 +973,15 @@ const processReindex = async () => {
 // docs/spec/scanner-recovery-runbook.md.
 const SNAPSHOT_REIMPORT_MIN_MEMORY_MB = 8192;
 
+// REIMPORT (snapshot -> UTxO/minting base) and REINDEX (UTxOs -> Handles index) peak around 7GB and
+// exceed the self-host fnserver's HARD per-function caps (8192MB / 300s, not configurable). On the
+// box they are DEFERRED out of the scheduled scanner and run OUT OF BAND via runSideload() in a
+// one-off, memory/time-unconstrained container. KORA_SCANNER_DEFER_IMPORTS=true (set on every box
+// scanner) turns the deferral on; it is unset on AWS, where the scanner keeps doing them in-process
+// exactly as before. SCAN (tip) is never deferred. See aws-exit/scanner_sideload.sh + the deploy
+// auto-detect and the GHA manual trigger that both flow into runSideload.
+const deferHeavyImports = () => process.env.KORA_SCANNER_DEFER_IMPORTS?.toLowerCase() === 'true';
+
 const ensureUTxOsReady = async () => {
     const { currentBlockHash, currentSlot, utxoSchemaVersion = 0 } = handlesRepo.getMetrics();
     const currentUTxOSchemaVersion = Number(store.getUTxOSchemaVersion());
@@ -1385,6 +1394,28 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
         logBreadcrumb('ensure_initialized_start');
         await ensureInitialized();
         logBreadcrumb('ensure_initialized_done');
+        // Self-host: REIMPORT/REINDEX are too big for the fnserver per-fn caps (8192MB/300s) and run
+        // OUT OF BAND via runSideload (KORA_SCANNER_DEFER_IMPORTS). The scheduled scanner must NOT
+        // attempt them in-process — at 1024MB it OOMs mid-import and leaves a corrupt-but-stable index
+        // (the 2026-05-15 incident). Detect a pending heavy op, emit a loud signal for the deploy
+        // auto-detect / GHA manual sideload to act on, and skip this cycle. SCAN is unaffected.
+        if (deferHeavyImports()) {
+            const dm = handlesRepo.getMetrics();
+            const reimportNeeded = Number(store.getUTxOSchemaVersion()) > Number(dm.utxoSchemaVersion ?? 0) || !dm.currentBlockHash || !dm.currentSlot;
+            const reindexNeeded = Number(store.getIndexSchemaVersion()) > Number(dm.indexSchemaVersion ?? 0);
+            const recoveryReindex = (() => { const f = getRecoveryFlag(); return !!f && f !== RECOVERY_REASON_ROLLBACK; })();
+            if (shouldTriggerReindexShortcut(event)) {
+                return buildFunctionUrlResponse(409, { message: 'REIMPORT/REINDEX is deferred to the sideload on this deployment (KORA_SCANNER_DEFER_IMPORTS). Trigger it via the deploy auto-detect or the GitHub Action sideload option, not the scanner shortcut.' });
+            }
+            if (reimportNeeded || reindexNeeded || recoveryReindex) {
+                Logger.log({
+                    message: `Scanner heavy op DEFERRED to sideload: reimport=${reimportNeeded} reindex=${reindexNeeded || recoveryReindex}. The scheduled scanner will not run it in-process (would OOM at the fn memory cap). Run the sideload (deploy auto-detect or GHA manual).`,
+                    category: LogCategory.NOTIFY,
+                    event: 'scannerLambda.heavyOpDeferred'
+                });
+                return;
+            }
+        }
         if (shouldTriggerReindexShortcut(event)) {
             if (!isWhitelistedScannerShortcutRequest(event)) {
                 Logger.local({
@@ -1507,6 +1538,46 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
             }
         }
     }
+};
+
+// ── Sideload entry (REIMPORT / REINDEX, out of band) ───────────────────────────────────────────
+// Runs the heavy ops OUTSIDE the scheduled scanner and outside the fnserver's per-fn caps (the box
+// invokes this in a one-off `docker run --memory 12g` of the scanner image, with
+// AWS_LAMBDA_FUNCTION_MEMORY_SIZE set high so ensureUTxOsReady's >=8GB guard passes). It reuses the
+// EXACT ensureUTxOsReady (REIMPORT) + processReindex (REINDEX) + lease that the scheduled scanner
+// uses — no duplicated import logic. 'detect' only reports what is pending (for the deploy
+// auto-detect); 'auto' runs whatever is pending; 'reimport'/'reindex'/'both' force it. Takes the
+// scanner lease so it never races a concurrent SCAN.
+export type SideloadMode = 'reimport' | 'reindex' | 'both' | 'auto' | 'detect';
+export const runSideload = async (mode: SideloadMode = 'auto') => {
+    store.initialize();
+    await ensureInitialized();
+    const m = handlesRepo.getMetrics();
+    const reimportNeeded = Number(store.getUTxOSchemaVersion()) > Number(m.utxoSchemaVersion ?? 0) || !m.currentBlockHash || !m.currentSlot;
+    const reindexNeeded = Number(store.getIndexSchemaVersion()) > Number(m.indexSchemaVersion ?? 0);
+    if (mode === 'detect') return { reimportNeeded, reindexNeeded, ranReimport: false, ranReindex: false, ran: false };
+
+    const owner = `sideload-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    if (!acquireScannerLease(owner)) {
+        throw new Error('Scanner lease is held (a scan or another sideload is active). Retry shortly.');
+    }
+    let ranReimport = false;
+    let ranReindex = false;
+    try {
+        if (mode === 'reimport' || mode === 'both' || (mode === 'auto' && reimportNeeded)) {
+            Logger.log({ message: 'Sideload: running REIMPORT (ensureUTxOsReady)', category: LogCategory.NOTIFY, event: 'scannerSideload.reimport' });
+            await ensureUTxOsReady();
+            ranReimport = true;
+        }
+        if (mode === 'reindex' || mode === 'both' || (mode === 'auto' && reindexNeeded)) {
+            Logger.log({ message: 'Sideload: running REINDEX (processReindex)', category: LogCategory.NOTIFY, event: 'scannerSideload.reindex' });
+            await processReindex();
+            ranReindex = true;
+        }
+    } finally {
+        releaseScannerLease(owner);
+    }
+    return { reimportNeeded, reindexNeeded, ranReimport, ranReindex, ran: ranReimport || ranReindex };
 };
 
 export const Internal = {
