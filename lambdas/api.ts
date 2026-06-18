@@ -1,4 +1,4 @@
-import { hydrateKmsEnvironment } from '@koralabs/kora-labs-common';
+import { hydrateKmsEnvironment } from '@koralabs/kora-labs-common/aws';
 
 export const handler = async (event: AWSLambda.ALBEvent, context: AWSLambda.Context) => {
     await hydrateKmsEnvironment();
