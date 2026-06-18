@@ -1,5 +1,6 @@
 import { DeleteObjectsCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { awaitForEach, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, objectStoreConfig, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { awaitForEach, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { objectStoreConfig } from '@koralabs/kora-labs-common/aws';
 import fs from 'fs';
 import stdOut from 'node:readline';
 import zlib from 'zlib';
