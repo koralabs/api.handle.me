@@ -93,6 +93,25 @@ class MptRootController {
             next(error);
         }
     }
+
+    // WS1 — the per-handle label sets (only handles with a non-empty set appear). The minter merges
+    // this with its handle list to build a registry-aware trie whose root matches the chain, so its
+    // demimntmpt-spend proofs are valid. The api is the source of truth; the minter's own trie is not.
+    // GET /mpt-root/registry-labels
+    public async registryLabels(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const store = new (req.app.get('registry') as IRegistry).handlesStore();
+            const labels = store.getAllHandleRegistryLabels?.() ?? {};
+            res.status(200).json({
+                network: NETWORK.toLowerCase() || 'preview',
+                current_root: store.getMptRootHash() ?? null,
+                count: Object.keys(labels).length,
+                labels
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
 }
 
 export default MptRootController;
