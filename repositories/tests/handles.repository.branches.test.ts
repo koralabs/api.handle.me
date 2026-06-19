@@ -485,6 +485,7 @@ describe('HandlesRepository branch tests', () => {
 
         expect(repo.getHandlesByHolderAddresses(['invalid-address'])).toEqual([EMPTY, EMPTY]);
         expect(repo.getHandlesByStakeKeyHashes(['deadbeef'])).toEqual([EMPTY]);
+        expect(repo.getHandlesByStakeKeyHashes(['abcde', 'not-hex'])).toEqual([EMPTY, EMPTY]);
         expect(repo.getHandlesByPaymentKeyHashes(['deadbeef'])).toEqual([EMPTY]);
         expect(repo.getHandlesByAddresses(['addr_test1_missing'])).toEqual([EMPTY]);
     });
