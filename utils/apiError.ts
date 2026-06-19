@@ -100,6 +100,10 @@ export class ApiError extends HttpException {
         );
     }
 
+    static invalidListBody(message = 'expected array of strings'): ApiError {
+        return new ApiError(400, 'bad_request', message);
+    }
+
     static handleTypeUnsupportedForMint(): ApiError {
         return new ApiError(
             400,
