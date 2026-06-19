@@ -94,6 +94,17 @@ export const ensureLabel = (set: string, label: string): string =>
 export const ensureNoLabel = (set: string, label: string): string =>
     containsLabel(set, label) ? removeLabel(set, label) : set.toLowerCase();
 
+/**
+ * Strict +1 (add) / -1 (remove) delta — mirrors the on-chain `label_set.apply` (throws on a
+ * duplicate add or an absent remove). Used to build the proof's new value: it must reproduce
+ * exactly what the validator computes, so it is strict, not the idempotent ensure* variants.
+ */
+export const applyLabel = (set: string, label: string, amount: bigint): string => {
+    if (amount === 1n) return insertLabel(set, label);
+    if (amount === -1n) return removeLabel(set, label);
+    throw new Error('INVALID_AMOUNT');
+};
+
 /** The raw value bytes to store in the Trie (UTF-8-safe). */
 export const valueBuffer = (set: string): Buffer => Buffer.from(set, 'hex');
 

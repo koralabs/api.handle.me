@@ -14,6 +14,7 @@ class MptRootRoute extends BaseRoute {
 
     private initializeRoutes() {
         this.router.get(`${this.path}`, this.mptRootController.index);
+        this.router.get(`${this.path}/proof`, this.mptRootController.proof);
     }
 }
 
