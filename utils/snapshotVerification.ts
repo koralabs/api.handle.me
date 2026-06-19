@@ -3,6 +3,7 @@ import { decodeCborToJson } from '@koralabs/kora-labs-common/utils/cbor';
 import { AssetNameLabel, HANDLE_POLICIES, IndexNames, LogCategory, Logger, NETWORK, Network } from '@koralabs/kora-labs-common';
 import { getHandlesStore, RedisHandlesStore } from '../stores/redis';
 import { SnapshotVerification } from './verifiedSnapshot';
+import { registryValueBuffer } from './assetLabelRegistry';
 import { blockfrostApiCall, fetchKoios } from './helpers';
 
 const MINTING_DATA_HANDLE_NAME = 'handle_root@handle_settings';
@@ -155,21 +156,36 @@ export const probeProviderMptRootHash = async (): Promise<ProviderMptProbe | nul
     return null;
 };
 
-export const buildHandleSetMptRootHash = async (handleNames: string[], ghostHandles: string[] = []) => {
+export const buildHandleSetMptRootHash = async (
+    handleNames: string[],
+    ghostHandles: string[] = [],
+    // WS1 asset-label registry: handle name -> sorted hex label set ({001-004}). Only labeled
+    // handles appear; everything else keeps the empty value, so the root is byte-identical to the
+    // pre-registry root for any handle that holds none of the tracked labels.
+    registryLabels: Record<string, string> = {}
+) => {
     const normalizedHandleNames = [...new Set([...handleNames, ...ghostHandles].map((handle) => `${handle}`.trim()).filter(Boolean))].sort();
     // Bulk constructor instead of N serial `await trie.insert(...)` calls.
     // The per-insert loop re-hashed intermediate state on every step, costing
     // ~1.5ms × ~300k handles = ~8 minutes per scan tick on mainnet. fromList
     // builds the structure in one pass with the same final hash; bootstrap +
     // build-true-root + build-api-root all use it and verify against on-chain.
-    const trie = await Trie.fromList(normalizedHandleNames.map((key) => ({ key, value: '' })));
+    const trie = await Trie.fromList(
+        normalizedHandleNames.map((key) => {
+            const labels = registryLabels[key];
+            // Empty set keeps the prior empty value (unchanged root); a labeled handle stores
+            // encode([], labels) — the exact bytes the on-chain demimntmpt MintLabelAssets writes.
+            return { key, value: labels ? registryValueBuffer([], labels) : '' };
+        })
+    );
     return trie.hash?.toString('hex') ?? EMPTY_MPT_ROOT_HASH;
 };
 
 export const buildAndStoreMptRootHash = async (store: RedisHandlesStore): Promise<string> => {
     const handleNames = store.getKeysFromIndex(IndexNames.HANDLE) as string[];
     const ghosts = GHOST_HANDLES[NETWORK.toLowerCase()] ?? [];
-    const hash = await buildHandleSetMptRootHash(handleNames, ghosts);
+    const registryLabels = store.getAllHandleRegistryLabels?.() ?? {};
+    const hash = await buildHandleSetMptRootHash(handleNames, ghosts, registryLabels);
     store.setMptRootHash(hash);
     return hash;
 };
@@ -178,7 +194,8 @@ export const buildSnapshotVerification = async (handleNames: string[]): Promise<
     const store = getHandlesStore();
     store.initialize();
     const ghosts = GHOST_HANDLES[NETWORK.toLowerCase()] ?? [];
-    const snapshotMptRootHash = store.getMptRootHash() ?? await buildHandleSetMptRootHash(handleNames, ghosts);
+    const registryLabels = store.getAllHandleRegistryLabels?.() ?? {};
+    const snapshotMptRootHash = store.getMptRootHash() ?? await buildHandleSetMptRootHash(handleNames, ghosts, registryLabels);
     const chainMptRootHash = await getChainMintingDataRootHash();
 
     const verifiedAgainstChain = snapshotMptRootHash === chainMptRootHash;

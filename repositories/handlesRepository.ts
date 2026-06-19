@@ -6,6 +6,7 @@ import { isDatumEndpointEnabled } from '../config';
 import { MAX_SETS_PER_PIPE } from '../config/constants';
 import { BuildPersonalizationInput, HandleOnChainMetadata, MetadataLabel } from '../interfaces/ogmios.interfaces';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
+import { ensureLabel, ensureNoLabel, isRegistryLabel } from '../utils/assetLabelRegistry';
 import { canonicalJsonStringify } from '../utils/helpers';
 import { decodeCborFromIPFSFile } from '../utils/ipfs';
 const blackListedIpfsCids: string[] = [];
@@ -36,9 +37,31 @@ export class UpdatedOwnerHandle implements UpdatedOwnerHandle {
 
 export class HandlesRepository {
     private store: IApiStore;
-    
+
     constructor(store: IApiStore) {
         this.store = store;
+    }
+
+    // WS1 registry hash methods live on the concrete RedisHandlesStore; surface them off IApiStore
+    // the same way this repo already widens the store for other optional store methods. Optional so
+    // a bare IApiStore mock degrades gracefully (no registry mirror) instead of throwing.
+    private get registryStore() {
+        return this.store as IApiStore & {
+            setHandleRegistryLabels?: (name: string, labels: string) => void;
+            getAllHandleRegistryLabels?: () => Record<string, string>;
+        };
+    }
+
+    // Drop one tracked label (001-004) from a surviving handle's registry set (a standalone label
+    // burn that keeps the 222/000). No-op if the key was already removed by its 222/000 burn in the
+    // same tx. Routed through save() so the derived registry hash + indexes stay consistent.
+    public removeHandleLabel(name: string, label: string): void {
+        const existing = this.store.getHashFromIndex(IndexNames.HANDLE, name) as StoredHandle | undefined;
+        if (!existing) return;
+        const current = existing.registry_labels ?? '';
+        const updated = ensureNoLabel(current, label);
+        if (updated === current) return;
+        this.save({ ...existing, registry_labels: updated }, existing);
     }
 
     public async initialize() {
@@ -812,6 +835,9 @@ export class HandlesRepository {
             //     debugLog('ap@adaprotocol being burned', slotNumber, handle);
             this.store.removeKeyFromIndex(IndexNames.HANDLE, handle.name);
 
+            // WS1 registry: the 222/000 is gone, so the key leaves the MPT — drop its registry value.
+            this.registryStore.setHandleRegistryLabels?.(handleName, '');
+
             // set all one-to-many indexes
             this.store.removeValueFromIndexedSet(IndexNames.RARITY, handle.rarity, handleName)
             this.store.removeValueFromIndexedSet(IndexNames.OG, Number(handle.og_number), handleName);
@@ -1042,7 +1068,14 @@ export class HandlesRepository {
                     default:
                         Logger.log({ message: `Unknown asset: ${handle.name}`, category: LogCategory.ERROR, event: 'processScannedHandleInfo.unknownAssetName' });
                 }
-                
+
+                // WS1 asset-label registry: record presence of a tracked label (001-004) on this
+                // handle. Idempotent — a re-scan or a multi-minted 001 ("ignore anything more than
+                // one") collapses to a single set member, matching the on-chain registry value.
+                if (isRegistryLabel(assetDetails.assetLabel)) {
+                    handle.registry_labels = ensureLabel(handle.registry_labels ?? '', `${assetDetails.assetLabel}`.toLowerCase());
+                }
+
                 const holder = buildHolderInfo(handle.resolved_addresses.ada)
                 
                 handle.holder = holder.address
@@ -1093,6 +1126,13 @@ export class HandlesRepository {
 
         // Set the main index (SAVES THE HANDLE)
         this.store.setHashOnIndex(IndexNames.HANDLE, name, handle);
+
+        // WS1 registry: mirror the label set into the small derived hash, but only when it changes,
+        // so the per-tick MPT root build reads every set in one HGETALL while the (vast) majority of
+        // handles — which hold no tracked label — never touch this hash.
+        if (handle.registry_labels !== oldHandle?.registry_labels) {
+            this.registryStore.setHandleRegistryLabels?.(name, handle.registry_labels ?? '');
+        }
 
         // set all one-to-many indexes
         this.store.addValueToIndexedSet(IndexNames.RARITY, rarity, name);

@@ -8,7 +8,7 @@ import { handleEraBoundaries, MAX_SETS_PER_PIPE, META_INDEXES, ORDERED_SLOTS } f
 import { getHandleNameFromAssetName } from '../../services/ogmios/utils';
 import { canonicalJsonStringify } from '../../utils/helpers';
 import { isChainVerifiedSnapshot, VerifiedHandleFileContent } from '../../utils/verifiedSnapshot';
-import { getApiCacheTag, getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey, getApiMptRootHashKey, getApiNamespaceScanPattern, getApiScannedBlocksKey } from './keys';
+import { getApiCacheTag, getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey, getApiMptRootHashKey, getApiNamespaceScanPattern, getApiRegistryLabelsKey, getApiScannedBlocksKey } from './keys';
 
 // const glideClient = await GlideClient.createClient({
 //       addresses: [{ host: 'https://localhost', port: 6379 }],
@@ -577,6 +577,21 @@ export class RedisHandlesStore implements IApiStore {
 
     public setMptRootHash(hash: string): void {
         this.redisClientCall('set', getApiMptRootHashKey(), hash);
+    }
+
+    // WS1 asset-label registry. The derived hash carries only handles with a non-empty label set;
+    // an empty set HDELs the field so the map stays small and the root build never pays for the
+    // (vast) majority of handles that hold none.
+    public setHandleRegistryLabels(name: string, labels: string): void {
+        if (labels) {
+            this.redisClientCall('hset', getApiRegistryLabelsKey(), { [name]: labels });
+        } else {
+            this.redisClientCall('hdel', getApiRegistryLabelsKey(), name);
+        }
+    }
+
+    public getAllHandleRegistryLabels(): Record<string, string> {
+        return (this.redisClientCall('hgetall', getApiRegistryLabelsKey()) as Record<string, string> | null) ?? {};
     }
 
     public count(): number {
