@@ -1034,6 +1034,15 @@ export class HandlesRepository {
 
                             if (!utxo.datum) {
                                 Logger.log({ message: `No datum for SubHandle token ${handle.name}`,  category: LogCategory.ERROR, event: 'processScannedHandleInfo.subHandle.noDatum'});
+                                // The registry label tracks token PRESENCE (the CIP-67 001-004 prefix),
+                                // not datum validity. Apply it before skipping the datum-dependent
+                                // settings parse below — otherwise a datum-less 001 (e.g. a legacy f0ff
+                                // settings token such as `water`) is dropped from the asset-label
+                                // registry, leaving the api MPT root one key short of chain. The generic
+                                // registry-label block after the switch is bypassed by this `continue`.
+                                if (isRegistryLabel(assetDetails.assetLabel)) {
+                                    handle.registry_labels = ensureLabel(handle.registry_labels ?? '', `${assetDetails.assetLabel}`.toLowerCase());
+                                }
                                 // Skip only this asset. `return` previously exited the whole function,
                                 // silently abandoning every remaining handle asset in the UTxO.
                                 continue;
