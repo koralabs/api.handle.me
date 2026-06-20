@@ -591,18 +591,23 @@ export class RedisHandlesStore implements IApiStore {
     }
 
     public getAllHandleRegistryLabels(): Record<string, string> {
-        const raw = this.redisClientCall('hgetall', getApiRegistryLabelsKey()) as Record<string, GlideString> | null;
-        // valkey-glide returns hash field values as GlideString (a Buffer under the binary decoder).
-        // Every other index read in this store .toString()s them (see getKeysFromIndex); this one
-        // returned them raw, so the MPT-root build (buildHandleSetTrie -> registryValueBuffer ->
-        // encodeRegistryValue -> labels.toLowerCase()) threw "labels.toLowerCase is not a function"
-        // on a Buffer and the registry could never finish building. Decode every value to a plain
-        // string. The map is null-prototype so a handle named like an Object.prototype member (e.g.
-        // "toString") resolves to undefined on lookup instead of an inherited function.
+        // valkey-glide's hgetall returns HashDataType — a { field, value }[] array of GlideString
+        // (Buffer) members, NOT a Record (see rehydrateObjectFromCache, which iterates the same
+        // shape). The original code cast it to Record and did registryLabels[handleName], which on
+        // an array is always undefined, so buildHandleSetTrie applied no label values and the
+        // MPT-root build produced the pre-registry root (calculated == legacy, never matching chain).
+        // Iterate the array and decode each field/value to a plain string into a null-prototype map
+        // (so a handle named like an Object.prototype member can't resolve to an inherited function).
+        // The `else` branch tolerates a Record shape too (batch hgetall returns one — see line ~705).
+        const raw = this.redisClientCall('hgetall', getApiRegistryLabelsKey()) as HashDataType | Record<string, GlideString> | null;
         const out: Record<string, string> = Object.create(null);
-        if (raw) {
-            for (const [name, labels] of Object.entries(raw)) {
-                out[name] = `${labels ?? ''}`;
+        if (Array.isArray(raw)) {
+            for (const { field, value } of raw) {
+                out[`${field}`] = `${value ?? ''}`;
+            }
+        } else if (raw) {
+            for (const [name, value] of Object.entries(raw)) {
+                out[name] = `${value ?? ''}`;
             }
         }
         return out;
