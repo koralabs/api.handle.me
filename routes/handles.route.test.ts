@@ -567,6 +567,18 @@ describe('Testing Handles Routes', () => {
             expect(response.body).toEqual([{ name: 'burritos', utxo: 'utxo#0', policy: 'f0ff' }]);
         });
 
+        it('should reject object entries for stake key hash lookup without a 500', async () => {
+            const response = await request(app?.getServer())
+                .post('/handles/list?type=stakekeyhash')
+                .set('Content-Type', 'application/json')
+                .send([{ hash: 'deadbeef' }]);
+
+            expect(response.status).toEqual(400);
+            expect(response.body.message).toEqual('expected string entries and received object');
+            const repoInstance = MockedHandlesRepository.mock.results.at(-1)?.value;
+            expect(repoInstance.getHandlesByStakeKeyHashes).not.toHaveBeenCalled();
+        });
+
         it('should return text/plain handle list from list search', async () => {
             const response = await request(app?.getServer())
                 .post('/handles/list?records_per_page=1&sort=asc')

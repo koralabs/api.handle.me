@@ -761,6 +761,9 @@ export class HandlesRepository {
 
     public getHandlesByStakeKeyHashes = (hashes: string[]): string[]  => {
         return hashes.map((h) => {
+            if (!/^[0-9a-fA-F]*$/.test(h) || h.length % 2 !== 0) {
+                return [EMPTY];
+            }
             const hashed = crypto.createHash('md5').update(h, 'hex').digest('hex');
             const array = Array.from(this.store.getValuesFromIndexedSet(IndexNames.HASH_OF_STAKE_KEY_HASH, hashed!) ?? []);
             return array.length === 0 ? [EMPTY] : array;

@@ -1,3 +1,8 @@
+jest.mock('@koralabs/kora-labs-common', () => ({
+    ...jest.requireActual('@koralabs/kora-labs-common'),
+    delay: jest.fn().mockResolvedValue(undefined)
+}));
+
 import { Logger, NETWORK } from '@koralabs/kora-labs-common';
 import { blockfrostApiCall, fetchKoios, fetchPaginatedResults, fetchTxList } from './helpers';
 
@@ -45,7 +50,7 @@ describe('helpers pagination tests', () => {
         expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
-    it('fetchPaginatedResults should paginate then stop on non-success status', async () => {
+    it('fetchPaginatedResults should retry then throw on persistent non-success status', async () => {
         const pageItems = new Array(100).fill(null).map((_, index) => `${index}`);
         const fetchMock = jest
             .fn()
@@ -53,16 +58,17 @@ describe('helpers pagination tests', () => {
                 status: 200,
                 json: async () => pageItems
             })
-            .mockResolvedValueOnce({
+            .mockResolvedValue({
                 status: 500,
-                json: async () => []
+                text: async () => 'upstream unavailable'
             });
         global.fetch = fetchMock as any;
 
-        const results = await fetchPaginatedResults<string>('blocks/latest/next');
+        await expect(fetchPaginatedResults<string>('blocks/latest/next')).rejects.toThrow(
+            'Blockfrost 500 for blocks/latest/next (page 2) after 5 retries: upstream unavailable'
+        );
 
-        expect(results).toEqual(pageItems);
-        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock).toHaveBeenCalledTimes(7);
     });
 
     it('fetchPaginatedResults should stop when maxResults is reached', async () => {
