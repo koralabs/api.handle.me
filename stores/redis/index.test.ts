@@ -31,6 +31,27 @@ describe('RedisHandlesStore critical path tests', () => {
         jest.restoreAllMocks();
     });
 
+    it('getAllHandleRegistryLabels decodes glide Buffer values to strings and is prototype-safe', () => {
+        // valkey-glide returns hash field values as GlideString (Buffer under the binary decoder).
+        // An undecoded Buffer reached encodeRegistryValue().toLowerCase() and crashed the reindex's
+        // MPT-root build with "labels.toLowerCase is not a function" — regression for that fix.
+        const store = new RedisHandlesStore();
+        jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'hgetall') return { elk: Buffer.from('00001070'), sh_settings_001: '00001070' };
+            return undefined;
+        });
+
+        const labels = store.getAllHandleRegistryLabels();
+
+        expect(labels.elk).toBe('00001070');
+        expect(typeof labels.elk).toBe('string');
+        expect(labels.sh_settings_001).toBe('00001070');
+        // null-prototype map: a handle named like an Object.prototype member can't resolve to an inherited fn
+        expect((labels as any).toString).toBeUndefined();
+        expect((labels as any).constructor).toBeUndefined();
+    });
+
     it('initializes a worker once and handles worker lifecycle hooks', () => {
         const store = new RedisHandlesStore();
         const currentNamespaceKeys = [getApiMetricsKey(), rootKey('handle:alpha')];

@@ -591,7 +591,21 @@ export class RedisHandlesStore implements IApiStore {
     }
 
     public getAllHandleRegistryLabels(): Record<string, string> {
-        return (this.redisClientCall('hgetall', getApiRegistryLabelsKey()) as Record<string, string> | null) ?? {};
+        const raw = this.redisClientCall('hgetall', getApiRegistryLabelsKey()) as Record<string, GlideString> | null;
+        // valkey-glide returns hash field values as GlideString (a Buffer under the binary decoder).
+        // Every other index read in this store .toString()s them (see getKeysFromIndex); this one
+        // returned them raw, so the MPT-root build (buildHandleSetTrie -> registryValueBuffer ->
+        // encodeRegistryValue -> labels.toLowerCase()) threw "labels.toLowerCase is not a function"
+        // on a Buffer and the registry could never finish building. Decode every value to a plain
+        // string. The map is null-prototype so a handle named like an Object.prototype member (e.g.
+        // "toString") resolves to undefined on lookup instead of an inherited function.
+        const out: Record<string, string> = Object.create(null);
+        if (raw) {
+            for (const [name, labels] of Object.entries(raw)) {
+                out[name] = `${labels ?? ''}`;
+            }
+        }
+        return out;
     }
 
     public count(): number {
