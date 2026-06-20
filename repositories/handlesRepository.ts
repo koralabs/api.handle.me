@@ -1034,18 +1034,18 @@ export class HandlesRepository {
 
                             if (!utxo.datum) {
                                 Logger.log({ message: `No datum for SubHandle token ${handle.name}`,  category: LogCategory.ERROR, event: 'processScannedHandleInfo.subHandle.noDatum'});
-                                // The registry label tracks token PRESENCE (the CIP-67 001-004 prefix),
-                                // not datum validity. Apply it before skipping the datum-dependent
-                                // settings parse below — otherwise a datum-less 001 (e.g. a legacy f0ff
-                                // settings token such as `water`) is dropped from the asset-label
-                                // registry, leaving the api MPT root one key short of chain. The generic
-                                // registry-label block after the switch is bypassed by this `continue`.
-                                if (isRegistryLabel(assetDetails.assetLabel)) {
-                                    handle.registry_labels = ensureLabel(handle.registry_labels ?? '', `${assetDetails.assetLabel}`.toLowerCase());
+                                // No settings datum to parse, but the registry must still record this 001
+                                // token's PRESENCE — the registry value tracks CIP-67 label prefixes, not
+                                // datum validity. `break` out of the switch (NOT `continue`) so the
+                                // post-switch registry-label block AND save() still run; a `continue` here
+                                // dropped a datum-less 001 (e.g. the legacy f0ff settings token `water`)
+                                // from the registry, leaving the api MPT root one key short of chain.
+                                // Default the resolved address first so the post-switch holder build /
+                                // save() don't NPE on a handle whose only asset is this datum-less token.
+                                if (!handle.resolved_addresses) {
+                                    handle.resolved_addresses = { ada: existingHandle?.resolved_addresses?.ada ?? '' };
                                 }
-                                // Skip only this asset. `return` previously exited the whole function,
-                                // silently abandoning every remaining handle asset in the UTxO.
-                                continue;
+                                break;
                             }
 
                             // TODO: change to utxo_id to utxo and update handle.me to requst /subhandle-settings/utxo

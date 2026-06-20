@@ -277,7 +277,7 @@ describe('HandlesRepository branch tests', () => {
         expect(loggerSpy).toHaveBeenCalledWith(expect.objectContaining({ event: 'saveHandleUpdate.utxoAlreadyExists' }));
     });
 
-    it('logs and exits early when subhandle settings token has no datum', () => {
+    it('logs but still records the 001 registry label when a subhandle settings token has no datum', () => {
         const repo = new HandlesRepository(buildStoreMock());
         const saveSpy = jest.spyOn(repo, 'save').mockImplementation(jest.fn());
         const loggerSpy = jest.spyOn(Logger, 'log').mockImplementation(jest.fn());
@@ -297,7 +297,12 @@ describe('HandlesRepository branch tests', () => {
                 event: 'processScannedHandleInfo.subHandle.noDatum'
             })
         );
-        expect(saveSpy).not.toHaveBeenCalled();
+        // The registry tracks token PRESENCE, not datum validity — a datum-less 001 must still be
+        // saved with its label set, else legacy f0ff 001s (e.g. `water`) drop out of the MPT root.
+        expect(saveSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ name: 'tiny@root', registry_labels: '00001070' }),
+            undefined
+        );
     });
 
     it('applies virtual subhandle resolved addresses from datum payload', () => {
