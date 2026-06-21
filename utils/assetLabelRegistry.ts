@@ -110,10 +110,10 @@ export const valueBuffer = (set: string): Buffer => Buffer.from(set, 'hex');
 
 // ───────────────────────── registry value (port of registryValue.ts) ─────────────────────────
 //
-// Composes the label set with a root's FREE private-virtual sub-name set (DSH-402). Today the api
-// passes no free names (the orders/free-virtual path is not yet wired into the scan), so `encode`
-// returns the bare label set — byte-identical to the on-chain value for any handle without free
-// virtuals. When free-virtual tracking lands, supply the names here and the encoding stays correct.
+// Composes the label set with a root's FREE private-virtual sub-name set (DSH-402). The scan tracks
+// the free names per root (see the free-name set below + handlesRepository's mint/burn hooks), so
+// `encode` returns the bare label set for a root with no free virtuals (byte-identical to the
+// pre-free-virtual on-chain value) and the (free_names ⊕ labels) composition once it holds any.
 
 // CBOR header for a Plutus `Data` byte string (major type 2). Names are CIP-67 asset names
 // (<= 32 bytes), so a single definite-length chunk always suffices.
@@ -143,3 +143,49 @@ export const encodeRegistryValue = (freeNames: string[], labels: string): string
 /** The Trie value bytes for a handle whose registry state is (freeNames, labels). */
 export const registryValueBuffer = (freeNames: string[], labels: string): Buffer =>
     valueBuffer(encodeRegistryValue(freeNames, labels));
+
+// ───────────────────────── free-name set (port of registryValue.ts ops) ─────────────────────────
+//
+// A root's FREE private-virtual sub-name set (DSH-402), names as lowercase hex of the sub-handle
+// name bytes. The scan maintains it incrementally: addFreeName on a free private-virtual mint (while
+// the root holds < free_virtual_count), removeFreeName on its burn. Order is significant (it is the
+// prepend order encodeRegistryValue serialises), so storage must preserve it. MUST stay
+// byte-identical to decentralized-minting/src/store/registryValue.ts.
+
+/** A free slot is available iff the root holds fewer than the configured free count. */
+export const hasFreeSlot = (freeNames: string[], freeVirtualCount: number): boolean =>
+    freeNames.length < freeVirtualCount;
+
+/** Is this sub-name (hex) one of the root's current free names? */
+export const hasFreeName = (freeNames: string[], nameHex: string): boolean =>
+    freeNames.map((n) => n.toLowerCase()).includes(nameHex.toLowerCase());
+
+/** Add a free name — prepend (mirrors aiken `list.push`), idempotent. */
+export const addFreeName = (freeNames: string[], nameHex: string): string[] => {
+    const n = nameHex.toLowerCase();
+    const lower = freeNames.map((x) => x.toLowerCase());
+    return lower.includes(n) ? lower : [n, ...lower];
+};
+
+/** Remove a free name (free private-virtual burn → reopen slot). No-op if absent; preserves order. */
+export const removeFreeName = (freeNames: string[], nameHex: string): string[] => {
+    const n = nameHex.toLowerCase();
+    return freeNames.map((x) => x.toLowerCase()).filter((x) => x !== n);
+};
+
+// Per-root free-name set storage: an order-preserving comma-delimited hex string (sub-handle names
+// are hex, never contain a comma) on the ROOT handle's record, alongside its registry_labels.
+export const FREE_NAME_DELIM = ',';
+export const serializeFreeNames = (freeNames: string[]): string => freeNames.join(FREE_NAME_DELIM);
+export const parseFreeNames = (s: string | undefined | null): string[] =>
+    (s ?? '')
+        .split(FREE_NAME_DELIM)
+        .map((x) => x.trim().toLowerCase())
+        .filter(Boolean);
+
+/**
+ * Free private-virtual subs allowed per root. The allowance is universal (3) and must match the
+ * engine's read of settings.discount_config.free_virtual_count (and minting.handle.me nft.ts
+ * FREE_VIRTUAL_MINTS). A code constant per the ecosystem default-over-env rule.
+ */
+export const FREE_VIRTUAL_COUNT = 3;

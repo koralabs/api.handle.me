@@ -1,16 +1,24 @@
 import {
+    addFreeName,
     containsLabel,
     encodeRegistryValue,
     ensureLabel,
     ensureNoLabel,
+    FREE_VIRTUAL_COUNT,
+    hasFreeName,
+    hasFreeSlot,
     insertLabel,
     isRegistryLabel,
     LBL_001,
     LBL_002,
     LBL_003,
     LBL_004,
+    parseFreeNames,
     REGISTRY_LABEL_PREFIXES,
+    registryValueBuffer,
+    removeFreeName,
     removeLabel,
+    serializeFreeNames,
     valueBuffer
 } from './assetLabelRegistry';
 
@@ -105,5 +113,51 @@ describe('encodeRegistryValue — byte-identical to on-chain registry_value.enco
 
     it('rejects an over-64-byte name rather than emit divergent bytes', () => {
         expect(() => encodeRegistryValue(['61'.repeat(65)], LBL_001)).toThrow();
+    });
+});
+
+describe('free-name set — the WS1 free-virtual allowance (mirrors registryValue.ts ops)', () => {
+    it('hasFreeSlot tracks the universal 3-per-root allowance', () => {
+        expect(FREE_VIRTUAL_COUNT).toBe(3);
+        expect(hasFreeSlot([], FREE_VIRTUAL_COUNT)).toBe(true);
+        expect(hasFreeSlot([NAME_AB, NAME_CD], FREE_VIRTUAL_COUNT)).toBe(true);
+        expect(hasFreeSlot([NAME_AB, NAME_CD, '6566'], FREE_VIRTUAL_COUNT)).toBe(false);
+    });
+
+    it('addFreeName prepends and is idempotent (re-scan safe); hasFreeName is case-insensitive', () => {
+        let s: string[] = [];
+        s = addFreeName(s, NAME_AB);
+        s = addFreeName(s, NAME_CD);
+        expect(s).toEqual([NAME_CD, NAME_AB]); // prepend order (aiken list.push)
+        // idempotent: re-adding an existing name is a no-op, so a re-scan can't grow the count
+        expect(addFreeName(s, NAME_AB)).toEqual([NAME_CD, NAME_AB]);
+        expect(addFreeName(s, NAME_AB.toUpperCase())).toEqual([NAME_CD, NAME_AB]);
+        expect(hasFreeName(s, NAME_AB)).toBe(true);
+        expect(hasFreeName(s, '6566')).toBe(false);
+    });
+
+    it('removeFreeName reopens a slot, preserves order, and no-ops when absent (paid-sub burn)', () => {
+        const s = [NAME_CD, NAME_AB];
+        expect(removeFreeName(s, NAME_AB)).toEqual([NAME_CD]);
+        expect(removeFreeName(s, '6566')).toEqual([NAME_CD, NAME_AB]); // absent -> unchanged
+    });
+
+    it('serialize/parse round-trips the ordered set (the on-handle storage form)', () => {
+        const s = [NAME_CD, NAME_AB];
+        expect(serializeFreeNames(s)).toBe('6364,6162');
+        expect(parseFreeNames(serializeFreeNames(s))).toEqual(s);
+        expect(parseFreeNames('')).toEqual([]);
+        expect(parseFreeNames(undefined)).toEqual([]);
+        // a stored set round-trips back to the exact bytes the chain wrote
+        expect(registryValueBuffer(parseFreeNames(serializeFreeNames(s)), LBL_001)).toEqual(
+            Buffer.from(encodeRegistryValue(s, LBL_001), 'hex')
+        );
+    });
+
+    it('a root holding a free name diverges from the bare label value (why the api MUST track it)', () => {
+        // empty free set == pre-free-virtual value; a held free name != it — the reconstruction gap
+        // this whole change closes. If the api dropped the name, its root would silently mis-match chain.
+        expect(registryValueBuffer([], LBL_001)).toEqual(valueBuffer(LBL_001));
+        expect(registryValueBuffer([NAME_AB], LBL_001)).not.toEqual(valueBuffer(LBL_001));
     });
 });
