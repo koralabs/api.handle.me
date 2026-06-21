@@ -934,7 +934,19 @@ describe('processBlock Tests', () => {
             utxo: 'some_id#0',
             version: 0
         };
-        expect(saveSubHandleSettingsChangeSpy).toHaveBeenNthCalledWith(2, savedHandle, { ...savedHandle, subhandle_settings: undefined });
+        expect(saveSubHandleSettingsChangeSpy).toHaveBeenCalledTimes(2);
+        const [updatedHandle, previousHandle] = saveSubHandleSettingsChangeSpy.mock.calls[1];
+        expect(updatedHandle).toEqual(expect.objectContaining(savedHandle));
+        expect(updatedHandle).toEqual(expect.objectContaining({
+            registry_labels: expect.stringContaining(AssetNameLabel.LBL_001),
+            subhandle_settings: savedHandle.subhandle_settings
+        }));
+        expect(previousHandle).toEqual(expect.objectContaining({
+            name: savedHandle.name,
+            utxo: savedHandle.utxo
+        }));
+        expect(previousHandle).toBeDefined();
+        expect(previousHandle?.subhandle_settings).toBeUndefined();
     });
 
     it('should process as NFT Sub handle', async () => {
