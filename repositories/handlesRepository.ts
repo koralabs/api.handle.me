@@ -852,7 +852,11 @@ export class HandlesRepository {
             this.store.removeKeyFromIndex(IndexNames.HANDLE, handle.name);
 
             // WS1 registry: the 222/000 is gone, so the key leaves the MPT — drop its registry value.
+            // Clear BOTH derived components symmetrically: the label set AND (for a root) its free-virtual
+            // name set. Without the free-names clear, a burned root's stale set survives in the derived
+            // hash and would be re-applied if the name is re-minted, diverging the rebuilt root from chain.
             this.registryStore.setHandleRegistryLabels?.(handleName, '');
+            this.registryStore.setHandleRegistryFreeNames?.(handleName, '');
 
             // set all one-to-many indexes
             this.store.removeValueFromIndexedSet(IndexNames.RARITY, handle.rarity, handleName)
