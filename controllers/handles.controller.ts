@@ -155,7 +155,12 @@ class HandlesController {
 
         const handlesViewModel = (handleSearchResults.handles as StoredHandle[]).filter((handle: StoredHandle) => !!handle.utxo).map((handle: StoredHandle) => new HandleViewModel(handle));
 
-        setSearchTotal(res, handlesViewModel.length);
+        // X-Total-Count is the full match count across all pages, not the size
+        // of the returned page (and certainly not the page-size the caller
+        // requested) — paginated clients rely on this header to decide whether
+        // to keep fetching. Match the text/plain branch above and getAll's
+        // JSON branch, which both already use searchTotal.
+        setSearchTotal(res, handleSearchResults.searchTotal);
         res.status(handleRepo.currentHttpStatus()).json(handlesViewModel);
     }
 

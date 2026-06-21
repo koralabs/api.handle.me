@@ -229,7 +229,10 @@ jest.mock('../repositories/handlesRepository', () => ({
             if (textResponse) {
                 return { searchTotal: 999, handles: ['burritos'] };
             }
-            return { searchTotal: 1, handles: [
+            // searchTotal is intentionally larger than handles.length so that
+            // tests asserting X-Total-Count catch any regression to "page
+            // length" or "records_per_page passed in".
+            return { searchTotal: 7777, handles: [
                 {
                     name: 'burritos',
                     utxo: 'utxo#0',
@@ -418,6 +421,18 @@ describe('Testing Handles Routes', () => {
             expect(response.body).toEqual([{ name: 'burritos', utxo: 'utxo#0', policy: 'f0ff' }]);
         });
 
+        it('should return X-Total-Count from the full searchTotal, not the page length', async () => {
+            // Regression: the JSON branches of getAll / list previously echoed
+            // the returned page's view-model length (or records_per_page),
+            // making client pagination useless. The header must be the
+            // unpaginated match count produced by repo.search.
+            const response = await request(app?.getServer()).get('/handles?records_per_page=1&sort=asc');
+
+            expect(response.status).toEqual(200);
+            expect(response.headers['x-handles-search-total']).toEqual('7777');
+            expect(response.headers['x-total-count']).toEqual('7777');
+        });
+
         it('should return text/plain handle list when accept is text/plain', async () => {
             const response = await request(app?.getServer()).get('/handles?records_per_page=1&sort=asc').set('Accept', 'text/plain');
 
@@ -565,6 +580,21 @@ describe('Testing Handles Routes', () => {
 
             expect(response.status).toEqual(200);
             expect(response.body).toEqual([{ name: 'burritos', utxo: 'utxo#0', policy: 'f0ff' }]);
+        });
+
+        it('should return X-Total-Count from the full searchTotal on JSON list, not the returned page length', async () => {
+            // Regression: _searchFromList's JSON branch was using
+            // handlesViewModel.length, so paginated clients saw the count
+            // of THIS page (or 0 when all returned handles lacked utxo)
+            // instead of the total across all pages.
+            const response = await request(app?.getServer())
+                .post('/handles/list?records_per_page=1&sort=asc')
+                .set('Content-Type', 'application/json')
+                .send(['burritos']);
+
+            expect(response.status).toEqual(200);
+            expect(response.headers['x-handles-search-total']).toEqual('7777');
+            expect(response.headers['x-total-count']).toEqual('7777');
         });
 
         it('should reject object entries for stake key hash lookup without a 500', async () => {
