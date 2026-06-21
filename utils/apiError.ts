@@ -104,6 +104,20 @@ export class ApiError extends HttpException {
         return new ApiError(400, 'bad_request', message);
     }
 
+    static unknownQueryParams(unknown: string[]): ApiError {
+        // Reject silently-ignored typos at the door — when an unknown filter
+        // like `?holder=...` is dropped, callers see "results" that look
+        // filtered but are actually the unfiltered head of the dataset,
+        // which is the worst kind of wrong. List the offending keys so the
+        // caller can fix them in one round trip.
+        const keys = unknown.map((k) => `'${k}'`).join(', ');
+        return new ApiError(
+            400,
+            'unknown_query_params',
+            `Unknown query parameter${unknown.length === 1 ? '' : 's'}: ${keys}`
+        );
+    }
+
     static handleTypeUnsupportedForMint(): ApiError {
         return new ApiError(
             400,

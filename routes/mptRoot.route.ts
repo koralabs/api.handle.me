@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import MptRootController from '../controllers/mptRoot.controller';
+import { allowQueryParams } from '../utils/queryParamGuard';
 import BaseRoute from './base';
 
 class MptRootRoute extends BaseRoute {
@@ -13,9 +14,9 @@ class MptRootRoute extends BaseRoute {
     }
 
     private initializeRoutes() {
-        this.router.get(`${this.path}`, this.mptRootController.index);
-        this.router.get(`${this.path}/proof`, this.mptRootController.proof);
-        this.router.get(`${this.path}/registry-labels`, this.mptRootController.registryLabels);
+        this.router.get(`${this.path}`, allowQueryParams(), this.mptRootController.index);
+        this.router.get(`${this.path}/proof`, allowQueryParams('handle', 'label', 'amount'), this.mptRootController.proof);
+        this.router.get(`${this.path}/registry-labels`, allowQueryParams(), this.mptRootController.registryLabels);
     }
 }
 

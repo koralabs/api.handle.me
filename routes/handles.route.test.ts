@@ -421,6 +421,29 @@ describe('Testing Handles Routes', () => {
             expect(response.body).toEqual([{ name: 'burritos', utxo: 'utxo#0', policy: 'f0ff' }]);
         });
 
+        it('should reject `?holder=...` (typo for `holder_address`) with 400 unknown_query_params', async () => {
+            // Regression: an unrecognized filter key used to be silently dropped,
+            // so `?holder=stake1...` reported the unfiltered first page plus the
+            // full handle-set count in X-Total-Count, looking like a real filter.
+            // The 400 body must carry the standard `docs` URL the way 404s do.
+            const response = await request(app?.getServer())
+                .get('/handles?holder=stake1u9k8e3krslcm2p2s6kfd5dl3ekt6vmmvk7w0r2u3suw5slcgzj9ds');
+
+            expect(response.status).toEqual(400);
+            expect(response.body).toEqual({
+                error: 'unknown_query_params',
+                message: "Unknown query parameter: 'holder'",
+                docs: 'https://api.handle.me/'
+            });
+        });
+
+        it('should accept `?holder_address=...` (canonical name)', async () => {
+            const response = await request(app?.getServer())
+                .get('/handles?holder_address=stake1u9k8e3krslcm2p2s6kfd5dl3ekt6vmmvk7w0r2u3suw5slcgzj9ds');
+
+            expect(response.status).toEqual(200);
+        });
+
         it('should return X-Total-Count from the full searchTotal, not the page length', async () => {
             // Regression: the JSON branches of getAll / list previously echoed
             // the returned page's view-model length (or records_per_page),
