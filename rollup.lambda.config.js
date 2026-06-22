@@ -18,7 +18,16 @@ export default (async () => ({
     ],
     plugins: [
         typescript(),
-        commonjs({ignoreDynamicRequires: true}),
+        // @koralabs/kora-labs-common/mpt is bundled CJS and `require()`s the ESM-only
+        // @aiken-lang/merkle-patricia-forestry (no `default` export). Without esmExternals the
+        // commonjs plugin emits `import require$$0 from 'merkle-patricia-forestry'`, which crashes
+        // the ESM fn at load ("does not provide an export named 'default'"). Marking MPF as an ESM
+        // external makes the plugin interop its named exports (Trie) correctly. Scoped to MPF so
+        // other (CJS) externals keep their default interop.
+        commonjs({
+            ignoreDynamicRequires: true,
+            esmExternals: ['@aiken-lang/merkle-patricia-forestry']
+        }),
         nodeResolve(),
         json(),
         multiInput()
