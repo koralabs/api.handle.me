@@ -1,4 +1,5 @@
 import { Trie } from '@aiken-lang/merkle-patricia-forestry';
+import { computeMintingDataRoot } from '@koralabs/kora-labs-common/mpt';
 import { decodeCborToJson } from '@koralabs/kora-labs-common/utils/cbor';
 import { AssetNameLabel, HANDLE_POLICIES, IndexNames, LogCategory, Logger, NETWORK, Network } from '@koralabs/kora-labs-common';
 import { getHandlesStore, RedisHandlesStore } from '../stores/redis';
@@ -187,12 +188,15 @@ export const buildHandleSetTrie = async (
 export const buildHandleSetMptRootHash = async (
     handleNames: string[],
     ghostHandles: string[] = [],
-    registryLabels: Record<string, string> = {},
-    registryFreeNames: Record<string, string> = {}
-) => {
-    const trie = await buildHandleSetTrie(handleNames, ghostHandles, registryLabels, registryFreeNames);
-    return trie.hash?.toString('hex') ?? EMPTY_MPT_ROOT_HASH;
-};
+    // registryLabels/registryFreeNames are intentionally UNUSED for the LIVE root: per the
+    // validator's `update_root` the MPT value is #"" (empty). Labels enter the root only once the
+    // in-band MintLabelAssets path is deployed; until then the off-chain root MUST be empty-valued
+    // or it diverges from chain on every labeled handle (the drift that wedged mints). Delegated to
+    // the ONE canonical implementation in @koralabs/kora-labs-common/mpt so api + engine + bff can
+    // never diverge again. Params kept for caller compatibility + the future in-band switch.
+    _registryLabels: Record<string, string> = {},
+    _registryFreeNames: Record<string, string> = {}
+) => computeMintingDataRoot([...handleNames, ...ghostHandles]);
 
 /**
  * WS1 — build the off-chain proof package the minter needs to ride a `MintLabelAssets` (+1) or
