@@ -9,14 +9,7 @@ import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import {
     ensureLabel,
     ensureNoLabel,
-    isRegistryLabel,
-    addFreeName,
-    removeFreeName,
-    hasFreeName,
-    hasFreeSlot,
-    parseFreeNames,
-    serializeFreeNames,
-    FREE_VIRTUAL_COUNT
+    isRegistryLabel
 } from '../utils/assetLabelRegistry';
 import { canonicalJsonStringify } from '../utils/helpers';
 import { decodeCborFromIPFSFile } from '../utils/ipfs';
@@ -60,8 +53,6 @@ export class HandlesRepository {
         return this.store as IApiStore & {
             setHandleRegistryLabels?: (name: string, labels: string) => void;
             getAllHandleRegistryLabels?: () => Record<string, string>;
-            setHandleRegistryFreeNames?: (name: string, freeNames: string) => void;
-            getAllHandleRegistryFreeNames?: () => Record<string, string>;
         };
     }
 
@@ -852,11 +843,7 @@ export class HandlesRepository {
             this.store.removeKeyFromIndex(IndexNames.HANDLE, handle.name);
 
             // WS1 registry: the 222/000 is gone, so the key leaves the MPT — drop its registry value.
-            // Clear BOTH derived components symmetrically: the label set AND (for a root) its free-virtual
-            // name set. Without the free-names clear, a burned root's stale set survives in the derived
-            // hash and would be re-applied if the name is re-minted, diverging the rebuilt root from chain.
             this.registryStore.setHandleRegistryLabels?.(handleName, '');
-            this.registryStore.setHandleRegistryFreeNames?.(handleName, '');
 
             // set all one-to-many indexes
             this.store.removeValueFromIndexedSet(IndexNames.RARITY, handle.rarity, handleName)
@@ -884,23 +871,6 @@ export class HandlesRepository {
             if (handleName.includes('@')) {
                 const rootHandle = handleName.split('@')[1];
                 this.store.removeValueFromIndexedSet(IndexNames.SUBHANDLE, rootHandle, handleName);
-
-                // WS1 free-virtual: if this burned virtual sub held a free slot, reopen it on the root.
-                // removeFreeName is a no-op for a paid sub (its name was never in the set), so the
-                // hasFreeName guard just avoids an unnecessary root save.
-                if (handle.handle_type === HandleType.VIRTUAL_SUBHANDLE) {
-                    const subNameHex = Buffer.from(handleName.split('@')[0], 'utf8').toString('hex');
-                    const root = this.store.getHashFromIndex(IndexNames.HANDLE, rootHandle) as StoredHandle | undefined;
-                    if (root) {
-                        const current = parseFreeNames(root.registry_free_names);
-                        if (hasFreeName(current, subNameHex)) {
-                            this.save(
-                                { ...root, registry_free_names: serializeFreeNames(removeFreeName(current, subNameHex)) },
-                                root
-                            );
-                        }
-                    }
-                }
             }
 
             // remove the handle from the holder
@@ -1122,32 +1092,6 @@ export class HandlesRepository {
                     handle.registry_labels = ensureLabel(handle.registry_labels ?? '', `${assetDetails.assetLabel}`.toLowerCase());
                 }
 
-                // WS1 free-virtual allowance: a FREE private virtual sub claims a slot on its ROOT.
-                // The first FREE_VIRTUAL_COUNT PRIVATE virtuals per root are free (public virtuals,
-                // virtual.public_mint === true, never consume the allowance). The UTxO-ordered scan
-                // mirrors the engine's hasFreeSlot decision; addFreeName is idempotent so a re-scan /
-                // re-output is a no-op. The set lives on the ROOT's registry_free_names and composes
-                // with its labels into the root key's MPT value (encodeRegistryValue(freeNames, labels)).
-                if (
-                    assetDetails.assetLabel === AssetNameLabel.LBL_000 &&
-                    handle.virtual &&
-                    handle.virtual.public_mint !== true &&
-                    name.includes('@')
-                ) {
-                    const rootName = name.split('@')[1];
-                    const subNameHex = Buffer.from(name.split('@')[0], 'utf8').toString('hex');
-                    const root = this.store.getHashFromIndex(IndexNames.HANDLE, rootName) as StoredHandle | undefined;
-                    if (root) {
-                        const current = parseFreeNames(root.registry_free_names);
-                        if (!hasFreeName(current, subNameHex) && hasFreeSlot(current, FREE_VIRTUAL_COUNT)) {
-                            this.save(
-                                { ...root, registry_free_names: serializeFreeNames(addFreeName(current, subNameHex)) },
-                                root
-                            );
-                        }
-                    }
-                }
-
                 const holder = buildHolderInfo(handle.resolved_addresses.ada)
                 
                 handle.holder = holder.address
@@ -1204,12 +1148,6 @@ export class HandlesRepository {
         // handles — which hold no tracked label — never touch this hash.
         if (handle.registry_labels !== oldHandle?.registry_labels) {
             this.registryStore.setHandleRegistryLabels?.(name, handle.registry_labels ?? '');
-        }
-
-        // WS1 free-virtual: mirror a root's free-name set into the derived hash on change only, so the
-        // per-tick MPT root build reads every set in one HGETALL (same pattern as registry_labels).
-        if (handle.registry_free_names !== oldHandle?.registry_free_names) {
-            this.registryStore.setHandleRegistryFreeNames?.(name, handle.registry_free_names ?? '');
         }
 
         // set all one-to-many indexes

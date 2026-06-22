@@ -4,7 +4,7 @@ import { decodeCborToJson } from '@koralabs/kora-labs-common/utils/cbor';
 import { AssetNameLabel, HANDLE_POLICIES, IndexNames, LogCategory, Logger, NETWORK, Network } from '@koralabs/kora-labs-common';
 import { getHandlesStore, RedisHandlesStore } from '../stores/redis';
 import { SnapshotVerification } from './verifiedSnapshot';
-import { applyLabel, registryValueBuffer, parseFreeNames } from './assetLabelRegistry';
+import { applyLabel, registryValueBuffer } from './assetLabelRegistry';
 import { blockfrostApiCall, fetchKoios } from './helpers';
 
 const MINTING_DATA_HANDLE_NAME = 'handle_root@handle_settings';
@@ -163,10 +163,7 @@ export const buildHandleSetTrie = async (
     // WS1 asset-label registry: handle name -> sorted hex label set ({001-004}). Only labeled
     // handles appear; everything else keeps the empty value, so the root is byte-identical to the
     // pre-registry root for any handle that holds none of the tracked labels.
-    registryLabels: Record<string, string> = {},
-    // WS1 free-virtual: ROOT name -> comma-delimited hex free-name set. Composed with the labels into
-    // the root key's MPT value; a root holding free virtuals diverges from the bare label set.
-    registryFreeNames: Record<string, string> = {}
+    registryLabels: Record<string, string> = {}
 ): Promise<Trie> => {
     const normalizedHandleNames = [...new Set([...handleNames, ...ghostHandles].map((handle) => `${handle}`.trim()).filter(Boolean))].sort();
     // Bulk constructor instead of N serial `await trie.insert(...)` calls.
@@ -177,10 +174,9 @@ export const buildHandleSetTrie = async (
     return Trie.fromList(
         normalizedHandleNames.map((key) => {
             const labels = registryLabels[key] ?? '';
-            const freeNames = parseFreeNames(registryFreeNames[key]);
-            // Empty (no labels, no free names) keeps the prior empty value (unchanged root); otherwise
-            // encode(freeNames, labels) — the exact bytes the on-chain demimntmpt MintLabelAssets writes.
-            return { key, value: labels || freeNames.length ? registryValueBuffer(freeNames, labels) : '' };
+            // No labels keeps the prior empty value (unchanged root); otherwise the label set —
+            // the exact bytes the on-chain demimntmpt MintLabelAssets writes.
+            return { key, value: labels ? registryValueBuffer(labels) : '' };
         })
     );
 };
@@ -188,14 +184,10 @@ export const buildHandleSetTrie = async (
 export const buildHandleSetMptRootHash = async (
     handleNames: string[],
     ghostHandles: string[] = [],
-    // registryLabels/registryFreeNames are intentionally UNUSED for the LIVE root: per the
-    // validator's `update_root` the MPT value is #"" (empty). Labels enter the root only once the
-    // in-band MintLabelAssets path is deployed; until then the off-chain root MUST be empty-valued
-    // or it diverges from chain on every labeled handle (the drift that wedged mints). Delegated to
-    // the ONE canonical implementation in @koralabs/kora-labs-common/mpt so api + engine + bff can
-    // never diverge again. Params kept for caller compatibility + the future in-band switch.
-    _registryLabels: Record<string, string> = {},
-    _registryFreeNames: Record<string, string> = {}
+    // The minting-data MPT value is "" for every key: the WS1 label path is not on-chain. So the
+    // plain handle-set root IS the chain root. Routed through the ONE canonical klc impl so api +
+    // engine + bff never diverge. Param kept for the future in-band label switch.
+    _registryLabels: Record<string, string> = {}
 ) => computeMintingDataRoot([...handleNames, ...ghostHandles]);
 
 /**
@@ -216,21 +208,17 @@ export const buildLabelAssetProof = async (
     const handleNames = store.getKeysFromIndex(IndexNames.HANDLE) as string[];
     const ghosts = GHOST_HANDLES[NETWORK.toLowerCase()] ?? [];
     const registryLabels = store.getAllHandleRegistryLabels?.() ?? {};
-    const registryFreeNames = store.getAllHandleRegistryFreeNames?.() ?? {};
     const key = `${handleName}`.trim();
 
-    const trie = await buildHandleSetTrie(handleNames, ghosts, registryLabels, registryFreeNames);
+    const trie = await buildHandleSetTrie(handleNames, ghosts, registryLabels);
     const currentRoot = trie.hash?.toString('hex') ?? EMPTY_MPT_ROOT_HASH;
     const oldLabels = registryLabels[key] ?? '';
-    // A 001-004 label mint/burn doesn't touch the free-virtual allowance, so the proof preserves the
-    // key's CURRENT free-name set. Now that the scan tracks it, read it rather than hardcoding [].
-    const oldFreeNames = parseFreeNames(registryFreeNames[key]);
     const newLabels = applyLabel(oldLabels, labelPrefix, amount); // strict — throws on invalid delta
     const proof = await trie.prove(key); // throws if the key is not in the set (handle not indexed)
 
     // Advance the local trie to the post-update value to read the resulting root for the new datum.
     await trie.delete(key);
-    await trie.insert(key, registryValueBuffer(oldFreeNames, newLabels));
+    await trie.insert(key, registryValueBuffer(newLabels));
     const newRoot = trie.hash?.toString('hex') ?? EMPTY_MPT_ROOT_HASH;
 
     return {
@@ -240,7 +228,6 @@ export const buildLabelAssetProof = async (
         amount: amount.toString(),
         old_labels: oldLabels,
         new_labels: newLabels,
-        old_free_names: oldFreeNames,
         current_root: currentRoot,
         new_root: newRoot,
         mpt_proof: proof.toJSON()
@@ -251,8 +238,7 @@ export const buildAndStoreMptRootHash = async (store: RedisHandlesStore): Promis
     const handleNames = store.getKeysFromIndex(IndexNames.HANDLE) as string[];
     const ghosts = GHOST_HANDLES[NETWORK.toLowerCase()] ?? [];
     const registryLabels = store.getAllHandleRegistryLabels?.() ?? {};
-    const registryFreeNames = store.getAllHandleRegistryFreeNames?.() ?? {};
-    const hash = await buildHandleSetMptRootHash(handleNames, ghosts, registryLabels, registryFreeNames);
+    const hash = await buildHandleSetMptRootHash(handleNames, ghosts, registryLabels);
     store.setMptRootHash(hash);
     return hash;
 };
@@ -262,8 +248,7 @@ export const buildSnapshotVerification = async (handleNames: string[]): Promise<
     store.initialize();
     const ghosts = GHOST_HANDLES[NETWORK.toLowerCase()] ?? [];
     const registryLabels = store.getAllHandleRegistryLabels?.() ?? {};
-    const registryFreeNames = store.getAllHandleRegistryFreeNames?.() ?? {};
-    const snapshotMptRootHash = store.getMptRootHash() ?? await buildHandleSetMptRootHash(handleNames, ghosts, registryLabels, registryFreeNames);
+    const snapshotMptRootHash = store.getMptRootHash() ?? await buildHandleSetMptRootHash(handleNames, ghosts, registryLabels);
     const chainMptRootHash = await getChainMintingDataRootHash();
 
     const verifiedAgainstChain = snapshotMptRootHash === chainMptRootHash;

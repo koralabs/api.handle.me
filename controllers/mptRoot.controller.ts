@@ -102,15 +102,11 @@ class MptRootController {
         try {
             const store = new (req.app.get('registry') as IRegistry).handlesStore();
             const labels = store.getAllHandleRegistryLabels?.() ?? {};
-            // WS1 free-virtual: per-root free-name sets, so the minter's registry-aware trie matches
-            // chain on roots holding free virtuals. Additive — existing consumers still read `labels`.
-            const free_names = store.getAllHandleRegistryFreeNames?.() ?? {};
             res.status(200).json({
                 network: NETWORK.toLowerCase() || 'preview',
                 current_root: store.getMptRootHash() ?? null,
                 count: Object.keys(labels).length,
-                labels,
-                free_names
+                labels
             });
         } catch (error) {
             next(error);

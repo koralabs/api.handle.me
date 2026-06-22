@@ -38,11 +38,6 @@ export const getApiMptRebuildPendingKey = (network = NETWORK) => getApiCacheKey(
 // every label set in one HGETALL instead of fetching all handles.
 export const getApiRegistryLabelsKey = (network = NETWORK) => getApiCacheKey('registry_labels', network);
 
-// WS1 free-virtual allowance: a derived redis hash (field = ROOT handle name, value = comma-delimited
-// hex free-name set) holding ONLY roots with a non-empty free-name set. Same one-HGETALL pattern as
-// the label hash; composes with it into the root key's MPT value.
-export const getApiRegistryFreeNamesKey = (network = NETWORK) => getApiCacheKey('registry_free_names', network);
-
 // Sorted set: score=slot, value=blockHash. One entry per block the scanner has processed,
 // whether or not that block contained handle txs. Enables processRollback to identify
 // truly-missed canonical blocks (vs. blocks we correctly scanned but that had no handle

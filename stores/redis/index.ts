@@ -8,7 +8,7 @@ import { handleEraBoundaries, MAX_SETS_PER_PIPE, META_INDEXES, ORDERED_SLOTS } f
 import { getHandleNameFromAssetName } from '../../services/ogmios/utils';
 import { canonicalJsonStringify } from '../../utils/helpers';
 import { isChainVerifiedSnapshot, VerifiedHandleFileContent } from '../../utils/verifiedSnapshot';
-import { getApiCacheTag, getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey, getApiMptRootHashKey, getApiNamespaceScanPattern, getApiRegistryLabelsKey, getApiRegistryFreeNamesKey, getApiScannedBlocksKey } from './keys';
+import { getApiCacheTag, getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey, getApiMptRootHashKey, getApiNamespaceScanPattern, getApiRegistryLabelsKey, getApiScannedBlocksKey } from './keys';
 
 // const glideClient = await GlideClient.createClient({
 //       addresses: [{ host: 'https://localhost', port: 6379 }],
@@ -600,31 +600,6 @@ export class RedisHandlesStore implements IApiStore {
         // (so a handle named like an Object.prototype member can't resolve to an inherited function).
         // The `else` branch tolerates a Record shape too (batch hgetall returns one — see line ~705).
         const raw = this.redisClientCall('hgetall', getApiRegistryLabelsKey()) as HashDataType | Record<string, GlideString> | null;
-        const out: Record<string, string> = Object.create(null);
-        if (Array.isArray(raw)) {
-            for (const { field, value } of raw) {
-                out[`${field}`] = `${value ?? ''}`;
-            }
-        } else if (raw) {
-            for (const [name, value] of Object.entries(raw)) {
-                out[name] = `${value ?? ''}`;
-            }
-        }
-        return out;
-    }
-
-    // WS1 free-virtual: derived hash of root -> comma-delimited hex free-name set. Mirror of the
-    // label methods above (HDEL on empty so the map only holds roots with free virtuals).
-    public setHandleRegistryFreeNames(name: string, freeNames: string): void {
-        if (freeNames) {
-            this.redisClientCall('hset', getApiRegistryFreeNamesKey(), { [name]: freeNames });
-        } else {
-            this.redisClientCall('hdel', getApiRegistryFreeNamesKey(), name);
-        }
-    }
-
-    public getAllHandleRegistryFreeNames(): Record<string, string> {
-        const raw = this.redisClientCall('hgetall', getApiRegistryFreeNamesKey()) as HashDataType | Record<string, GlideString> | null;
         const out: Record<string, string> = Object.create(null);
         if (Array.isArray(raw)) {
             for (const { field, value } of raw) {
