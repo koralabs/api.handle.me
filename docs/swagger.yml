@@ -1806,10 +1806,13 @@ components:
           type: boolean
           description: >-
             State flag: whether the Handle (or SubHandle) has actually *been* personalized in any
-            way — a chosen (or creator/partner default-applied) background or profile picture, or
-            any portal, designer, or socials/URL content — as distinct from `pz_enabled`, which
-            only means personalization is allowed. Use the `personalized` query parameter on the
-            handle-list endpoints to filter by this.
+            way — as distinct from `pz_enabled`, which only means personalization is allowed. True
+            for any applied personalization: a chosen (or creator/partner default-applied)
+            background or profile picture (`bg_image`/`pfp_image`/`bg_asset`/`pfp_asset` or a
+            rendered image that differs from the standard image), any `portal`, `designer`, or
+            `socials`/URL content, or custom resolved chain addresses (any `resolved_addresses`
+            entry beyond the auto-resolved `ada`, e.g. `btc`/`eth`). Use the `personalized` query
+            parameter on the handle-list endpoints to filter by this.
           example: true
         created_slot_number:
           type: integer

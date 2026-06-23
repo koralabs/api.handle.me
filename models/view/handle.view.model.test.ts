@@ -71,28 +71,39 @@ describe('HandleViewModel', () => {
     });
 
     it('exposes is_personalized (state) independently of pz_enabled (capability)', () => {
-        // pz_enabled defaults true for a root HANDLE, but a handle with no applied
-        // personalization (image unchanged, no content) is NOT personalized.
-        const notPersonalized = new HandleViewModel(
-            buildHandle({ image_hash: '0xsame', standard_image_hash: '0xsame', personalization: undefined })
-        );
+        // A pristine handle: image unchanged, no content, no custom assets/addresses.
+        // pz_enabled still defaults true for a root HANDLE (capability) — but it is NOT personalized.
+        const pristine = {
+            image_hash: '0xsame',
+            standard_image_hash: '0xsame',
+            personalization: undefined,
+            bg_image: undefined,
+            pfp_image: undefined,
+            bg_asset: undefined,
+            pfp_asset: undefined,
+            resolved_addresses: { ada: 'addr' }
+        };
+        const notPersonalized = new HandleViewModel(buildHandle(pristine));
         expect(notPersonalized.pz_enabled).toBe(true);
         expect(notPersonalized.is_personalized).toBe(false);
 
-        // image differs (bg/pfp applied) → personalized
+        // image differs (chosen/default bg or pfp) → personalized
         expect(
-            new HandleViewModel(buildHandle({ image_hash: '0xa', standard_image_hash: '0xb' })).is_personalized
+            new HandleViewModel(buildHandle({ ...pristine, image_hash: '0xa', standard_image_hash: '0xb' }))
+                .is_personalized
         ).toBe(true);
 
         // socials/URLs only, image unchanged (the #1958 sub-handle case) → personalized
         expect(
             new HandleViewModel(
-                buildHandle({
-                    image_hash: '0xsame',
-                    standard_image_hash: '0xsame',
-                    personalization: { socials: [{ url: 'x', display: 'x' }] }
-                })
+                buildHandle({ ...pristine, personalization: { socials: [{ url: 'x', display: 'x' }] } })
             ).is_personalized
+        ).toBe(true);
+
+        // custom chain address only (e.g. btc), nothing else → personalized
+        expect(
+            new HandleViewModel(buildHandle({ ...pristine, resolved_addresses: { ada: 'addr', btc: 'bc1...' } }))
+                .is_personalized
         ).toBe(true);
     });
 });
