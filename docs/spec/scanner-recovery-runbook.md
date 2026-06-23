@@ -99,6 +99,54 @@ The scanner falls back to Blockfrost when Koios calls fail. If both providers ar
 
 6. **API Lambda stale cache** — After reimport, the API Lambda may show `slot: 0` or `percentage_complete: 0` for up to 30 minutes until its warm instances cycle out. The data in Valkey is correct — verify with valkey-utility.
 
+## Reindex Without Reimport (recompute indexes, no schema bump)
+
+Use this when a **secondary index's membership changed additively** but its shape/contract did
+**not** — e.g. broadening the `is_personalized` predicate so `PERSONALIZED` also counts custom
+(non-`ada`) chain addresses. This rebuilds the secondary indexes from the UTxOs **already in
+Valkey** — no S3 reimport, no chain rescan (~5 min for ~265K handles).
+
+> ⚠️ This is **not** a schema-version bump. Do **not** touch `INDEX_SCHEMA_VERSION` /
+> `UTXO_SCHEMA_VERSION` — they are a breaking-change contract published on `/health`
+> (see [`schema-versions.md`](./schema-versions.md)). Adding a field or broadening index membership
+> is additive; bumping would falsely tell every consumer the schema broke.
+
+**Mechanism:** set the recovery flag `{api:<network>}:scanner:recovery = reindex`. The next
+scheduled scanner tick reads it (`scanner.app.ts`: `getRecoveryFlag()` → `processReindex()` →
+`repopulateIndexesFromUTxOs()`), rebuilds indexes with the **currently deployed code**, then clears
+the flag. `indexSchemaVersion` / `utxoSchemaVersion` stay untouched. On AWS the scanner runs this
+in-process (`KORA_SCANNER_DEFER_IMPORTS` is unset); the 409/deferred path is box-only.
+
+**Procedure — one region at a time, east verified before west:**
+1. Deploy the code first (the predicate must live in a single shared helper used by both the view
+   model field and the index `save()`, e.g. `utils/isPersonalized.ts`).
+2. Bump that region's `api-scanner` to **10GB** (`update-function-configuration --memory-size 10240`
+   → `wait function-updated` → `publish-version` → `update-alias <network>`; verify `NETWORK`). The
+   rebuild iterates every handle and OOMs at 4GB.
+3. `valkey-utility` **`trigger_reindex`** (sets the recovery flag):
+   ```bash
+   aws lambda invoke --function-name valkey-utility --region us-east-1 \
+       --cli-binary-format raw-in-base64-out \
+       --payload '{"action":"trigger_reindex","region":"us-east-1","network":"mainnet"}' /tmp/r.json
+   ```
+4. Watch the region's metrics: `lockLambdas` goes `REINDEX` (~5 min), then clears; the recovery flag
+   returns to `null`; the scanner resumes `SCANNING` and catches back to tip
+   (`currentBlockHash == tipBlockHash`).
+5. Verify (`indexSchemaVersion` unchanged, the affected filter e.g. `?personalized=true` returns
+   200, region at tip).
+6. Restore that region's scanner to **4GB** (config → publish → alias).
+7. Repeat for the other region.
+
+> ⚠️ **`api.handle.me` is CNAME'd to the _west_ ELB only — there is NO Route53/east failover.**
+> `east.api.handle.me` is the east-direct endpoint. Consequences during a reindex:
+> - A **west** reindex briefly degrades the **main** `api.handle.me` (~5 min). It returns **HTTP
+>   `202` with the full handle body** — "a region is reindexing", not an error — but consumers that
+>   reject non-`200` will see it. Prefer low-traffic windows for west.
+> - An **east** reindex only affects `east.api.handle.me`; main traffic is unaffected.
+>
+> Done 2026-06-22 for `is_personalized` (api.handle.me#199), both regions, on the eef2391-based
+> mainnet deploy. `trigger_reindex` is a permanent `valkey-utility` action.
+
 ## Valkey-Utility Usage
 
 The `valkey-utility` Lambda is ad hoc throwaway code. Deploy whatever handler you need:
