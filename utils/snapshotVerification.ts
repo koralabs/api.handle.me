@@ -1,5 +1,4 @@
 import { Trie } from '@aiken-lang/merkle-patricia-forestry';
-import { computeMintingDataRoot } from '@koralabs/kora-labs-common/mpt';
 import { decodeCborToJson } from '@koralabs/kora-labs-common/utils/cbor';
 import { AssetNameLabel, HANDLE_POLICIES, IndexNames, LogCategory, Logger, NETWORK, Network } from '@koralabs/kora-labs-common';
 import { getHandlesStore, RedisHandlesStore } from '../stores/redis';
@@ -184,11 +183,17 @@ export const buildHandleSetTrie = async (
 export const buildHandleSetMptRootHash = async (
     handleNames: string[],
     ghostHandles: string[] = [],
-    // The minting-data MPT value is "" for every key: the WS1 label path is not on-chain. So the
-    // plain handle-set root IS the chain root. Routed through the ONE canonical klc impl so api +
-    // engine + bff never diverge. Param kept for the future in-band label switch.
-    _registryLabels: Record<string, string> = {}
-) => computeMintingDataRoot([...handleNames, ...ghostHandles]);
+    // WS1: the minting-data MPT value at a key is the handle's sorted CIP-67 label set ({001-004});
+    // empty only for a handle that holds none. The stored/compared root MUST be label-aware and is
+    // built from the SAME trie the proof builder uses (buildHandleSetTrie), so the root we report and
+    // the proofs we hand the engine can never disagree. (They did: a label-blind value:"" root
+    // [94bdd2b8] vs the label-aware chain root [9bb0ecbb] deadlocked every mint.) Byte-identical to
+    // the on-chain demimntmpt value.
+    registryLabels: Record<string, string> = {}
+) => {
+    const trie = await buildHandleSetTrie(handleNames, ghostHandles, registryLabels);
+    return trie.hash?.toString('hex') ?? EMPTY_MPT_ROOT_HASH;
+};
 
 /**
  * WS1 — build the off-chain proof package the minter needs to ride a `MintLabelAssets` (+1) or
