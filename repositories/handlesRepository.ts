@@ -12,6 +12,7 @@ import {
     isRegistryLabel
 } from '../utils/assetLabelRegistry';
 import { canonicalJsonStringify } from '../utils/helpers';
+import { isHandlePersonalized } from '../utils/isPersonalized';
 import { decodeCborFromIPFSFile } from '../utils/ipfs';
 const blackListedIpfsCids: string[] = [];
 const isTestnet = NETWORK.toLowerCase() !== 'mainnet';
@@ -1168,11 +1169,9 @@ export class HandlesRepository {
             this.store.addValueToIndexedSet(IndexNames.SUBHANDLE, rootHandle, name);
         }
 
-        const personalized = (() => {
-            if (handle.image_hash != handle.standard_image_hash) return true;
-            const pz = handle.personalization;
-            return !!pz?.designer || !!pz?.portal || !!pz?.socials
-        })();
+        // Single source of truth shared with the API's `is_personalized` view-model field,
+        // so this PERSONALIZED index and the per-handle field can never disagree.
+        const personalized = isHandlePersonalized(handle);
 
         // remove the old - these can change over time
         this.store.removeValueFromIndexedSet(IndexNames.OG, Number(!ogFlag), name);

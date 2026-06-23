@@ -1,5 +1,6 @@
 import { HandleType, IDrep, Rarity, StoredHandle } from '@koralabs/kora-labs-common';
 import { ApiError } from '../../utils/apiError';
+import { isHandlePersonalized } from '../../utils/isPersonalized';
 
 export class HandleViewModel {
     hex: string;
@@ -34,6 +35,7 @@ export class HandleViewModel {
     handle_type: string;
     payment_key_hash?: string;
     pz_enabled?: boolean;
+    is_personalized: boolean;
 
     sub_rarity?: string;
     sub_length?: number;
@@ -91,6 +93,9 @@ export class HandleViewModel {
         this.handle_type = handle.handle_type;
         this.payment_key_hash = handle.payment_key_hash;
         this.pz_enabled = this.getPzEnabled(handle.handle_type, handle.pz_enabled);
+        // Has this handle/sub-handle actually *been* personalized (vs. pz_enabled = allowed).
+        // Same predicate as the PERSONALIZED secondary index, so field and filter agree.
+        this.is_personalized = isHandlePersonalized(handle);
         this.drep = handle.drep
         this.policy = handle.policy || '';
 
