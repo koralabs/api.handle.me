@@ -38,6 +38,7 @@
 - `save()` removes the old `HANDLE_TYPE` bucket entry when `oldHandle.handle_type !== handle.handle_type` (e.g., `HANDLE` → `VIRTUAL_SUBHANDLE` on an LBL_000 update), so a type transition does not leave an orphan in the prior bucket.
 - `save()` cleans `SLOT` by handle name (`ZREM slot name`). The prior code called `removeValuesFromOrderedSet(SLOT, updated_slot_number)`, which stringified the ordinal and performed a no-op `ZREM` in almost every case — worst case a wrong-target removal for a handle whose name happened to equal the current block slot.
 - `removeHandle` removes the burned handle from both `PERSONALIZED:0` and `PERSONALIZED:1`. Recomputing the current bucket (`image_hash != standard_image_hash` OR any populated `personalization` field) could disagree with what `save()` actually wrote for legacy or drifted state, so cleanup is defensive by design — `SREM` on the wrong bucket is a no-op.
+- The `PERSONALIZED` bucket predicate lives in one place — `utils/isPersonalized.ts` (`isHandlePersonalized`) — and is reused by `save()` and by the API's `is_personalized` view-model field, so the `?personalized=` filter and the per-handle field can never disagree. **`is_personalized` (state: personalization has *been applied* — image change, designer, portal, or socials/URLs; creator/partner-applied defaults count because they populate those fields) is distinct from `pz_enabled` (capability: personalization is *allowed*).** See Discord ticket #1958 / api.handle.me#199.
 
 ## Read Flow
 1. Route/controller parses request query/path models.

@@ -1794,6 +1794,23 @@ components:
         has_datum:
           type: boolean
           description: "`true` if the UTxO that the Handle is in also has a datum value"
+        pz_enabled:
+          type: boolean
+          description: >-
+            Capability flag: whether personalization is *allowed* for this Handle. Root Handles
+            default to `true`; for SubHandles it reflects the root Handle's SubHandle settings.
+            This does NOT indicate that the Handle has actually been personalized — for that, use
+            `is_personalized`.
+          example: true
+        is_personalized:
+          type: boolean
+          description: >-
+            State flag: whether the Handle (or SubHandle) has actually *been* personalized in any
+            way — a chosen (or creator/partner default-applied) background or profile picture, or
+            any portal, designer, or socials/URL content — as distinct from `pz_enabled`, which
+            only means personalization is allowed. Use the `personalized` query parameter on the
+            handle-list endpoints to filter by this.
+          example: true
         created_slot_number:
           type: integer
           description: The slot number this Handle was minted

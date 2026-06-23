@@ -69,4 +69,30 @@ describe('HandleViewModel', () => {
 
         expect(model.pz_enabled).toBe(false);
     });
+
+    it('exposes is_personalized (state) independently of pz_enabled (capability)', () => {
+        // pz_enabled defaults true for a root HANDLE, but a handle with no applied
+        // personalization (image unchanged, no content) is NOT personalized.
+        const notPersonalized = new HandleViewModel(
+            buildHandle({ image_hash: '0xsame', standard_image_hash: '0xsame', personalization: undefined })
+        );
+        expect(notPersonalized.pz_enabled).toBe(true);
+        expect(notPersonalized.is_personalized).toBe(false);
+
+        // image differs (bg/pfp applied) → personalized
+        expect(
+            new HandleViewModel(buildHandle({ image_hash: '0xa', standard_image_hash: '0xb' })).is_personalized
+        ).toBe(true);
+
+        // socials/URLs only, image unchanged (the #1958 sub-handle case) → personalized
+        expect(
+            new HandleViewModel(
+                buildHandle({
+                    image_hash: '0xsame',
+                    standard_image_hash: '0xsame',
+                    personalization: { socials: [{ url: 'x', display: 'x' }] }
+                })
+            ).is_personalized
+        ).toBe(true);
+    });
 });
