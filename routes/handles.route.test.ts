@@ -418,7 +418,7 @@ describe('Testing Handles Routes', () => {
             const response = await request(app?.getServer()).get('/handles?records_per_page=1&sort=asc');
 
             expect(response.status).toEqual(200);
-            expect(response.body).toEqual([{ name: 'burritos', utxo: 'utxo#0', policy: 'f0ff' }]);
+            expect(response.body).toEqual([{ name: 'burritos', utxo: 'utxo#0', policy: 'f0ff', is_personalized: false }]);
         });
 
         it('should reject `?holder=...` (typo for `holder_address`) with 400 unknown_query_params', async () => {
@@ -585,7 +585,7 @@ describe('Testing Handles Routes', () => {
             const response = await request(app?.getServer()).post('/handles/list?records_per_page=1&sort=asc');
 
             expect(response.status).toEqual(200);
-            expect(response.body).toEqual([{ name: 'burritos', utxo: 'utxo#0', policy: 'f0ff' }]);
+            expect(response.body).toEqual([{ name: 'burritos', utxo: 'utxo#0', policy: 'f0ff', is_personalized: false }]);
         });
 
         it('should fail if handles is not an array', async () => {
@@ -602,7 +602,7 @@ describe('Testing Handles Routes', () => {
             const response = await request(app?.getServer()).post('/handles/list').set('Content-Type', 'application/json').send(['burritos']);
 
             expect(response.status).toEqual(200);
-            expect(response.body).toEqual([{ name: 'burritos', utxo: 'utxo#0', policy: 'f0ff' }]);
+            expect(response.body).toEqual([{ name: 'burritos', utxo: 'utxo#0', policy: 'f0ff', is_personalized: false }]);
         });
 
         it('should return X-Total-Count from the full searchTotal on JSON list, not the returned page length', async () => {
@@ -744,14 +744,14 @@ describe('Testing Handles Routes', () => {
         it('should return valid handle', async () => {
             const response = await request(app?.getServer()).get('/handles/burritos');
             expect(response.status).toEqual(200);
-            expect(response.body).toEqual({ name: 'burritos', resolved_addresses: { ada: 'addr1' }, utxo: 'utxo#0', policy: 'f0ff' });
+            expect(response.body).toEqual({ name: 'burritos', resolved_addresses: { ada: 'addr1' }, utxo: 'utxo#0', policy: 'f0ff', is_personalized: false });
         });
 
         it('should resolve handle by hex when hex query is true', async () => {
             const hex = Buffer.from('burritos').toString('hex');
             const response = await request(app?.getServer()).get(`/handles/${hex}?hex=true`);
             expect(response.status).toEqual(200);
-            expect(response.body).toEqual({ name: 'burritos', resolved_addresses: { ada: 'addr1' }, utxo: 'utxo#0', policy: 'f0ff' });
+            expect(response.body).toEqual({ name: 'burritos', resolved_addresses: { ada: 'addr1' }, utxo: 'utxo#0', policy: 'f0ff', is_personalized: false });
         });
 
         it('should preserve cross-chain resolved addresses in handle response', async () => {
@@ -765,14 +765,15 @@ describe('Testing Handles Routes', () => {
                     eth: '0x1234'
                 },
                 utxo: 'utxo#0',
-                policy: 'f0ff'
+                policy: 'f0ff',
+                is_personalized: true
             });
         });
 
         it('should return legendary handle if available', async () => {
             const response = await request(app?.getServer()).get('/handles/1');
             expect(response.status).toEqual(200);
-            expect(response.body).toEqual({ name: '1', resolved_addresses: { ada: 'addr1' }, utxo: 'utxo#0', policy: 'f0ff' });
+            expect(response.body).toEqual({ name: '1', resolved_addresses: { ada: 'addr1' }, utxo: 'utxo#0', policy: 'f0ff', is_personalized: false });
         });
 
         it('returns 404 with handle FAQ docs URL for legendary single-char handles', async () => {
