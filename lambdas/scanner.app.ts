@@ -3,6 +3,7 @@ import { WHITELISTED_API_KEYS } from '../config';
 import { BlockfrostBlock, KoiosAssetUTxO, KoiosDatumInfo, KoiosTxInfo } from '../interfaces/provider.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
+import { isRegistryLabel } from '../utils/assetLabelRegistry';
 import { getHandlesStore } from '../stores/redis';
 import { getApiMptRebuildPendingKey, getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
 import { discoverHandleTxsBySlotRange, isMaestroConfigured, MaestroDiscoveryResult } from '../services/maestro/policy-txs.service';
@@ -1247,12 +1248,25 @@ const scan = async () => {
 
                 builtUTxOs.forEach((utxo) => {
                     // ********** BURNS ************* //
+                    // Classify each burned asset: a 222/000 (or legacy/100) burn removes the handle
+                    // KEY; a tracked label-asset (001-004) burn only drops that label from the
+                    // handle's registry value, leaving the key in place (spec: the key lives until
+                    // the 222/000 is burnt). getHandleNameFromAssetName returns assetLabel as the raw
+                    // 4-byte CIP-67 prefix, so we classify directly.
+                    const mainBurnNames: string[] = [];
+                    const labelBurns: { name: string; label: string }[] = [];
+                    utxo.burn
+                        ?.flatMap((b) => b[1])
+                        .forEach((hex) => {
+                            const { name, assetLabel } = getHandleNameFromAssetName(hex);
+                            if (isRegistryLabel(assetLabel)) labelBurns.push({ name, label: `${assetLabel}`.toLowerCase() });
+                            else mainBurnNames.push(name);
+                        });
+
                     const burnHandles = (store.pipeline(() => {
-                        utxo.burn
-                            ?.flatMap((b) => b[1])
-                            .forEach((hex) => {
-                                handlesRepo.getHandle(getHandleNameFromAssetName(hex).name);
-                            });
+                        mainBurnNames.forEach((name) => {
+                            handlesRepo.getHandle(name);
+                        });
                     }) as (StoredHandle | undefined)[]).filter((burned): burned is StoredHandle => !!burned);
 
                     const uniqueBurnHandles = Array.from(new Map(burnHandles.map((handle) => [handle.name, handle])).values());
@@ -1261,6 +1275,17 @@ const scan = async () => {
                             handlesRepo.removeHandle(burned);
                         });
                     });
+
+                    // Label-only burns: drop the label from the surviving handle. If the same tx also
+                    // burned its 222/000, removeHandle above already deleted the key and this re-read
+                    // no-ops — so ordering is safe either way.
+                    if (labelBurns.length) {
+                        store.pipeline(() => {
+                            labelBurns.forEach(({ name, label }) => {
+                                handlesRepo.removeHandleLabel(name, label);
+                            });
+                        });
+                    }
                 });
 
                 // ********* UPDATES ************ //

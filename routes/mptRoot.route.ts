@@ -15,6 +15,8 @@ class MptRootRoute extends BaseRoute {
 
     private initializeRoutes() {
         this.router.get(`${this.path}`, allowQueryParams(), this.mptRootController.index);
+        this.router.get(`${this.path}/proof`, allowQueryParams('handle', 'label', 'amount'), this.mptRootController.proof);
+        this.router.get(`${this.path}/registry-labels`, allowQueryParams(), this.mptRootController.registryLabels);
     }
 }
 

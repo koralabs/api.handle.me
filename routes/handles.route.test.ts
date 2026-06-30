@@ -23,7 +23,7 @@ jest.mock('../repositories/handlesRepository', () => ({
                 }
         },
         getHandle: (handleName: string) => {
-            if (['nope', 'l', 'japan', '***'].includes(handleName)) return null;
+            if (['nope', 'l', 'japan', '***', 'abcdefghijklmnopqrstuvwxyz12'].includes(handleName)) return null;
 
             if (handleName === 'no-utxo') {
                 return {
@@ -366,6 +366,16 @@ describe('Testing Handles Routes', () => {
         jest.restoreAllMocks();
     });
 
+    describe('[GET] /handles/:handle 28-char support', () => {
+        it('accepts a valid 28-char handle (not 400 handleNameInvalid) and 404s if unminted', async () => {
+            // kora-labs-common >= 6.7.8 raised the Ada Handle cap 15 -> 28. A valid, unminted
+            // 28-char handle must resolve to 404 handleNotFound, NOT 400 handleNameInvalid (the
+            // old {1,15} regex). 'abcdefghijklmnopqrstuvwxyz12' is exactly 28 chars.
+            const response = await request(app?.getServer()).get('/handles/abcdefghijklmnopqrstuvwxyz12');
+            expect(response.status).toEqual(404);
+        });
+    });
+
     describe('[GET] /handles', () => {
         it('should throw error if records_per_page is invalid', async () => {
             const response = await request(app?.getServer()).get('/handles?records_per_page=two');
@@ -610,6 +620,17 @@ describe('Testing Handles Routes', () => {
             expect(response.headers['x-total-count']).toEqual('7777');
         });
 
+        it('should reject object entries for stake key hash lookup without a 500', async () => {
+            const response = await request(app?.getServer())
+                .post('/handles/list?type=stakekeyhash')
+                .set('Content-Type', 'application/json')
+                .send([{ hash: 'deadbeef' }]);
+
+            expect(response.status).toEqual(400);
+            expect(response.body.message).toEqual('expected string entries and received object');
+            const repoInstance = MockedHandlesRepository.mock.results.at(-1)?.value;
+            expect(repoInstance.getHandlesByStakeKeyHashes).not.toHaveBeenCalled();
+        });
 
         it('should return text/plain handle list from list search', async () => {
             const response = await request(app?.getServer())

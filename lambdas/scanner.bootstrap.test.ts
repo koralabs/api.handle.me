@@ -25,7 +25,7 @@ describe('Scanner lambda bootstrap', () => {
             return rollbackResult;
         });
 
-        jest.doMock('@koralabs/kora-labs-common', () => ({ hydrateKmsEnvironment }));
+        jest.doMock('@koralabs/kora-labs-common/aws', () => ({ hydrateKmsEnvironment }));
         jest.doMock('./scanner.app', () => {
             appLoaded = true;
             return {

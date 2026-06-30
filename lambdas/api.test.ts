@@ -51,7 +51,7 @@ describe('API lambda handler', () => {
             hydrated = true;
         });
 
-        jest.doMock('@koralabs/kora-labs-common', () => ({ hydrateKmsEnvironment }));
+        jest.doMock('@koralabs/kora-labs-common/aws', () => ({ hydrateKmsEnvironment }));
         jest.doMock('./api.app', () => {
             appLoaded = true;
             return { handler: appHandler };

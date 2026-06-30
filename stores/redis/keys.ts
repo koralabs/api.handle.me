@@ -33,6 +33,11 @@ export const getApiMptRootHashKey = (network = NETWORK) => getApiCacheKey('mpt_r
 // stored mpt_root_hash doesn't persist past one transient failure.
 export const getApiMptRebuildPendingKey = (network = NETWORK) => getApiCacheKey('mpt_rebuild_pending', network);
 
+// WS1 asset-label registry: a derived redis hash (field = handle name, value = sorted hex label
+// set) holding ONLY handles with a non-empty registry value. Lets the per-tick MPT root build read
+// every label set in one HGETALL instead of fetching all handles.
+export const getApiRegistryLabelsKey = (network = NETWORK) => getApiCacheKey('registry_labels', network);
+
 // Sorted set: score=slot, value=blockHash. One entry per block the scanner has processed,
 // whether or not that block contained handle txs. Enables processRollback to identify
 // truly-missed canonical blocks (vs. blocks we correctly scanned but that had no handle

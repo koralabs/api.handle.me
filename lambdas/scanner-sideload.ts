@@ -1,4 +1,4 @@
-import { hydrateKmsEnvironment } from '@koralabs/kora-labs-common';
+import { hydrateKmsEnvironment } from '@koralabs/kora-labs-common/aws';
 
 // Standalone REIMPORT / REINDEX runner. The self-host box invokes this entrypoint in a one-off,
 // memory/time-unconstrained container (see aws-exit/scanner_sideload.sh) so the heavy ops can exceed

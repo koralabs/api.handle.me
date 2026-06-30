@@ -8,7 +8,7 @@ import { handleEraBoundaries, MAX_SETS_PER_PIPE, META_INDEXES, ORDERED_SLOTS } f
 import { getHandleNameFromAssetName } from '../../services/ogmios/utils';
 import { canonicalJsonStringify } from '../../utils/helpers';
 import { isChainVerifiedSnapshot, VerifiedHandleFileContent } from '../../utils/verifiedSnapshot';
-import { getApiCacheTag, getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey, getApiMptRootHashKey, getApiNamespaceScanPattern, getApiScannedBlocksKey } from './keys';
+import { getApiCacheTag, getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey, getApiMptRootHashKey, getApiNamespaceScanPattern, getApiRegistryLabelsKey, getApiScannedBlocksKey } from './keys';
 
 // const glideClient = await GlideClient.createClient({
 //       addresses: [{ host: 'https://localhost', port: 6379 }],
@@ -577,6 +577,40 @@ export class RedisHandlesStore implements IApiStore {
 
     public setMptRootHash(hash: string): void {
         this.redisClientCall('set', getApiMptRootHashKey(), hash);
+    }
+
+    // WS1 asset-label registry. The derived hash carries only handles with a non-empty label set;
+    // an empty set HDELs the field so the map stays small and the root build never pays for the
+    // (vast) majority of handles that hold none.
+    public setHandleRegistryLabels(name: string, labels: string): void {
+        if (labels) {
+            this.redisClientCall('hset', getApiRegistryLabelsKey(), { [name]: labels });
+        } else {
+            this.redisClientCall('hdel', getApiRegistryLabelsKey(), name);
+        }
+    }
+
+    public getAllHandleRegistryLabels(): Record<string, string> {
+        // valkey-glide's hgetall returns HashDataType — a { field, value }[] array of GlideString
+        // (Buffer) members, NOT a Record (see rehydrateObjectFromCache, which iterates the same
+        // shape). The original code cast it to Record and did registryLabels[handleName], which on
+        // an array is always undefined, so buildHandleSetTrie applied no label values and the
+        // MPT-root build produced the pre-registry root (calculated == legacy, never matching chain).
+        // Iterate the array and decode each field/value to a plain string into a null-prototype map
+        // (so a handle named like an Object.prototype member can't resolve to an inherited function).
+        // The `else` branch tolerates a Record shape too (batch hgetall returns one — see line ~705).
+        const raw = this.redisClientCall('hgetall', getApiRegistryLabelsKey()) as HashDataType | Record<string, GlideString> | null;
+        const out: Record<string, string> = Object.create(null);
+        if (Array.isArray(raw)) {
+            for (const { field, value } of raw) {
+                out[`${field}`] = `${value ?? ''}`;
+            }
+        } else if (raw) {
+            for (const [name, value] of Object.entries(raw)) {
+                out[name] = `${value ?? ''}`;
+            }
+        }
+        return out;
     }
 
     public count(): number {
