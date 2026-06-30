@@ -107,6 +107,7 @@ type Action =
     | 'scard'
     | 'sdiff_count'
     | 'smembers_diff'
+    | 'repoint_subhandle_settings'
     | 'reset_scanner';
 
 type ValkeyEvent = {
@@ -140,6 +141,8 @@ type ValkeyEvent = {
     field?: string | string[];
     // update_script_types payload: { name, type } pairs.
     updates?: Array<{ name: string; type: string }>;
+    // repoint_subhandle_settings payload: { name, utxoId } pairs.
+    subhandleSettingsUpdates?: Array<{ name: string; utxoId: string }>;
 };
 
 type RedisConfig = {
@@ -181,6 +184,8 @@ const getScannerLeaseKey = (network: string) => `${getApiCacheTag(network)}:scan
 const getHandleIndexRootKey = (network: string) => `${getApiCacheTag(network)}:handle`;
 
 const getHandleIndexKey = (network: string, handleName: string) => `${getApiCacheTag(network)}:handle:${handleName}`;
+
+const getUtxoIndexKey = (network: string, utxoId: string) => `${getApiCacheTag(network)}:utxo:${utxoId}`;
 
 const toInt = (value: number | string | undefined, fallback: number) => {
     const parsed = Number(value);
@@ -811,6 +816,102 @@ const updateScriptTypes = async (event: ValkeyEvent) => {
     }
 };
 
+// Re-point each handle's stored `subhandle_settings.utxo_id` at a still-live 001 UTxO.
+// Operational repair for the 001 dedup (2026-06): migrating a duplicate 001 to the burn-staging
+// contract minted a *higher-slot* settings UTxO that the scanner indexed as canonical, then the
+// burn removed it — leaving subhandle_settings.utxo_id dangling at the spent UTxO while the
+// untouched keeper 001 still sits on chain (api returns subhandle_settings_utxo_not_found).
+// This only re-points utxo_id; the parsed settings values are unchanged (the keeper and the burned
+// duplicate carried identical datums). Refuses unless the target UTxO record actually exists in the
+// store, so it can never point a handle at a non-existent UTxO. Lease-gated against the scanner.
+const repointSubhandleSettings = async (event: ValkeyEvent) => {
+    const network = requireNetwork(event);
+    if (!Array.isArray(event.subhandleSettingsUpdates) || !event.subhandleSettingsUpdates.length) {
+        throw new Error('subhandleSettingsUpdates is required for action=repoint_subhandle_settings and must be non-empty');
+    }
+    const updates = event.subhandleSettingsUpdates;
+    const dryRun = toBoolean(event.dryRun, false);
+    const target = createClient(getRedisConfig(event, 'target'));
+    await target.connect();
+
+    const leaseKey = getScannerLeaseKey(network);
+    const leaseOwner = `valkey-utility-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    let leaseAcquired = false;
+    try {
+        const leaseResult = dryRun ? 'OK' : await target.set(leaseKey, leaseOwner, 'PX', SCANNER_LEASE_TTL_MS, 'NX');
+        if (leaseResult !== 'OK') {
+            return { action: 'repoint_subhandle_settings', network, targetHost: target.options.host, dryRun, error: 'Scanner lease held by another invocation; retry shortly.', leaseKey };
+        }
+        leaseAcquired = !dryRun;
+
+        const summary = {
+            action: 'repoint_subhandle_settings',
+            network,
+            targetHost: target.options.host,
+            dryRun,
+            requested: updates.length,
+            updated: 0,
+            unchanged: 0,
+            missing: 0,
+            invalid: 0,
+            results: [] as Array<{ name: string; status: string; from?: string; to?: string }>
+        };
+
+        for (const update of updates) {
+            const name = `${update?.name ?? ''}`.trim();
+            const utxoId = `${update?.utxoId ?? ''}`.trim();
+            if (!name || !/^[0-9a-f]{64}#\d+$/.test(utxoId)) {
+                summary.invalid += 1;
+                summary.results.push({ name, status: 'invalid: name and utxoId (txhash#idx) required' });
+                continue;
+            }
+            // the target UTxO must exist in the store, else getUTxO would still 404 after the re-point.
+            if (!(await target.exists(getUtxoIndexKey(network, utxoId)))) {
+                summary.missing += 1;
+                summary.results.push({ name, status: 'target utxo not in store', to: utxoId });
+                continue;
+            }
+            const handleKey = getHandleIndexKey(network, name);
+            const ssRaw = await target.hget(handleKey, 'subhandle_settings');
+            if (!ssRaw) {
+                summary.missing += 1;
+                summary.results.push({ name, status: 'no subhandle_settings field' });
+                continue;
+            }
+            let ss: { utxo_id?: string } | null = null;
+            try {
+                ss = JSON.parse(ssRaw);
+            } catch {
+                summary.invalid += 1;
+                summary.results.push({ name, status: 'unparseable subhandle_settings JSON' });
+                continue;
+            }
+            const from = ss?.utxo_id;
+            if (from === utxoId) {
+                summary.unchanged += 1;
+                summary.results.push({ name, status: 'unchanged', from, to: utxoId });
+                continue;
+            }
+            if (!dryRun) {
+                await target.hset(handleKey, 'subhandle_settings', JSON.stringify({ ...ss, utxo_id: utxoId }));
+            }
+            summary.updated += 1;
+            summary.results.push({ name, status: dryRun ? 'would-update' : 'updated', from, to: utxoId });
+        }
+
+        return summary;
+    } finally {
+        if (leaseAcquired) {
+            try {
+                await target.eval(LEASE_RELEASE_LUA, 1, leaseKey, leaseOwner);
+            } catch {
+                // Best effort; lease will expire via TTL.
+            }
+        }
+        target.disconnect();
+    }
+};
+
 // Inspection / debugging actions (originally hand-deployed slim handler).
 const inspect = async (event: ValkeyEvent) => {
     const target = createClient(getRedisConfig(event, 'target'));
@@ -907,6 +1008,7 @@ export const handler = async (event: ValkeyEvent = {}) => {
             case 'add_mint_data': result = await addMintData(event); break;
             case 'scripts_with_cbor': result = await scriptsWithCbor(event); break;
             case 'update_script_types': result = await updateScriptTypes(event); break;
+            case 'repoint_subhandle_settings': result = await repointSubhandleSettings(event); break;
             case 'hgetall':
             case 'get':
             case 'del':
