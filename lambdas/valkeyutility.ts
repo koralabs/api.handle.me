@@ -108,7 +108,8 @@ type Action =
     | 'sdiff_count'
     | 'smembers_diff'
     | 'repoint_subhandle_settings'
-    | 'reset_scanner';
+    | 'reset_scanner'
+    | 'trigger_reindex';
 
 type ValkeyEvent = {
     action?: Action;
@@ -983,6 +984,22 @@ const inspect = async (event: ValkeyEvent) => {
             const after = await target.hgetall(metricsKey);
             return { network, metricsKey, progressKey, progressDeleted, before, after };
         }
+        if (action === 'trigger_reindex') {
+            // Force an in-place secondary-index rebuild (repopulateIndexesFromUTxOs) on the next
+            // scanner tick — WITHOUT a UTXO reimport and WITHOUT an INDEX_SCHEMA_VERSION bump.
+            // Sets the scanner recovery flag the scheduled scanner reads (scanner.app.ts:
+            // getRecoveryFlag() !== 'rollback' -> processReindex()). Use this when an index's
+            // *membership* changed but its shape/contract did not (so a schema-version bump —
+            // which signals a breaking change to consumers — would be wrong). NOTE: the rebuild
+            // iterates every handle; bump api-scanner to 10GB BEFORE invoking this, or it OOMs at
+            // 4GB. The scanner sets lockLambdas:REINDEX itself while it runs.
+            const network = requireNetwork(event);
+            const recoveryKey = `${getApiCacheTag(network)}:scanner:recovery`;
+            const before = await target.get(recoveryKey);
+            await target.set(recoveryKey, 'reindex');
+            const after = await target.get(recoveryKey);
+            return { action: 'trigger_reindex', network, recoveryKey, before, after };
+        }
         // Default status: read the requested network's MPT root + scanner metrics.
         // Network is required — no silent default. (See requireNetwork: a missing
         // network used to default to mainnet, so an empty {} payload mutated mainnet.)
@@ -1017,6 +1034,7 @@ export const handler = async (event: ValkeyEvent = {}) => {
             case 'sdiff_count':
             case 'smembers_diff':
             case 'reset_scanner': result = await inspect(event); break;
+            case 'trigger_reindex': result = await inspect(event); break;
             default: result = await inspectMetrics(event); break;
         }
         console.log(JSON.stringify(result, jsonReplacer));

@@ -18,9 +18,9 @@ class MptRootController {
             if (!calculatedMptRootHash) {
                 const handleNames = store.getKeysFromIndex(IndexNames.HANDLE) as string[];
                 const ghosts = GHOST_HANDLES[NETWORK.toLowerCase()] ?? [];
-                // WS1: the fallback root MUST be label-aware — same as the scanner's persisted root and
-                // the snapshot/proof paths. A label-blind value:"" root mismatches the label-aware chain
-                // and deadlocks the engine's verifyRootHash (which relays this exact value).
+                // WS1: the root is label-aware (value = each handle's CIP-67 label set), so the
+                // on-demand fallback MUST pass the registry labels too — otherwise it would compute the
+                // label-blind root and disagree with the scanner-stored root and the chain.
                 const registryLabels = store.getAllHandleRegistryLabels?.() ?? {};
                 calculatedMptRootHash = await buildHandleSetMptRootHash(handleNames, ghosts, registryLabels);
             }
