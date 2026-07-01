@@ -8,7 +8,19 @@ import { HandlesRepository } from '../repositories/handlesRepository';
 import { decodePoliciesDatum, HANDLE_POLICIES_NAME } from '../utils/policies';
 
 const LATEST_PROTOCOL_VERSION = '2025-11-25';
-const SUPPORTED_PROTOCOL_VERSIONS = new Set<string>(['2025-03-26', '2025-06-18', LATEST_PROTOCOL_VERSION]);
+// Ordered oldest -> newest. Includes 2024-11-05 (the original, most widely deployed
+// MCP revision) and every dated revision since, so we can negotiate any client down
+// to a version we both understand rather than rejecting it.
+const SUPPORTED_PROTOCOL_VERSIONS = ['2024-11-05', '2025-03-26', '2025-06-18', LATEST_PROTOCOL_VERSION];
+const SUPPORTED_PROTOCOL_VERSION_SET = new Set<string>(SUPPORTED_PROTOCOL_VERSIONS);
+const MCP_DOCS_URL = 'https://api.handle.me/';
+
+// Negotiate the effective protocol version. Per the MCP spec, `initialize` must never
+// reject on protocolVersion: if the client asks for one we support, echo it back; for
+// anything else (unknown, missing, malformed) fall back to our latest and let the
+// client decide whether to proceed.
+const negotiateProtocolVersion = (requested: unknown): string =>
+    typeof requested === 'string' && SUPPORTED_PROTOCOL_VERSION_SET.has(requested) ? requested : LATEST_PROTOCOL_VERSION;
 
 const TOOL_DEFINITIONS = [
     {
@@ -114,6 +126,7 @@ interface JsonRpcErrorResponse {
     error: {
         code: number;
         message: string;
+        data?: unknown;
     };
 }
 
@@ -127,11 +140,21 @@ class MCPController {
         return body as JsonRpcRequest;
     }
 
-    private static jsonError(id: JsonRpcId, code: number, message: string): JsonRpcErrorResponse {
+    // Every error we return is self-documenting: `data` always advertises the versions
+    // we support and where to read the docs, so a client can recover from the error
+    // body alone without a separate GET /mcp probe.
+    private static errorData(): Record<string, unknown> {
+        return {
+            supported_protocol_versions: [...SUPPORTED_PROTOCOL_VERSIONS],
+            docs: MCP_DOCS_URL
+        };
+    }
+
+    private static jsonError(id: JsonRpcId, code: number, message: string, data: unknown = MCPController.errorData()): JsonRpcErrorResponse {
         return {
             jsonrpc: '2.0',
             id,
-            error: { code, message }
+            error: { code, message, data }
         };
     }
 
@@ -143,10 +166,10 @@ class MCPController {
         };
     }
 
-    private static respondWithProtocol(res: Response, body: JsonRpcErrorResponse | JsonRpcSuccessResponse, status = 200) {
+    private static respondWithProtocol(res: Response, body: JsonRpcErrorResponse | JsonRpcSuccessResponse, status = 200, protocolVersion = LATEST_PROTOCOL_VERSION) {
         res
             .status(status)
-            .set('MCP-Protocol-Version', LATEST_PROTOCOL_VERSION)
+            .set('MCP-Protocol-Version', protocolVersion)
             .json(body);
     }
 
@@ -162,13 +185,6 @@ class MCPController {
             content: [{ type: 'text', text: JSON.stringify(payload) }],
             structuredContent: payload
         };
-    }
-
-    private static validateVersionHeader(req: Request): string | null {
-        const requestedVersion = req.header('MCP-Protocol-Version');
-        if (!requestedVersion) return null;
-        if (SUPPORTED_PROTOCOL_VERSIONS.has(requestedVersion)) return null;
-        return requestedVersion;
     }
 
     private static async callTool(name: string, args: unknown, req: Request): Promise<unknown> {
@@ -335,16 +351,10 @@ class MCPController {
 
     public async post(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
-            const unsupportedVersion = MCPController.validateVersionHeader(req);
-            if (unsupportedVersion) {
-                MCPController.respondWithProtocol(
-                    res,
-                    MCPController.jsonError(null, -32600, `Unsupported MCP protocol version: ${unsupportedVersion}`),
-                    400
-                );
-                return;
-            }
-
+            // Deliberately do NOT reject on the MCP-Protocol-Version header. A client that
+            // sends an old or unknown version there is still one we can serve; hard-rejecting
+            // over a cosmetic header would violate the "never reject a client we could serve"
+            // rule. Version alignment happens through `initialize` negotiation instead.
             const message = MCPController.parseRequest(req.body);
             if (!message || message.jsonrpc !== '2.0' || !message.method) {
                 MCPController.respondWithProtocol(res, MCPController.jsonError(null, -32600, 'Invalid JSON-RPC request'));
@@ -358,16 +368,16 @@ class MCPController {
 
             switch (message.method) {
                 case 'initialize': {
+                    // Negotiate, never reject. clientInfo/capabilities are optional and any
+                    // extra params are ignored — we only look at protocolVersion, and even a
+                    // missing or unknown one just negotiates down to our latest supported.
                     const requestedVersion = (message.params as Record<string, unknown> | undefined)?.protocolVersion;
-                    if (requestedVersion && (typeof requestedVersion !== 'string' || !SUPPORTED_PROTOCOL_VERSIONS.has(requestedVersion))) {
-                        MCPController.respondWithProtocol(res, MCPController.jsonError(message.id ?? null, -32602, 'Unsupported protocolVersion'));
-                        return;
-                    }
+                    const negotiatedVersion = negotiateProtocolVersion(requestedVersion);
 
                     MCPController.respondWithProtocol(
                         res,
                         MCPController.jsonResult(message.id ?? null, {
-                            protocolVersion: LATEST_PROTOCOL_VERSION,
+                            protocolVersion: negotiatedVersion,
                             capabilities: {
                                 tools: { listChanged: false }
                             },
@@ -375,7 +385,9 @@ class MCPController {
                                 name: 'api.handle.me',
                                 version: packageJson.version
                             }
-                        })
+                        }),
+                        200,
+                        negotiatedVersion
                     );
                     return;
                 }
