@@ -39,7 +39,7 @@ jobs:
           SERVICE_INSTALL_CMD: npm install
           SERVICE_BUILD_CMD: npm run build:lambda && cp -r ./dist/lambdas/* ./dist
           SERVICE_DIST: dist
-          FN_FUNCTIONS: '[{"name":"api","handler":"lambdas/api.js","kind":"http","memory":512,"export":"handler"},{"name":"scanner","handler":"lambdas/scanner.js","kind":"worker","schedule":"*:0/2","memory":1024,"export":"lambdaHandler"},{"name":"snapshot","handler":"lambdas/snapshot.js","kind":"worker","schedule":"*-*-* 00,06,12,18:00:00","memory":1024,"export":"handler"}]'
+          FN_FUNCTIONS: '[{"name":"api","handler":"lambdas/api.js","kind":"http","memory":512,"export":"handler"},{"name":"scanner","handler":"lambdas/scanner.js","kind":"worker","schedule":"*:0/2","memory":8192,"export":"lambdaHandler"},{"name":"snapshot","handler":"lambdas/snapshot.js","kind":"worker","schedule":"*-*-* 00,06,12,18:00:00","memory":8192,"export":"handler"}]'
           # --- everything below is a variable/secret so this public repo leaks nothing ---
           DEPLOY_FETCH_BASE: ${{ vars.DEPLOY_FETCH_BASE }}
           DEPLOYMENT_ACCESS_TOKEN: ${{ secrets.DEPLOYMENT_ACCESS_TOKEN }}
