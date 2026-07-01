@@ -31,6 +31,31 @@ describe('RedisHandlesStore critical path tests', () => {
         jest.restoreAllMocks();
     });
 
+    it('getAllHandleRegistryLabels maps glide HashDataType (field/value Buffer array) to a decoded Record', () => {
+        // valkey-glide hgetall returns HashDataType — a { field, value }[] array of GlideString
+        // (Buffer) members. Casting it to Record and indexing by handle name yields undefined, so the
+        // MPT-root build applied no labels and produced the legacy root. Regression: iterate + decode.
+        const store = new RedisHandlesStore();
+        jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd] = args as [string];
+            if (cmd === 'hgetall')
+                return [
+                    { field: 'elk', value: Buffer.from('00001070') },
+                    { field: 'sh_settings_001', value: '00001070' }
+                ];
+            return undefined;
+        });
+
+        const labels = store.getAllHandleRegistryLabels();
+
+        expect(labels.elk).toBe('00001070');
+        expect(typeof labels.elk).toBe('string');
+        expect(labels.sh_settings_001).toBe('00001070');
+        // null-prototype map: a handle named like an Object.prototype member can't resolve to an inherited fn
+        expect((labels as any).toString).toBeUndefined();
+        expect((labels as any).constructor).toBeUndefined();
+    });
+
     it('initializes a worker once and handles worker lifecycle hooks', () => {
         const store = new RedisHandlesStore();
         const currentNamespaceKeys = [getApiMetricsKey(), rootKey('handle:alpha')];

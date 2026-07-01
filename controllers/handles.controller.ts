@@ -126,6 +126,20 @@ class HandlesController {
         }
     }
 
+    private static validateStringListBody(body: unknown): string[] {
+        if (isEmpty(body)) {
+            return [];
+        }
+        if (!Array.isArray(body)) {
+            throw ApiError.invalidListBody('expected array and received object');
+        }
+        const invalidEntry = body.find((handle) => typeof handle !== 'string');
+        if (invalidEntry !== undefined) {
+            throw ApiError.invalidListBody(`expected string entries and received ${Array.isArray(invalidEntry) ? 'array' : typeof invalidEntry}`);
+        }
+        return body;
+    }
+
     private static async _searchFromList (req: Request<Request, {}, ISearchBody, IGetAllQueryParams>, res: Response, handles?: ISearchBody): Promise<void> {
         const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
         const handleSearchResults = HandlesController.parseQueryAndSearchHandles(req, handleRepo, handles)
@@ -153,7 +167,7 @@ class HandlesController {
     public async list (req: Request<Request, {}, ISearchBody, IGetAllQueryParams>, res: Response, next: NextFunction): Promise<void> {
         try {
             const handleRepo: HandlesRepository = new HandlesRepository(new (req.app.get('registry') as IRegistry).handlesStore());
-            let handles: string[] = !isEmpty(req.body) ? req.body as string[] : [];
+            let handles = HandlesController.validateStringListBody(req.body);
             switch (req.query.type) {
                 case 'bech32stake':
                 case 'holder':

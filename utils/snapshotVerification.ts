@@ -3,6 +3,7 @@ import { decodeCborToJson } from '@koralabs/kora-labs-common/utils/cbor';
 import { AssetNameLabel, HANDLE_POLICIES, IndexNames, LogCategory, Logger, NETWORK, Network } from '@koralabs/kora-labs-common';
 import { getHandlesStore, RedisHandlesStore } from '../stores/redis';
 import { SnapshotVerification } from './verifiedSnapshot';
+import { applyLabel, registryValueBuffer } from './assetLabelRegistry';
 import { blockfrostApiCall, fetchKoios } from './helpers';
 
 const MINTING_DATA_HANDLE_NAME = 'handle_root@handle_settings';
@@ -155,21 +156,94 @@ export const probeProviderMptRootHash = async (): Promise<ProviderMptProbe | nul
     return null;
 };
 
-export const buildHandleSetMptRootHash = async (handleNames: string[], ghostHandles: string[] = []) => {
+export const buildHandleSetTrie = async (
+    handleNames: string[],
+    ghostHandles: string[] = [],
+    // WS1 asset-label registry: handle name -> sorted hex label set ({001-004}). Only labeled
+    // handles appear; everything else keeps the empty value, so the root is byte-identical to the
+    // pre-registry root for any handle that holds none of the tracked labels.
+    registryLabels: Record<string, string> = {}
+): Promise<Trie> => {
     const normalizedHandleNames = [...new Set([...handleNames, ...ghostHandles].map((handle) => `${handle}`.trim()).filter(Boolean))].sort();
     // Bulk constructor instead of N serial `await trie.insert(...)` calls.
     // The per-insert loop re-hashed intermediate state on every step, costing
     // ~1.5ms × ~300k handles = ~8 minutes per scan tick on mainnet. fromList
     // builds the structure in one pass with the same final hash; bootstrap +
     // build-true-root + build-api-root all use it and verify against on-chain.
-    const trie = await Trie.fromList(normalizedHandleNames.map((key) => ({ key, value: '' })));
+    return Trie.fromList(
+        normalizedHandleNames.map((key) => {
+            const labels = registryLabels[key] ?? '';
+            // No labels keeps the prior empty value (unchanged root); otherwise the label set —
+            // the exact bytes the on-chain demimntmpt MintLabelAssets writes.
+            return { key, value: labels ? registryValueBuffer(labels) : '' };
+        })
+    );
+};
+
+export const buildHandleSetMptRootHash = async (
+    handleNames: string[],
+    ghostHandles: string[] = [],
+    // WS1: the minting-data MPT value at a key is the handle's sorted CIP-67 label set ({001-004});
+    // empty only for a handle that holds none. The stored/compared root MUST be label-aware and is
+    // built from the SAME trie the proof builder uses (buildHandleSetTrie), so the root we report and
+    // the proofs we hand the engine can never disagree. (They did: a label-blind value:"" root
+    // [94bdd2b8] vs the label-aware chain root [9bb0ecbb] deadlocked every mint.) Byte-identical to
+    // the on-chain demimntmpt value.
+    registryLabels: Record<string, string> = {}
+) => {
+    const trie = await buildHandleSetTrie(handleNames, ghostHandles, registryLabels);
     return trie.hash?.toString('hex') ?? EMPTY_MPT_ROOT_HASH;
+};
+
+/**
+ * WS1 — build the off-chain proof package the minter needs to ride a `MintLabelAssets` (+1) or
+ * `BurnNewHandles`/label-burn (-1) demimntmpt spend on a 001-004 mint/burn tx. The single MPF proof
+ * is valid for both the old and new value (mpt.update re-uses it — the key's neighbours don't move).
+ *
+ * Built against the api's current handle-set trie, our scoped reflection of the chain. The caller
+ * MUST check `current_root` against the minting-data UTxO it is spending and rebuild if a newer
+ * spend has already advanced it — minting-data is a single UTxO, so demimntmpt spends serialize.
+ */
+export const buildLabelAssetProof = async (
+    store: RedisHandlesStore,
+    handleName: string,
+    labelPrefix: string,
+    amount: bigint
+) => {
+    const handleNames = store.getKeysFromIndex(IndexNames.HANDLE) as string[];
+    const ghosts = GHOST_HANDLES[NETWORK.toLowerCase()] ?? [];
+    const registryLabels = store.getAllHandleRegistryLabels?.() ?? {};
+    const key = `${handleName}`.trim();
+
+    const trie = await buildHandleSetTrie(handleNames, ghosts, registryLabels);
+    const currentRoot = trie.hash?.toString('hex') ?? EMPTY_MPT_ROOT_HASH;
+    const oldLabels = registryLabels[key] ?? '';
+    const newLabels = applyLabel(oldLabels, labelPrefix, amount); // strict — throws on invalid delta
+    const proof = await trie.prove(key); // throws if the key is not in the set (handle not indexed)
+
+    // Advance the local trie to the post-update value to read the resulting root for the new datum.
+    await trie.delete(key);
+    await trie.insert(key, registryValueBuffer(newLabels));
+    const newRoot = trie.hash?.toString('hex') ?? EMPTY_MPT_ROOT_HASH;
+
+    return {
+        handle: key,
+        hex_name: Buffer.from(key, 'utf8').toString('hex'),
+        label: labelPrefix.toLowerCase(),
+        amount: amount.toString(),
+        old_labels: oldLabels,
+        new_labels: newLabels,
+        current_root: currentRoot,
+        new_root: newRoot,
+        mpt_proof: proof.toJSON()
+    };
 };
 
 export const buildAndStoreMptRootHash = async (store: RedisHandlesStore): Promise<string> => {
     const handleNames = store.getKeysFromIndex(IndexNames.HANDLE) as string[];
     const ghosts = GHOST_HANDLES[NETWORK.toLowerCase()] ?? [];
-    const hash = await buildHandleSetMptRootHash(handleNames, ghosts);
+    const registryLabels = store.getAllHandleRegistryLabels?.() ?? {};
+    const hash = await buildHandleSetMptRootHash(handleNames, ghosts, registryLabels);
     store.setMptRootHash(hash);
     return hash;
 };
@@ -178,7 +252,8 @@ export const buildSnapshotVerification = async (handleNames: string[]): Promise<
     const store = getHandlesStore();
     store.initialize();
     const ghosts = GHOST_HANDLES[NETWORK.toLowerCase()] ?? [];
-    const snapshotMptRootHash = store.getMptRootHash() ?? await buildHandleSetMptRootHash(handleNames, ghosts);
+    const registryLabels = store.getAllHandleRegistryLabels?.() ?? {};
+    const snapshotMptRootHash = store.getMptRootHash() ?? await buildHandleSetMptRootHash(handleNames, ghosts, registryLabels);
     const chainMptRootHash = await getChainMintingDataRootHash();
 
     const verifiedAgainstChain = snapshotMptRootHash === chainMptRootHash;

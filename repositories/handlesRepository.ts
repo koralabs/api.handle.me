@@ -6,7 +6,13 @@ import { isDatumEndpointEnabled } from '../config';
 import { MAX_SETS_PER_PIPE } from '../config/constants';
 import { BuildPersonalizationInput, HandleOnChainMetadata, MetadataLabel } from '../interfaces/ogmios.interfaces';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
+import {
+    ensureLabel,
+    ensureNoLabel,
+    isRegistryLabel
+} from '../utils/assetLabelRegistry';
 import { canonicalJsonStringify } from '../utils/helpers';
+import { isHandlePersonalized } from '../utils/isPersonalized';
 import { decodeCborFromIPFSFile } from '../utils/ipfs';
 const blackListedIpfsCids: string[] = [];
 const isTestnet = NETWORK.toLowerCase() !== 'mainnet';
@@ -36,9 +42,31 @@ export class UpdatedOwnerHandle implements UpdatedOwnerHandle {
 
 export class HandlesRepository {
     private store: IApiStore;
-    
+
     constructor(store: IApiStore) {
         this.store = store;
+    }
+
+    // WS1 registry hash methods live on the concrete RedisHandlesStore; surface them off IApiStore
+    // the same way this repo already widens the store for other optional store methods. Optional so
+    // a bare IApiStore mock degrades gracefully (no registry mirror) instead of throwing.
+    private get registryStore() {
+        return this.store as IApiStore & {
+            setHandleRegistryLabels?: (name: string, labels: string) => void;
+            getAllHandleRegistryLabels?: () => Record<string, string>;
+        };
+    }
+
+    // Drop one tracked label (001-004) from a surviving handle's registry set (a standalone label
+    // burn that keeps the 222/000). No-op if the key was already removed by its 222/000 burn in the
+    // same tx. Routed through save() so the derived registry hash + indexes stay consistent.
+    public removeHandleLabel(name: string, label: string): void {
+        const existing = this.store.getHashFromIndex(IndexNames.HANDLE, name) as StoredHandle | undefined;
+        if (!existing) return;
+        const current = existing.registry_labels ?? '';
+        const updated = ensureNoLabel(current, label);
+        if (updated === current) return;
+        this.save({ ...existing, registry_labels: updated }, existing);
     }
 
     public async initialize() {
@@ -738,6 +766,9 @@ export class HandlesRepository {
 
     public getHandlesByStakeKeyHashes = (hashes: string[]): string[]  => {
         return hashes.map((h) => {
+            if (!/^[0-9a-fA-F]*$/.test(h) || h.length % 2 !== 0) {
+                return [EMPTY];
+            }
             const hashed = crypto.createHash('md5').update(h, 'hex').digest('hex');
             const array = Array.from(this.store.getValuesFromIndexedSet(IndexNames.HASH_OF_STAKE_KEY_HASH, hashed!) ?? []);
             return array.length === 0 ? [EMPTY] : array;
@@ -811,6 +842,9 @@ export class HandlesRepository {
             // if (handle.name == 'ap@adaprotocol')
             //     debugLog('ap@adaprotocol being burned', slotNumber, handle);
             this.store.removeKeyFromIndex(IndexNames.HANDLE, handle.name);
+
+            // WS1 registry: the 222/000 is gone, so the key leaves the MPT — drop its registry value.
+            this.registryStore.setHandleRegistryLabels?.(handleName, '');
 
             // set all one-to-many indexes
             this.store.removeValueFromIndexedSet(IndexNames.RARITY, handle.rarity, handleName)
@@ -1005,9 +1039,18 @@ export class HandlesRepository {
 
                             if (!utxo.datum) {
                                 Logger.log({ message: `No datum for SubHandle token ${handle.name}`,  category: LogCategory.ERROR, event: 'processScannedHandleInfo.subHandle.noDatum'});
-                                // Skip only this asset. `return` previously exited the whole function,
-                                // silently abandoning every remaining handle asset in the UTxO.
-                                continue;
+                                // No settings datum to parse, but the registry must still record this 001
+                                // token's PRESENCE — the registry value tracks CIP-67 label prefixes, not
+                                // datum validity. `break` out of the switch (NOT `continue`) so the
+                                // post-switch registry-label block AND save() still run; a `continue` here
+                                // dropped a datum-less 001 (e.g. the legacy f0ff settings token `water`)
+                                // from the registry, leaving the api MPT root one key short of chain.
+                                // Default the resolved address first so the post-switch holder build /
+                                // save() don't NPE on a handle whose only asset is this datum-less token.
+                                if (!handle.resolved_addresses) {
+                                    handle.resolved_addresses = { ada: existingHandle?.resolved_addresses?.ada ?? '' };
+                                }
+                                break;
                             }
 
                             // TODO: change to utxo_id to utxo and update handle.me to requst /subhandle-settings/utxo
@@ -1042,7 +1085,14 @@ export class HandlesRepository {
                     default:
                         Logger.log({ message: `Unknown asset: ${handle.name}`, category: LogCategory.ERROR, event: 'processScannedHandleInfo.unknownAssetName' });
                 }
-                
+
+                // WS1 asset-label registry: record presence of a tracked label (001-004) on this
+                // handle. Idempotent — a re-scan or a multi-minted 001 ("ignore anything more than
+                // one") collapses to a single set member, matching the on-chain registry value.
+                if (isRegistryLabel(assetDetails.assetLabel)) {
+                    handle.registry_labels = ensureLabel(handle.registry_labels ?? '', `${assetDetails.assetLabel}`.toLowerCase());
+                }
+
                 const holder = buildHolderInfo(handle.resolved_addresses.ada)
                 
                 handle.holder = holder.address
@@ -1094,6 +1144,13 @@ export class HandlesRepository {
         // Set the main index (SAVES THE HANDLE)
         this.store.setHashOnIndex(IndexNames.HANDLE, name, handle);
 
+        // WS1 registry: mirror the label set into the small derived hash, but only when it changes,
+        // so the per-tick MPT root build reads every set in one HGETALL while the (vast) majority of
+        // handles — which hold no tracked label — never touch this hash.
+        if (handle.registry_labels !== oldHandle?.registry_labels) {
+            this.registryStore.setHandleRegistryLabels?.(name, handle.registry_labels ?? '');
+        }
+
         // set all one-to-many indexes
         this.store.addValueToIndexedSet(IndexNames.RARITY, rarity, name);
         this.store.addValueToIndexedSet(IndexNames.CHARACTER, characters, name);
@@ -1112,11 +1169,9 @@ export class HandlesRepository {
             this.store.addValueToIndexedSet(IndexNames.SUBHANDLE, rootHandle, name);
         }
 
-        const personalized = (() => {
-            if (handle.image_hash != handle.standard_image_hash) return true;
-            const pz = handle.personalization;
-            return !!pz?.designer || !!pz?.portal || !!pz?.socials
-        })();
+        // Single source of truth shared with the API's `is_personalized` view-model field,
+        // so this PERSONALIZED index and the per-handle field can never disagree.
+        const personalized = isHandlePersonalized(handle);
 
         // remove the old - these can change over time
         this.store.removeValueFromIndexedSet(IndexNames.OG, Number(!ogFlag), name);

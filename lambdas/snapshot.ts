@@ -1,4 +1,4 @@
-import { hydrateKmsEnvironment } from '@koralabs/kora-labs-common';
+import { hydrateKmsEnvironment } from '@koralabs/kora-labs-common/aws';
 import { handler as snapshotHandler, processSnapshot as runSnapshot } from './snapshot.app';
 
 export const processSnapshot = async (network: string) => {

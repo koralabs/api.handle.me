@@ -94,7 +94,7 @@ describe('MCP Routes Test', () => {
                 protocol: 'Model Context Protocol',
                 transport: 'streamable-http',
                 latest_protocol_version: expect.any(String),
-                supported_protocol_versions: expect.arrayContaining([expect.any(String)]),
+                supported_protocol_versions: expect.arrayContaining(['2024-11-05', '2025-11-25']),
                 server_info: expect.objectContaining({
                     name: 'api.handle.me',
                     version: expect.any(String)
@@ -434,7 +434,7 @@ describe('MCP Routes Test', () => {
             expect(response.text).toEqual('');
         });
 
-        it('should reject unsupported protocol versions in header', async () => {
+        it('should tolerate an unknown MCP-Protocol-Version header and still serve the request', async () => {
             const response = await request(app?.getServer())
                 .post('/mcp')
                 .set('MCP-Protocol-Version', '2024-01-01')
@@ -444,15 +444,92 @@ describe('MCP Routes Test', () => {
                     method: 'tools/list'
                 });
 
-            expect(response.status).toEqual(400);
-            expect(response.body).toEqual({
-                jsonrpc: '2.0',
-                id: null,
-                error: {
-                    code: -32600,
-                    message: 'Unsupported MCP protocol version: 2024-01-01'
-                }
-            });
+            expect(response.status).toEqual(200);
+            expect(response.body.result.tools.map((tool: { name: string }) => tool.name)).toEqual(
+                expect.arrayContaining(['get_handle'])
+            );
+        });
+
+        it('should negotiate (not reject) the original 2024-11-05 protocol version', async () => {
+            const response = await request(app?.getServer())
+                .post('/mcp')
+                .send({
+                    jsonrpc: '2.0',
+                    id: 6,
+                    method: 'initialize',
+                    params: {
+                        protocolVersion: '2024-11-05',
+                        capabilities: {},
+                        clientInfo: { name: 't', version: '0' }
+                    }
+                });
+
+            expect(response.status).toEqual(200);
+            expect(response.body.error).toBeUndefined();
+            // Client asked for a version we support -> echo it back.
+            expect(response.body.result.protocolVersion).toEqual('2024-11-05');
+            expect(response.headers['mcp-protocol-version']).toEqual('2024-11-05');
+        });
+
+        it('should negotiate an unknown protocol version down to our latest without erroring', async () => {
+            const response = await request(app?.getServer())
+                .post('/mcp')
+                .send({
+                    jsonrpc: '2.0',
+                    id: 7,
+                    method: 'initialize',
+                    params: { protocolVersion: '1999-01-01' }
+                });
+
+            expect(response.status).toEqual(200);
+            expect(response.body.error).toBeUndefined();
+            expect(response.body.result.protocolVersion).toEqual('2025-11-25');
+            expect(response.headers['mcp-protocol-version']).toEqual('2025-11-25');
+        });
+
+        it('should initialize with no protocolVersion and no special headers (minimal client)', async () => {
+            const response = await request(app?.getServer())
+                .post('/mcp')
+                .send({
+                    jsonrpc: '2.0',
+                    id: 8,
+                    method: 'initialize',
+                    params: {}
+                });
+
+            expect(response.status).toEqual(200);
+            expect(response.body.error).toBeUndefined();
+            expect(response.body.result.protocolVersion).toEqual('2025-11-25');
+        });
+
+        it('should respond to ping', async () => {
+            const response = await request(app?.getServer())
+                .post('/mcp')
+                .send({
+                    jsonrpc: '2.0',
+                    id: 9,
+                    method: 'ping'
+                });
+
+            expect(response.status).toEqual(200);
+            expect(response.body).toEqual({ jsonrpc: '2.0', id: 9, result: {} });
+        });
+
+        it('should return self-documenting error data for unknown methods', async () => {
+            const response = await request(app?.getServer())
+                .post('/mcp')
+                .send({
+                    jsonrpc: '2.0',
+                    id: 10,
+                    method: 'does/not/exist'
+                });
+
+            expect(response.status).toEqual(200);
+            expect(response.body.error.code).toEqual(-32601);
+            expect(response.body.error.data).toEqual(expect.objectContaining({
+                supported_protocol_versions: expect.arrayContaining(['2024-11-05', '2025-11-25']),
+                docs: 'https://api.handle.me/'
+            }));
         });
     });
 });

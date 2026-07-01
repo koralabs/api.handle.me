@@ -100,6 +100,10 @@ export class ApiError extends HttpException {
         );
     }
 
+    static invalidListBody(message = 'expected array of strings'): ApiError {
+        return new ApiError(400, 'bad_request', message);
+    }
+
     static unknownQueryParams(unknown: string[]): ApiError {
         // Reject silently-ignored typos at the door — when an unknown filter
         // like `?holder=...` is dropped, callers see "results" that look

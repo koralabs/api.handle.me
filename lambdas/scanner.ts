@@ -1,4 +1,4 @@
-import { hydrateKmsEnvironment } from '@koralabs/kora-labs-common';
+import { hydrateKmsEnvironment } from '@koralabs/kora-labs-common/aws';
 
 type ScannerApp = typeof import('./scanner.app');
 
