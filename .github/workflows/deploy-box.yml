@@ -37,7 +37,11 @@ jobs:
           BOX_ENV: ${{ github.event.inputs.environment || 'preprod' }}
           NODE_VERSION: '22'
           SERVICE_INSTALL_CMD: npm install
-          SERVICE_BUILD_CMD: npm run build:lambda && cp -r ./dist/lambdas/* ./dist
+          # Also stage deployment_info.json into ./dist so the /deployment endpoint can
+          # read it at runtime (the box runs functions with cwd=dist, same as swagger.yml).
+          # The old AWS build.sh generated this into the lambda bundle root; the box build
+          # must do the equivalent or /deployment 500s with ENOENT.
+          SERVICE_BUILD_CMD: npm run build:lambda && cp -r ./dist/lambdas/* ./dist && jq -n --arg version $(jq -r .version package.json) --arg build ${{ github.run_id }}-${{ github.run_attempt }} --arg commit ${{ github.sha }} --arg timestamp $(date -u +%FT%TZ) '{version:$version,build:$build,commit:$commit,timestamp:$timestamp}' > ./dist/deployment_info.json
           SERVICE_DIST: dist
           FN_FUNCTIONS: '[{"name":"api","handler":"lambdas/api.js","kind":"http","memory":512,"export":"handler"},{"name":"scanner","handler":"lambdas/scanner.js","kind":"worker","schedule":"*:0/2","memory":8192,"export":"lambdaHandler"},{"name":"snapshot","handler":"lambdas/snapshot.js","kind":"worker","schedule":"*-*-* 00,06,12,18:00:00","memory":8192,"export":"handler"}]'
           # --- everything below is a variable/secret so this public repo leaks nothing ---
