@@ -27,6 +27,7 @@ const buildStoreMock = () => {
         addValueToOrderedSet: jest.fn(),
         removeValuesFromOrderedSet: jest.fn(),
         getValuesFromIndexedSet: jest.fn((index: IndexNames, key: string | number) => sets.get(setKey(index, key))),
+        getIndexedSetSize: jest.fn((index: IndexNames, key: string | number) => sets.get(setKey(index, key))?.size ?? 0),
         addValueToIndexedSet: jest.fn((index: IndexNames, key: string | number, value: string) => {
             const k = setKey(index, key);
             const existing = sets.get(k) ?? new Set<string>();
@@ -118,6 +119,100 @@ describe('HandlesRepository branch tests', () => {
 
         repo.Internal.removeHandleFromHolder(holder, 'alpha');
         expect(store.removeValuesFromOrderedSet).toHaveBeenCalledWith(IndexNames.HOLDER_COUNT, holder);
+    });
+
+    it('does not wipe a live-populated HOLDER set when the caller map is stale/partial', () => {
+        const store = buildStoreMock();
+        const repo = new HandlesRepository(store);
+
+        // The live store still holds multiple handles for this stake...
+        store.addValueToIndexedSet(IndexNames.HOLDER, holder, 'alpha');
+        store.addValueToIndexedSet(IndexNames.HOLDER, holder, 'beta');
+        store.addValueToIndexedSet(IndexNames.HOLDER, holder, 'gamma');
+        // ...but the caller-supplied map is stale and wrongly believes it is empty.
+        const staleMap = new Map<string, Set<string>>([[holder, new Set<string>()]]);
+        (store.addValueToOrderedSet as jest.Mock).mockClear();
+
+        repo.Internal.removeHandleFromHolder(holder, 'alpha', staleMap as any);
+
+        // The reverse-list key must NOT be deleted — beta/gamma are still live. Trusting the
+        // stale map here is the reverse-list collapse bug the SCARD guard prevents.
+        expect(store.removeKeyFromIndex).not.toHaveBeenCalledWith(IndexNames.HOLDER, holder);
+        expect(store.removeValuesFromOrderedSet).not.toHaveBeenCalledWith(IndexNames.HOLDER_COUNT, holder);
+        // It records the live count instead of wiping.
+        expect(store.addValueToOrderedSet).toHaveBeenCalledWith(IndexNames.HOLDER_COUNT, expect.any(Number), holder);
+        // The live set still holds beta and gamma.
+        expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, holder)).toEqual(new Set(['beta', 'gamma']));
+    });
+
+    it('wipes cleanly with no orphan HOLDER_COUNT when several handles of one holder burn in one pipeline', () => {
+        // Faithful pipeline model (the synchronous buildStoreMock cannot express deferral):
+        // inside pipeline(cb) writes queue and apply on close, getValuesFromIndexedSet (SMEMBERS)
+        // returns empty (deferred), getIndexedSetSize (SCARD) returns PRE-flush cardinality, and
+        // HOLDER SREMs bump the pending-removals counter. This mirrors scanner.app.ts wrapping a
+        // whole block's burns in one store.pipeline(() => burns.forEach(removeHandle)).
+        const holderKey = 'holderH';
+        const sets = new Map<string, Set<string>>();
+        const zHolderCount = new Map<string, number>();
+        const setKey = (index: IndexNames, k: string | number) => `${index}:${k}`;
+        let queue: Array<() => void> | null = null;
+        let pending: Map<string, number> | null = null;
+        const run = (fn: () => void) => (queue ? queue.push(fn) : fn());
+
+        const store = {
+            getMetrics: jest.fn().mockReturnValue({}),
+            pipeline: (commands: () => void) => {
+                queue = [];
+                pending = new Map();
+                try {
+                    commands();
+                    const q = queue;
+                    queue = null; // stop deferring so the flush actually applies the queued writes
+                    q?.forEach((fn) => fn());
+                } finally {
+                    queue = null;
+                    pending = null;
+                }
+                return [];
+            },
+            getValuesFromIndexedSet: (index: IndexNames, k: string | number) =>
+                queue ? new Set<string>() : sets.get(setKey(index, k)),
+            getIndexedSetSize: (index: IndexNames, k: string | number) => sets.get(setKey(index, k))?.size ?? 0,
+            getPipelinePendingHolderRemovals: (k: string | number) => pending?.get(`${k}`) ?? 0,
+            removeValueFromIndexedSet: (index: IndexNames, k: string | number, value: string) => {
+                if (index === IndexNames.HOLDER && pending) pending.set(`${k}`, (pending.get(`${k}`) ?? 0) + 1);
+                run(() => {
+                    const s = sets.get(setKey(index, k));
+                    if (s) {
+                        s.delete(value);
+                        if (s.size === 0) sets.delete(setKey(index, k)); // Redis auto-deletes emptied sets
+                    }
+                });
+            },
+            addValueToIndexedSet: (index: IndexNames, k: string | number, value: string) =>
+                run(() => {
+                    const s = sets.get(setKey(index, k)) ?? new Set<string>();
+                    s.add(value);
+                    sets.set(setKey(index, k), s);
+                }),
+            addValueToOrderedSet: (_index: IndexNames, ordinal: number, value: string) => run(() => zHolderCount.set(`${value}`, ordinal)),
+            removeValuesFromOrderedSet: (_index: IndexNames, k: string | number) => run(() => zHolderCount.delete(`${k}`)),
+            removeKeyFromIndex: (index: IndexNames, k: string | number) => run(() => sets.delete(setKey(index, k)))
+        } as any;
+
+        const repo = new HandlesRepository(store);
+        sets.set(setKey(IndexNames.HOLDER, holderKey), new Set(['A', 'B']));
+
+        store.pipeline(() => {
+            repo.Internal.removeHandleFromHolder(holderKey, 'A');
+            repo.Internal.removeHandleFromHolder(holderKey, 'B');
+        });
+
+        // Whole holder gone from the reverse set AND no orphan HOLDER_COUNT score survives.
+        // (Pre-fix, the pre-batch SCARD read 2 on both removes so neither wiped, leaving
+        // zHolderCount[holderH] = 1 after both SREMs emptied the set: a ghost holder.)
+        expect(sets.has(setKey(IndexNames.HOLDER, holderKey))).toBe(false);
+        expect(zHolderCount.has(holderKey)).toBe(false);
     });
 
     it('normalizes holder key from resolved ADA address during updateHolder', () => {
@@ -576,7 +671,9 @@ describe('HandlesRepository branch tests', () => {
             lockLambdas: LockedLambdaReason.REINDEX
         });
         expect(repo.isCaughtUp()).toBe(true);
-        expect(repo.currentHttpStatus()).toBe(202);
+        // REINDEX rebuilds indexes in place and can expose a transiently-partial reverse
+        // list; serve 503 (retry) rather than 202-with-partial-data.
+        expect(repo.currentHttpStatus()).toBe(503);
 
         store.getMetrics.mockReturnValue({
             lastSlot: freshCurrentSlot + 100,
@@ -586,6 +683,7 @@ describe('HandlesRepository branch tests', () => {
             lockLambdas: LockedLambdaReason.ROLLBACK
         });
         expect(repo.isCaughtUp()).toBe(true);
+        // ROLLBACK keeps the index complete (just a few slots behind) — stale-consistent 202.
         expect(repo.currentHttpStatus()).toBe(202);
     });
 

@@ -22,6 +22,12 @@ export class RedisHandlesStore implements IApiStore {
     private static _worker: any;
     private static _id = 0;
     private static _pipeline: [string, any[]][] | undefined = undefined;
+    // Per-active-pipeline count of HOLDER SREMs queued (keyed by holder). scard is
+    // pipeline-safe but reflects PRE-batch cardinality — it cannot see sibling SREMs queued
+    // earlier in the same pipeline. The reverse-list DEL guard subtracts these pending
+    // removals so multiple handles of one holder burned in one block don't leave an orphan
+    // HOLDER_COUNT entry (or wrongly keep an emptied key). Lives and dies with _pipeline.
+    private static _pipelinePendingHolderRemovals: Map<string, number> | undefined = undefined;
 
     // #region SETUP **************************
     public initialize(): IApiStore {
@@ -57,6 +63,7 @@ export class RedisHandlesStore implements IApiStore {
             throw new Error('RedisHandlesStore.pipeline() called while another pipeline is already active');
         }
         RedisHandlesStore._pipeline = [];
+        RedisHandlesStore._pipelinePendingHolderRemovals = new Map();
         try {
             commands();
             //Logger.local('PIPELINE', RedisHandlesStore._pipeline)
@@ -76,13 +83,22 @@ export class RedisHandlesStore implements IApiStore {
             return results;
         } finally {
             RedisHandlesStore._pipeline = undefined;
+            RedisHandlesStore._pipelinePendingHolderRemovals = undefined;
         }
+    }
+
+    // Count of HOLDER SREMs queued for `holderAddress` in the active pipeline (0 outside a
+    // pipeline). The reverse-list DEL guard subtracts this from the pre-batch scard so it
+    // decides "does the live set hold handles beyond the ones this pipeline is removing".
+    public getPipelinePendingHolderRemovals(holderAddress: string | number): number {
+        return RedisHandlesStore._pipelinePendingHolderRemovals?.get(`${holderAddress}`) ?? 0;
     }
 
     public destroy(): void {
         this.clearNamespace();
         this.redisClientCall('close');
         RedisHandlesStore._pipeline = undefined;
+        RedisHandlesStore._pipelinePendingHolderRemovals = undefined;
         if (RedisHandlesStore._worker.terminate) RedisHandlesStore._worker.terminate();
         RedisHandlesStore._worker = undefined;
     }
@@ -91,6 +107,7 @@ export class RedisHandlesStore implements IApiStore {
         Logger.log({ message: 'Clearing scoped cache namespace', category: LogCategory.INFO, event: 'this.rollBackToGenesis' });
         this.clearNamespace();
         RedisHandlesStore._pipeline = undefined;
+        RedisHandlesStore._pipelinePendingHolderRemovals = undefined;
     }
 
     repopulateIndexesFromUTxOs(utxoFunctions: UTxOFunctions): void {
@@ -475,7 +492,23 @@ export class RedisHandlesStore implements IApiStore {
         if (key != null) {
             this.redisClientCall('srem', getApiIndexKey(index, key), [value]);
             this.removeKeyFromMetaIndex(index, key);
+            // Record HOLDER removals queued in the active pipeline so the reverse-list DEL
+            // guard can subtract them from the pre-batch scard (see _pipelinePendingHolderRemovals).
+            if (index === IndexNames.HOLDER && RedisHandlesStore._pipelinePendingHolderRemovals) {
+                const pending = RedisHandlesStore._pipelinePendingHolderRemovals;
+                pending.set(`${key}`, (pending.get(`${key}`) ?? 0) + 1);
+            }
         }
+    }
+
+    // Live cardinality of a set index for a specific key (SCARD). Unlike
+    // getValuesFromIndexedSet (SMEMBERS), scard is pipeline-safe: redisClientCall lets
+    // scard through synchronously even inside a batch (see redisClientCall), so this
+    // reflects the live set size mid-pipeline where SMEMBERS would return an empty
+    // deferred result. In a batch it reflects state BEFORE the batch's queued SREM/SADD.
+    public getIndexedSetSize(index: IndexNames, key: string | number): number {
+        if (key == null) return 0;
+        return (this.redisClientCall('scard', getApiIndexKey(index, key)) as number) ?? 0;
     }
 
     // #endregion

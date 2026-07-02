@@ -80,10 +80,21 @@ export class HandlesRepository {
 
     public currentHttpStatus(): number {
         const { lockLambdas } = this.store.getMetrics();
-        if ([LockedLambdaReason.ROLLBACK, LockedLambdaReason.REINDEX].includes(lockLambdas as LockedLambdaReason)) {
+        // REINDEX rebuilds the secondary indexes in place (DEL-then-repopulate). While it
+        // runs, enumerations backed by those indexes (holder reverse-list, search, stats)
+        // are transiently PARTIAL — a holder's set can momentarily read as a single handle
+        // mid-rebuild. 202 is a 2xx that clients treat as OK, so they would consume that
+        // half-rebuilt body (the reverse-list "collapse to one handle" symptom). Serve 503
+        // instead so clients retry until the rebuild completes and the index is whole again.
+        if (lockLambdas === LockedLambdaReason.REINDEX) {
+            return 503;
+        }
+        // ROLLBACK only reverts recent blocks; the index stays complete (just a few slots
+        // behind), so stale-but-consistent 202 is correct there.
+        if (lockLambdas === LockedLambdaReason.ROLLBACK) {
             return 202;
         }
-        return this.isCaughtUp() ? 200 : 202        
+        return this.isCaughtUp() ? 200 : 202
     }
 
     public isCaughtUp(): boolean {
@@ -909,7 +920,15 @@ export class HandlesRepository {
 
         delete handle.default; // This is a temp property not meant to save to the handle
 
-        holders?.set(handle.holder, holderHandles.add(handle.name));
+        // Reflect the SADD below in the local set BEFORE deriving the HOLDER_COUNT score.
+        // Doing it in a standalone statement (not inside `holders?.set(...)`) matters: when
+        // `holders` is undefined (live path) the optional-chained call short-circuits and
+        // never evaluates its argument, so the previous `holderHandles.add(...)` there was
+        // skipped and the count was written one short for a fresh add. holderHandles is the
+        // holder's live set (live path) or the caller map's set (bulk); either way it must
+        // count handle.name so HOLDER_COUNT isn't under-reported.
+        holderHandles.add(handle.name);
+        holders?.set(handle.holder, holderHandles);
 
         this.store.addValueToIndexedSet(IndexNames.HOLDER, handle.holder, handle.name);
         this.store.addValueToOrderedSet(IndexNames.HOLDER_COUNT, holderHandles.size, handle.holder);
@@ -1407,9 +1426,33 @@ export class HandlesRepository {
         if (remainingHandles?.size) {
             this.store.addValueToOrderedSet(IndexNames.HOLDER_COUNT, remainingHandles.size, holderAddress);
         } else {
-            holders?.delete(holderAddress);
-            this.store.removeValuesFromOrderedSet(IndexNames.HOLDER_COUNT, holderAddress);
-            this.store.removeKeyFromIndex(IndexNames.HOLDER, holderAddress);
+            // `remainingHandles` said this holder has nothing left. That signal is unreliable
+            // for two reasons: (a) a caller-supplied `holders` map (bulk reindex/import) can be
+            // partial/stale — only a subset of the holder's handles seeded; (b) on the burn path
+            // (no map) getValuesFromIndexedSet is a deferred SMEMBERS that returns EMPTY inside a
+            // pipeline, so we ALWAYS land here during burns. Trusting it would DEL the entire
+            // reverse-list key even though the live store still holds OTHER handles for this
+            // stake — the reverse-list collapse. Decide from the live store instead.
+            //
+            // scard is pipeline-safe (executes synchronously mid-batch) but reflects PRE-batch
+            // cardinality — it can't see sibling SREMs queued earlier in THIS pipeline (e.g.
+            // several handles of one stake burned in one block). Subtract those pending removals
+            // so we keep the key iff handles survive the flush, and wipe cleanly (no orphan
+            // HOLDER_COUNT) when this pipeline empties it.
+            const storeWithGuards = this.store as IApiStore & {
+                getIndexedSetSize?: (index: IndexNames, key: string | number) => number;
+                getPipelinePendingHolderRemovals?: (holderAddress: string | number) => number;
+            };
+            const liveSize = storeWithGuards.getIndexedSetSize?.(IndexNames.HOLDER, holderAddress);
+            const pendingRemovals = storeWithGuards.getPipelinePendingHolderRemovals?.(holderAddress) ?? 0;
+            const remainingAfterFlush = liveSize != null ? liveSize - pendingRemovals : undefined;
+            if (remainingAfterFlush != null && remainingAfterFlush > 0) {
+                this.store.addValueToOrderedSet(IndexNames.HOLDER_COUNT, remainingAfterFlush, holderAddress);
+            } else {
+                holders?.delete(holderAddress);
+                this.store.removeValuesFromOrderedSet(IndexNames.HOLDER_COUNT, holderAddress);
+                this.store.removeKeyFromIndex(IndexNames.HOLDER, holderAddress);
+            }
         }
         
         const oldDecodedAddress = decodeAddress(holderAddress);
