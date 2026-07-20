@@ -206,6 +206,15 @@ const setup = ({ whitelistedApiKeys = 'allowed-key' }: { whitelistedApiKeys?: st
 };
 
 describe('Scanner lambda unit tests', () => {
+    it('does not construct scanner dependencies while importing scanner app', () => {
+        jest.isolateModules(() => {
+            require('./scanner.app');
+        });
+
+        expect(getHandlesStore).not.toHaveBeenCalled();
+        expect(MockedRepoClass).not.toHaveBeenCalled();
+    });
+
     beforeEach(() => {
         jest.clearAllMocks();
     });

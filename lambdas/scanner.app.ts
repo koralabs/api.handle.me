@@ -10,9 +10,33 @@ import { discoverHandleTxsBySlotRange, isMaestroConfigured, MaestroDiscoveryResu
 import { blockfrostApiCall, buildUTxOsFromKoiosTxs, defaultKoiosSettings, fetchBlockfrostDatumCbor, fetchBlockfrostTxHashes, fetchBlockfrostTxInfo, fetchKoios, fetchPaginatedResults } from '../utils/helpers';
 import { buildAndStoreMptRootHash, getChainMintingDataRootHash } from '../utils/snapshotVerification';
 
-const store = getHandlesStore();
-const handlesRepo = new HandlesRepository(store);
+type ScannerStore = ReturnType<typeof getHandlesStore>;
+
+let storeInstance: ScannerStore | undefined;
+let handlesRepoInstance: HandlesRepository | undefined;
 let initialized = false;
+
+const getStore = (): ScannerStore => {
+    if (!storeInstance) storeInstance = getHandlesStore();
+    return storeInstance;
+};
+
+const getHandlesRepo = (): HandlesRepository => {
+    if (!handlesRepoInstance) handlesRepoInstance = new HandlesRepository(getStore());
+    return handlesRepoInstance;
+};
+
+const createLazyProxy = <T extends object>(factory: () => T): T => new Proxy({} as T, {
+    get: (_target, property) => {
+        const instance = factory();
+        const value = Reflect.get(instance, property, instance);
+        return typeof value === 'function' ? value.bind(instance) : value;
+    },
+    set: (_target, property, value) => Reflect.set(factory(), property, value)
+});
+
+const store = createLazyProxy(getStore);
+const handlesRepo = createLazyProxy(getHandlesRepo);
 
 const SCANNER_LEASE_KEY = getApiScannerLeaseKey();
 const SCANNER_RECOVERY_KEY = getApiScannerRecoveryKey();
