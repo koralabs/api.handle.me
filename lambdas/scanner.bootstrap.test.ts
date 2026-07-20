@@ -1,3 +1,5 @@
+export {};
+
 const ORIGINAL_ENV = { ...process.env };
 
 describe('Scanner lambda bootstrap', () => {
