@@ -93,6 +93,45 @@ describe('Scanner lambda bootstrap', () => {
         }
     });
 
+    it('turns self-hosted function-url aws import failures into 500 responses', async () => {
+        process.env.KORA_SCANNER_DEFER_IMPORTS = 'true';
+        const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+        jest.doMock('@koralabs/kora-labs-common/aws', () => {
+            throw new Error('aws import boom');
+        });
+        jest.doMock('./scanner.app', () => ({
+            lambdaHandler: jest.fn(),
+            Internal: {
+                checkRollback: jest.fn(),
+                processRollback: jest.fn(),
+                processReindex: jest.fn(),
+                scan: jest.fn()
+            }
+        }));
+
+        let scannerModule: any;
+        await jest.isolateModulesAsync(async () => {
+            scannerModule = await import('./scanner');
+        });
+
+        try {
+            await expect(scannerModule.lambdaHandler({ requestContext: { http: {} } } as any, {} as any)).resolves.toEqual({
+                isBase64Encoded: false,
+                statusCode: 500,
+                headers: {
+                    'content-type': 'application/json'
+                },
+                body: JSON.stringify({ message: 'Scanner bootstrap failed' })
+            });
+            expect(consoleError).toHaveBeenCalledTimes(1);
+            expect(consoleError.mock.calls[0][0]).toContain('scannerLambda.bootstrapFailure');
+            expect(consoleError.mock.calls[0][0]).toContain('aws import boom');
+        } finally {
+            consoleError.mockRestore();
+        }
+    });
+
     it('keeps throwing bootstrap failures outside self-hosted scanner runtime', async () => {
         const hydrateKmsEnvironment = jest.fn().mockResolvedValue([]);
 
