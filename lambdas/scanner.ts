@@ -1,5 +1,3 @@
-import { hydrateKmsEnvironment } from '@koralabs/kora-labs-common/aws';
-
 type ScannerApp = typeof import('./scanner.app');
 
 const isSelfHostedScannerRuntime = () => {
@@ -42,30 +40,35 @@ const runScannerEntrypoint = async <T>(event: any, run: () => Promise<T>) => {
     }
 };
 
+const hydrateScannerEnvironment = async () => {
+    const { hydrateKmsEnvironment } = await import('@koralabs/kora-labs-common/aws');
+    return hydrateKmsEnvironment();
+};
+
 export const lambdaHandler = async (event: any, context: any) => runScannerEntrypoint(event, async () => {
-    await hydrateKmsEnvironment();
+    await hydrateScannerEnvironment();
     const { lambdaHandler: scannerLambdaHandler } = await import('./scanner.app');
     return scannerLambdaHandler(event, context);
 });
 
 export const Internal = {
     checkRollback: async (...args: Parameters<ScannerApp['Internal']['checkRollback']>) => {
-        await hydrateKmsEnvironment();
+        await hydrateScannerEnvironment();
         const { Internal: scannerInternal } = await import('./scanner.app');
         return scannerInternal.checkRollback(...args);
     },
     processRollback: async (...args: Parameters<ScannerApp['Internal']['processRollback']>) => {
-        await hydrateKmsEnvironment();
+        await hydrateScannerEnvironment();
         const { Internal: scannerInternal } = await import('./scanner.app');
         return scannerInternal.processRollback(...args);
     },
     processReindex: async (...args: Parameters<ScannerApp['Internal']['processReindex']>) => {
-        await hydrateKmsEnvironment();
+        await hydrateScannerEnvironment();
         const { Internal: scannerInternal } = await import('./scanner.app');
         return scannerInternal.processReindex(...args);
     },
     scan: async (...args: Parameters<ScannerApp['Internal']['scan']>) => {
-        await hydrateKmsEnvironment();
+        await hydrateScannerEnvironment();
         const { Internal: scannerInternal } = await import('./scanner.app');
         return scannerInternal.scan(...args);
     }
