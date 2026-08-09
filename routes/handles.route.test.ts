@@ -1,4 +1,4 @@
-import { ERROR_TEXT, HandleType, HttpException } from '@koralabs/kora-labs-common';
+import { AvailabilityResponseCode, ERROR_TEXT, HandleType, HttpException, ProtectedWords } from '@koralabs/kora-labs-common';
 import * as cbor from '@koralabs/kora-labs-common/utils/cbor';
 import request from 'supertest';
 import App from '../app';
@@ -376,6 +376,25 @@ describe('Testing Handles Routes', () => {
         });
     });
 
+    describe('[GET] /handles/:handle protected words', () => {
+        it('passes through the legal restriction status and reason for protected handles', async () => {
+            jest.spyOn(ProtectedWords, 'checkAvailability').mockResolvedValue({
+                available: false,
+                code: AvailabilityResponseCode.NOT_AVAILABLE_FOR_LEGAL_REASONS,
+                reason: 'Handle cannot be minted',
+                message: 'not available'
+            } as any);
+
+            const response = await request(app?.getServer()).get('/handles/nope');
+
+            expect(response.status).toEqual(451);
+            expect(response.body).toEqual(expect.objectContaining({
+                error: 'unavailable_for_legal_reasons',
+                message: 'Handle cannot be minted'
+            }));
+        });
+    });
+
     describe('[GET] /handles', () => {
         it('should throw error if records_per_page is invalid', async () => {
             const response = await request(app?.getServer()).get('/handles?records_per_page=two');
@@ -525,6 +544,18 @@ describe('Testing Handles Routes', () => {
             expect(namesOnly).toBe(true);
         });
 
+        it('passes explicit text/plain records_per_page above the JSON cap to the repository', async () => {
+            const response = await request(app?.getServer())
+                .get('/handles?records_per_page=5000&sort=asc')
+                .set('Accept', 'text/plain');
+
+            expect(response.status).toEqual(200);
+            const repoInstance = MockedHandlesRepository.mock.results.at(-1)?.value;
+            const [pagination, , namesOnly] = repoInstance.search.mock.calls.at(-1);
+            expect(pagination).toEqual(expect.objectContaining({ handlesPerPage: 5000 }));
+            expect(namesOnly).toBe(true);
+        });
+
         it('should throw error if characters is invalid', async () => {
             const response = await request(app?.getServer()).get('/handles?characters=nope');
 
@@ -663,6 +694,18 @@ describe('Testing Handles Routes', () => {
 
             expect(response.status).toEqual(400);
             expect(response.body.message).toEqual('expected string entries and received object');
+            const repoInstance = MockedHandlesRepository.mock.results.at(-1)?.value;
+            expect(repoInstance.getHandlesByStakeKeyHashes).not.toHaveBeenCalled();
+        });
+
+        it('should reject array entries for stake key hash lookup without a 500', async () => {
+            const response = await request(app?.getServer())
+                .post('/handles/list?type=stakekeyhash')
+                .set('Content-Type', 'application/json')
+                .send([['deadbeef']]);
+
+            expect(response.status).toEqual(400);
+            expect(response.body.message).toEqual('expected string entries and received array');
             const repoInstance = MockedHandlesRepository.mock.results.at(-1)?.value;
             expect(repoInstance.getHandlesByStakeKeyHashes).not.toHaveBeenCalled();
         });
@@ -1159,6 +1202,19 @@ describe('Testing Handles Routes', () => {
             );
         });
 
+        it('passes default_key_type through when decoding a handle UTxO datum', async () => {
+            jest.spyOn(cbor, 'decodeCborToJson').mockResolvedValue({ decoded: true } as any);
+
+            const response = await request(app?.getServer()).get('/handles/burritos/utxo?default_key_type=int');
+
+            expect(response.status).toEqual(200);
+            expect(cbor.decodeCborToJson).toHaveBeenCalledWith({
+                cborString: 'burritos_datum',
+                schema: {},
+                defaultKeyType: 'int'
+            });
+        });
+
         it('should return 400 when handle utxo datum decode fails for json accept', async () => {
             jest.spyOn(cbor, 'decodeCborToJson').mockImplementation(() => {
                 throw new Error('bad cbor');
@@ -1311,6 +1367,18 @@ describe('Testing Handles Routes', () => {
             const response = await request(app?.getServer()).get('/handles/sub@handle2/subhandle_settings/utxo');
             expect(response.status).toEqual(200);
             expect(response.body).toEqual({ address: 'addr1_ref_token', datum: '', index: 0, lovelace: 0, script: { cbor: 'a247', type: 'plutus_v2' }, tx_id: 'tx_id' });
+        });
+
+        it('returns raw subhandle settings utxo datum for text/plain accept', async () => {
+            const decodeSpy = jest.spyOn(cbor, 'decodeCborToJson').mockResolvedValue({ decoded: true } as any);
+            const response = await request(app?.getServer())
+                .get('/handles/sub@handle/subhandle_settings/utxo')
+                .set('Accept', 'text/plain');
+
+            expect(response.status).toEqual(200);
+            expect(response.body.datum).toEqual(expect.any(String));
+            expect(response.body.datum).toContain('687474703a2f2f6c6f63616c686f73743a333030372f23746f75');
+            expect(decodeSpy).not.toHaveBeenCalled();
         });
 
         it('should return 404 when subhandle settings utxo is missing in store', async () => {
