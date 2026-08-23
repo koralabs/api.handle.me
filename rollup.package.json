@@ -13,11 +13,14 @@
         "start:forever": "mkdir -p forever && nohup node express.js >> ./forever/api.log 2>&1 &",
         "forever:list": "ps -ef | grep \"node express.js\" | grep -v grep || true"
     },
+    "overrides": {
+        "body-parser": "2.3.0"
+    },
     "dependencies": {
         "@aiken-lang/merkle-patricia-forestry": "^1.3.1",
         "swagger-ui-express": "^4.5.0",
         "@valkey/valkey-glide": "^2.4.1",
         "qs": "^6.15.2",
-        "protobufjs": "^7.6.4"
+        "protobufjs": "^7.6.5"
     }
 }
