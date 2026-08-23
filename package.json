@@ -1,6 +1,6 @@
 {
     "name": "handles-public-api",
-    "version": "1.14.4",
+    "version": "1.14.5",
     "description": "A downloadable and containerized decentralized API for Handles",
     "main": "index.js",
     "repository": "https://github.com/koralabs/handles-public-api.git",
@@ -36,7 +36,7 @@
         "body-parser": "1.20.6",
         "brace-expansion": "5.0.9",
         "ip-address": "10.3.1",
-        "nanoid": "3.3.17"
+        "nanoid": "3.3.18"
     },
     "dependencies": {
         "@aiken-lang/merkle-patricia-forestry": "^1.3.1",
