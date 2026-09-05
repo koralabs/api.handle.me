@@ -17,9 +17,7 @@ NODE_DB=${NODE_DB:-'/db'}
 SOCKET_PATH=${SOCKET_PATH:-'/ipc/node.socket'}
 CARDANO_NODE_PATH=${CARDANO_NODE_PATH:-'./cardano-node'}
 NODE_CONFIG_PATH=${NODE_CONFIG_PATH:-"./${NETWORK}"}
-HOST=""
-NODE_CONFIG=""
-NODE_SOCKET=""
+OGMIOS_ARGS=("$@")
 OGMIOS_PID=""
 API_PID=""
 CARDANO_NODE_PID=""
@@ -58,25 +56,34 @@ function register_child {
   CHILD_PIDS+=("$1")
 }
 
+function has_argument {
+  local expected="$1"
+  shift
+  local argument
+  for argument in "$@"; do
+    if [[ "${argument}" == "${expected}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 trap 'cleanup 0' INT TERM QUIT ABRT
 
-if [[ "$@" != *"--host"* ]]
-then
-    HOST="--host 0.0.0.0"
+if ! has_argument "--host" "${OGMIOS_ARGS[@]}"; then
+    OGMIOS_ARGS+=("--host" "0.0.0.0")
 fi
-if [[ "$@" != *"--node-config"* ]]
-then
-    NODE_CONFIG="--node-config ${NODE_CONFIG_PATH}/config.json"
+if ! has_argument "--node-config" "${OGMIOS_ARGS[@]}"; then
+    OGMIOS_ARGS+=("--node-config" "${NODE_CONFIG_PATH}/config.json")
 fi
-if [[ "$@" != *"--node-socket"* ]]
-then
-    NODE_SOCKET="--node-socket ${SOCKET_PATH}"
+if ! has_argument "--node-socket" "${OGMIOS_ARGS[@]}"; then
+    OGMIOS_ARGS+=("--node-socket" "${SOCKET_PATH}")
 fi
 
 if [[ "${MODE}" == "ogmios" || "${MODE}" == "both" || "${MODE}" == "all" ]]; then
     # --include-transaction-cbor
     echo "STARTING OGMIOS..."
-    ogmios --log-level Error $HOST $NODE_CONFIG $NODE_SOCKET $@ &
+    ogmios --log-level Error "${OGMIOS_ARGS[@]}" &
     OGMIOS_PID=$!
     register_child "${OGMIOS_PID}"
     echo "  ...OGMIOS RUNNING"
@@ -84,7 +91,8 @@ fi
 
 if [[ "${MODE}" == "ogmios" || "${MODE}" == "all" || "${MODE}" == "api-only" ]]; then
     echo "STARTING API..."
-    source ${HOME:-'~'}/.nvm/nvm.sh
+    # shellcheck source=/dev/null
+    source "${HOME}/.nvm/nvm.sh"
     export TMPDIR=/tmp
     nvm use 21
     sed -i 's https://api.handle.me http://localhost:3141 ' swagger.yml
@@ -103,7 +111,8 @@ release_host() {
             echo -n "pre-release-preview";;
     esac
 }
-export RELEASE_HOST=$(release_host)
+RELEASE_HOST=$(release_host)
+export RELEASE_HOST
 
 if [[ "${MODE}" == "cardano-node" || "${MODE}" == "both" || "${MODE}" == "all" ]]; then
     echo "STARTING CARDANO-NODE..."
@@ -117,17 +126,18 @@ if [[ "${MODE}" == "cardano-node" || "${MODE}" == "both" || "${MODE}" == "all" ]
         mkdir -p "${NODE_DB}"
         echo "Grabbing latest snapshot with Mithril."
         MITHRIL_VERSION=2603.1
-        curl -fsSL https://github.com/input-output-hk/mithril/releases/download/${MITHRIL_VERSION}/mithril-${MITHRIL_VERSION}-linux-x64.tar.gz | tar -xz
-        export AGGREGATOR_ENDPOINT=https://aggregator.${RELEASE_HOST}.api.mithril.network/aggregator
-        export GENESIS_VERIFICATION_KEY=$(curl https://raw.githubusercontent.com/input-output-hk/mithril/main/mithril-infra/configuration/${RELEASE_HOST}/genesis.vkey)
-        export ANCILLARY_VERIFICATION_KEY=$(curl https://raw.githubusercontent.com/input-output-hk/mithril/main/mithril-infra/configuration/${RELEASE_HOST}/ancillary.vkey)
-        export DIGEST=latest
+        curl -fsSL "https://github.com/input-output-hk/mithril/releases/download/${MITHRIL_VERSION}/mithril-${MITHRIL_VERSION}-linux-x64.tar.gz" | tar -xz
+        AGGREGATOR_ENDPOINT="https://aggregator.${RELEASE_HOST}.api.mithril.network/aggregator"
+        GENESIS_VERIFICATION_KEY=$(curl -fsS "https://raw.githubusercontent.com/input-output-hk/mithril/main/mithril-infra/configuration/${RELEASE_HOST}/genesis.vkey")
+        ANCILLARY_VERIFICATION_KEY=$(curl -fsS "https://raw.githubusercontent.com/input-output-hk/mithril/main/mithril-infra/configuration/${RELEASE_HOST}/ancillary.vkey")
+        DIGEST=latest
+        export AGGREGATOR_ENDPOINT GENESIS_VERIFICATION_KEY ANCILLARY_VERIFICATION_KEY DIGEST
         chmod +x ./mithril-client
         #curl -o - $(./mithril-client cardano-db snapshot show --json $SNAPSHOT_DIGEST | jq -r '.locations[0]') | tar --use-compress-program=unzstd -x -C ${NODE_DB}
         if [[ "${NODE_DB%db}" == "" ]]; then
-            ./mithril-client cardano-db download --include-ancillary $DIGEST
+            ./mithril-client cardano-db download --include-ancillary "$DIGEST"
         else
-            ./mithril-client cardano-db download --download-dir "${NODE_DB%db}" --include-ancillary $DIGEST
+            ./mithril-client cardano-db download --download-dir "${NODE_DB%db}" --include-ancillary "$DIGEST"
         fi
         echo "Mithril snapshot downloaded and validated."
     fi
@@ -135,25 +145,25 @@ if [[ "${MODE}" == "cardano-node" || "${MODE}" == "both" || "${MODE}" == "all" ]
     echo "Starting cardano-node."
 
     # Workaround for Mithril not outputting the protocolMagicId
-    cat ${NODE_CONFIG_PATH}/shelley-genesis.json | jq -r .networkMagic > ${NODE_DB}/protocolMagicId
+    jq -r .networkMagic "${NODE_CONFIG_PATH}/shelley-genesis.json" > "${NODE_DB}/protocolMagicId"
 
-    ${CARDANO_NODE_PATH} run \
-        --config ${NODE_CONFIG_PATH}/config.json \
-        --topology ${NODE_CONFIG_PATH}/topology.json \
-        --database-path ${NODE_DB} \
+    "${CARDANO_NODE_PATH}" run \
+        --config "${NODE_CONFIG_PATH}"/config.json \
+        --topology "${NODE_CONFIG_PATH}"/topology.json \
+        --database-path "${NODE_DB}" \
         --port 3000 \
         --host-addr 0.0.0.0 \
-        --socket-path ${SOCKET_PATH} &
+        --socket-path "${SOCKET_PATH}" &
     CARDANO_NODE_PID=$!
     register_child "${CARDANO_NODE_PID}"
 
     if [[ "${ENABLE_SOCKET_REDIRECT}" == "true" ]]; then
-        until [ -S ${SOCKET_PATH} ]
+        until [ -S "${SOCKET_PATH}" ]
         do
             sleep 1
         done
         echo "Found! ${SOCKET_PATH}"
-        socat TCP-LISTEN:4001,reuseaddr,fork UNIX-CONNECT:${SOCKET_PATH} &
+        socat TCP-LISTEN:4001,reuseaddr,fork UNIX-CONNECT:"${SOCKET_PATH}" &
         SOCAT_PID=$!
         register_child "${SOCAT_PID}"
     fi
