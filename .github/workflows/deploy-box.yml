@@ -8,23 +8,21 @@ name: api.handle.me (box / service-fn-push, no AWS)
 # TEMPLATE for any PUBLIC repo: copy this, set the repo's FN_FUNCTIONS/build cmds, and provide the
 # vars.DEPLOY_FETCH_BASE variable + the R2_*/KORA_DEPLOY_HMAC_SECRET/DEPLOYMENT_ACCESS_TOKEN secrets.
 on:
-  # Pre-cutover: workflow_dispatch ONLY (the bring-up dispatches it) so the box deploy does not race
-  # the AWS deploy.yml. AT PREPROD CUTOVER: add `push: { branches: [preprod] }` here AND drop preprod
-  # from deploy.yml's push triggers.
+  # All environments are deployed explicitly through the self-hosted box workflow.
   workflow_dispatch:
     inputs:
       environment:
         description: Deployment environment
         required: true
         type: choice
-        options: [preprod, mainnet]
-        default: preprod
+        options: [preview, preprod, mainnet]
+        default: preview
 jobs:
   deploy-box:
     name: Box deploy (service) from ${{ github.ref_name }}
     runs-on: ubuntu-22.04
     concurrency:
-      group: deploy-box-${{ github.ref }}
+      group: deploy-box-${{ github.event.inputs.environment }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -34,7 +32,7 @@ jobs:
       - name: Build (box/service) + stage to R2 + signed deploy trigger
         env:
           DEPLOYABLE: api.handle.me
-          BOX_ENV: ${{ github.event.inputs.environment || 'preprod' }}
+          BOX_ENV: ${{ github.event.inputs.environment }}
           NODE_VERSION: '22'
           SERVICE_INSTALL_CMD: npm install
           # Also stage deployment_info.json into ./dist so the /deployment endpoint can
