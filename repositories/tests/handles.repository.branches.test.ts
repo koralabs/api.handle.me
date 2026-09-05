@@ -655,7 +655,7 @@ describe('HandlesRepository branch tests', () => {
         expect(repo.currentHttpStatus()).toBe(200);
 
         store.getMetrics.mockReturnValue({
-            lastSlot: freshCurrentSlot + 500,
+            lastSlot: freshCurrentSlot + 600,
             currentSlot: freshCurrentSlot,
             currentBlockHash: 'block',
             tipBlockHash: 'tip'
