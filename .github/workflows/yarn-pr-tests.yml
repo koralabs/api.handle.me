@@ -1,4 +1,4 @@
-name: Yarn PR Tests
+name: NPM Tests
 
 on:
   push:
@@ -10,9 +10,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 18
-      - run: yarn
-      - run: yarn test
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test

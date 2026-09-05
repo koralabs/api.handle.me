@@ -1,5 +1,6 @@
 #!/bin/bash
 set -eu
+# shellcheck source=/dev/null
 set -a && source .env && set +a
 REDIS_PORT=${REDIS_PORT:-6380}
 REDIS_HOST=${REDIS_HOST:-127.0.0.1}

@@ -26,7 +26,7 @@ get_route53_set_identifier() {
     local env_key="$1"
     local suffix="${env_key#API_SCANNER_FUNCTION_URL_}"
     local alias_upper="${suffix##*_}"
-    local region_token="${suffix%_${alias_upper}}"
+    local region_token="${suffix%_"${alias_upper}"}"
     local region_name=""
     if [[ "$region_token" == *"EAST"* ]]; then
         region_name="east"

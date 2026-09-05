@@ -8,6 +8,7 @@ CARDANO_NODE_PORT_OVERRIDE="${CARDANO_NODE_PORT-}"
 BASE_URL_OVERRIDE="${CONFIG_FILES_BASE_URL-}"
 CARDANO_DB_PATH_OVERRIDE="${CARDANO_DB_PATH-}"
 
+# shellcheck source=/dev/null
 set -a && source .env && set +a
 if [[ -n "${NETWORK_OVERRIDE}" ]]; then export NETWORK="${NETWORK_OVERRIDE}"; fi
 if [[ -n "${SOCKET_PATH_OVERRIDE}" ]]; then export SOCKET_PATH="${SOCKET_PATH_OVERRIDE}"; fi
@@ -28,10 +29,7 @@ CARDANO_NODE_PID=""
 OGMIOS_PID=""
 MANAGED_CARDANO_NODE=false
 MANAGED_OGMIOS=false
-HOST=""
-NODE_CONFIG=""
-NODE_SOCKET=""
-OGMIOS_PORT_ARG=""
+OGMIOS_ARGS=("$@")
 
 cleanup() {
     if [[ "${MANAGED_CARDANO_NODE}" == "true" ]] && [[ -n "${CARDANO_NODE_PID}" ]] && kill -0 "${CARDANO_NODE_PID}" 2>/dev/null; then
@@ -51,23 +49,31 @@ cleanup() {
     exit 0
 }
 
+has_argument() {
+    local expected="$1"
+    shift
+    local argument
+    for argument in "$@"; do
+        if [[ "${argument}" == "${expected}" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 trap cleanup INT TERM QUIT ABRT
 
-if [[ "$@" != *"--host"* ]]
-then
-    HOST="--host 0.0.0.0"
+if ! has_argument "--host" "${OGMIOS_ARGS[@]}"; then
+    OGMIOS_ARGS+=("--host" "0.0.0.0")
 fi
-if [[ "$@" != *"--node-config"* ]]
-then
-    NODE_CONFIG="--node-config ${NODE_CONFIG_PATH}/config.json"
+if ! has_argument "--node-config" "${OGMIOS_ARGS[@]}"; then
+    OGMIOS_ARGS+=("--node-config" "${NODE_CONFIG_PATH}/config.json")
 fi
-if [[ "$@" != *"--node-socket"* ]]
-then
-    NODE_SOCKET="--node-socket ${SOCKET_PATH}"
+if ! has_argument "--node-socket" "${OGMIOS_ARGS[@]}"; then
+    OGMIOS_ARGS+=("--node-socket" "${SOCKET_PATH}")
 fi
-if [[ "$@" != *"--port"* ]]
-then
-    OGMIOS_PORT_ARG="--port ${OGMIOS_PORT}"
+if ! has_argument "--port" "${OGMIOS_ARGS[@]}"; then
+    OGMIOS_ARGS+=("--port" "${OGMIOS_PORT}")
 fi
 
 find_pid_by_arg() {
@@ -84,7 +90,7 @@ find_pid_by_arg() {
     echo -n "${match}"
 }
 
-mkdir -p  $HOME/.local/bin
+mkdir -p  "$HOME"/.local/bin
 
 if [ -d "../api.handle.me/workers" ] && [ "$(realpath ../api.handle.me/workers)" != "$(realpath ./workers)" ]; then
     cp ../api.handle.me/workers/* ./workers/ 
@@ -114,17 +120,17 @@ declare -a NETWORKS=(preview preprod mainnet)
 declare -a ERAS=(byron shelley alonzo conway)
 for net in "${NETWORKS[@]}"; \
 do \
-    mkdir -p tmp/${net}
-    curl -sL ${BASE_URL}/${net}/config.json -o tmp/${net}/config.json
-    curl -sL ${BASE_URL}/${net}/topology.json -o tmp/${net}/topology.json
-    curl -sL ${BASE_URL}/${net}/peer-snapshot.json -o tmp/${net}/peer-snapshot.json
-    curl -sL ${BASE_URL}/${net}/checkpoints.json -o tmp/${net}/checkpoints.json
+    mkdir -p tmp/"${net}"
+    curl -sL "${BASE_URL}"/"${net}"/config.json -o tmp/"${net}"/config.json
+    curl -sL "${BASE_URL}"/"${net}"/topology.json -o tmp/"${net}"/topology.json
+    curl -sL "${BASE_URL}"/"${net}"/peer-snapshot.json -o tmp/"${net}"/peer-snapshot.json
+    curl -sL "${BASE_URL}"/"${net}"/checkpoints.json -o tmp/"${net}"/checkpoints.json
     for era in "${ERAS[@]}"; \
     do \
-        curl -sL ${BASE_URL}/${net}/${era}-genesis.json -o tmp/${net}/${era}-genesis.json; \
+        curl -sL "${BASE_URL}"/"${net}"/"${era}"-genesis.json -o tmp/"${net}"/"${era}"-genesis.json; \
     done; \
-    jq '.EnableP2P = true | .PeerSharing = true' tmp/${net}/config.json > tmp/${net}/config.p2p.json
-    mv tmp/${net}/config.p2p.json tmp/${net}/config.json
+    jq '.EnableP2P = true | .PeerSharing = true' tmp/"${net}"/config.json > tmp/"${net}"/config.p2p.json
+    mv tmp/"${net}"/config.p2p.json tmp/"${net}"/config.json
 done
 
 release_host() {
@@ -135,29 +141,31 @@ release_host() {
             echo -n "pre-release-preview";;
     esac
 }
-export RELEASE_HOST=$(release_host)
+RELEASE_HOST=$(release_host)
+export RELEASE_HOST
 
 NODE_DB="${CARDANO_DB_PATH}/${NETWORK}/db"
 
 if [[ -d "${NODE_DB}/immutable" ]]; then
     echo "Previous Cardano database found. Continuing scan"
 else
-    rm -rf ${NODE_DB}
-    mkdir -p ${NODE_DB}
+    rm -rf "${NODE_DB}"
+    mkdir -p "${NODE_DB}"
     mkdir -p ./tmp/mithril
     echo "Grabbing latest snapshot with Mithril."
     MITHRIL_VERSION=2603.1
-    (cd ./tmp/mithril && curl -fsSL https://github.com/input-output-hk/mithril/releases/download/${MITHRIL_VERSION}/mithril-${MITHRIL_VERSION}-linux-x64.tar.gz | tar -xz)
-    export AGGREGATOR_ENDPOINT=https://aggregator.${RELEASE_HOST}.api.mithril.network/aggregator
-    export GENESIS_VERIFICATION_KEY=$(curl https://raw.githubusercontent.com/input-output-hk/mithril/main/mithril-infra/configuration/${RELEASE_HOST}/genesis.vkey)
-    export ANCILLARY_VERIFICATION_KEY=$(curl https://raw.githubusercontent.com/input-output-hk/mithril/main/mithril-infra/configuration/${RELEASE_HOST}/ancillary.vkey)
-    export DIGEST=latest
+    (cd ./tmp/mithril && curl -fsSL "https://github.com/input-output-hk/mithril/releases/download/${MITHRIL_VERSION}/mithril-${MITHRIL_VERSION}-linux-x64.tar.gz" | tar -xz)
+    AGGREGATOR_ENDPOINT="https://aggregator.${RELEASE_HOST}.api.mithril.network/aggregator"
+    GENESIS_VERIFICATION_KEY=$(curl -fsS "https://raw.githubusercontent.com/input-output-hk/mithril/main/mithril-infra/configuration/${RELEASE_HOST}/genesis.vkey")
+    ANCILLARY_VERIFICATION_KEY=$(curl -fsS "https://raw.githubusercontent.com/input-output-hk/mithril/main/mithril-infra/configuration/${RELEASE_HOST}/ancillary.vkey")
+    DIGEST=latest
+    export AGGREGATOR_ENDPOINT GENESIS_VERIFICATION_KEY ANCILLARY_VERIFICATION_KEY DIGEST
     chmod +x ./tmp/mithril/mithril-client
     #curl -o - $(./mithril-client cardano-db snapshot show --json $SNAPSHOT_DIGEST | jq -r '.locations[0]') | tar --use-compress-program=unzstd -x -C ${NODE_DB}
     if [[ "${NODE_DB%db}" == "" ]]; then
-        ./tmp/mithril/mithril-client cardano-db download --include-ancillary $DIGEST
+        ./tmp/mithril/mithril-client cardano-db download --include-ancillary "$DIGEST"
     else
-        ./tmp/mithril/mithril-client cardano-db download --download-dir "${NODE_DB%db}" --include-ancillary $DIGEST
+        ./tmp/mithril/mithril-client cardano-db download --download-dir "${NODE_DB%db}" --include-ancillary "$DIGEST"
     fi
     echo "Mithril snapshot downloaded and validated."
 fi
@@ -171,12 +179,12 @@ if [ ! -x ./tmp/cardano-node/bin/cardano-node ] || [ "${INSTALLED_CARDANO_NODE_V
     echo "Installing cardano-node ${CARDANO_NODE_VER}..."
     rm -rf ./tmp/cardano-node
     mkdir -p ./tmp/cardano-node
-    (cd ./tmp/cardano-node && curl -fsSL https://github.com/IntersectMBO/cardano-node/releases/download/${CARDANO_NODE_VER}/cardano-node-${CARDANO_NODE_VER}-linux-amd64.tar.gz | tar -xz)
+    (cd ./tmp/cardano-node && curl -fsSL https://github.com/IntersectMBO/cardano-node/releases/download/"${CARDANO_NODE_VER}"/cardano-node-"${CARDANO_NODE_VER}"-linux-amd64.tar.gz | tar -xz)
     chmod +x ./tmp/cardano-node/bin/cardano-node
 fi
 
 # Workaround for Mithril not outputting the protocolMagicId
-cat ${NODE_CONFIG_PATH}/shelley-genesis.json | jq -r .networkMagic > ${NODE_DB}/protocolMagicId
+jq -r .networkMagic "${NODE_CONFIG_PATH}/shelley-genesis.json" > "${NODE_DB}/protocolMagicId"
 
 CARDANO_NODE_PID="$(find_pid_by_arg "cardano-node" "--socket-path ${SOCKET_PATH}")"
 if [[ -n "${CARDANO_NODE_PID}" ]] && kill -0 "${CARDANO_NODE_PID}" 2>/dev/null
@@ -191,12 +199,12 @@ then
     echo "cardano-node already running. Reusing PID ${CARDANO_NODE_PID}."
 else
     ./tmp/cardano-node/bin/cardano-node run \
-        --config ${NODE_CONFIG_PATH}/config.json \
-        --topology ${NODE_CONFIG_PATH}/topology.json \
-        --database-path ${NODE_DB} \
-        --port ${CARDANO_NODE_PORT} \
+        --config "${NODE_CONFIG_PATH}"/config.json \
+        --topology "${NODE_CONFIG_PATH}"/topology.json \
+        --database-path "${NODE_DB}" \
+        --port "${CARDANO_NODE_PORT}" \
         --host-addr 0.0.0.0 \
-        --socket-path ${SOCKET_PATH} > >(stdbuf -oL -eL egrep --line-buffered '\b(startup:Info:|local socket:|ChainDB:Notice:|:Critical:|Validating chunk)\b') 2>&1 &
+        --socket-path "${SOCKET_PATH}" > >(stdbuf -oL -eL egrep --line-buffered '\b(startup:Info:|local socket:|ChainDB:Notice:|:Critical:|Validating chunk)\b') 2>&1 &
     CARDANO_NODE_PID=$!
     MANAGED_CARDANO_NODE=true
 
@@ -211,7 +219,7 @@ fi
 ###############################################
 if [ ! -x "$(command -v ./tmp/ogmios/bin/ogmios)" ]; then
     echo 'OGMIOS NOT FOUND. INSTALLING OGMIOS...';
-    curl -sL https://github.com/CardanoSolutions/ogmios/releases/download/v${OGMIOS_VER}/ogmios-v${OGMIOS_VER}-x86_64-linux.zip -o ogmios.zip
+    curl -sL https://github.com/CardanoSolutions/ogmios/releases/download/v"${OGMIOS_VER}"/ogmios-v"${OGMIOS_VER}"-x86_64-linux.zip -o ogmios.zip
     unzip ogmios.zip -d ./tmp/ogmios && rm ogmios.zip && chmod +x ./tmp/ogmios/bin/ogmios
 fi
 
@@ -219,7 +227,7 @@ OGMIOS_PID="$(find_pid_by_arg "ogmios" "--node-socket ${SOCKET_PATH}")"
 if [[ -z "${OGMIOS_PID}" ]] || ! kill -0 "${OGMIOS_PID}" 2>/dev/null
 then
     echo "Starting Ogmios - connecting to ${SOCKET_PATH}"
-    ./tmp/ogmios/bin/ogmios $HOST $NODE_CONFIG $NODE_SOCKET $OGMIOS_PORT_ARG $@ --include-transaction-cbor --log-level Error &
+    ./tmp/ogmios/bin/ogmios "${OGMIOS_ARGS[@]}" --include-transaction-cbor --log-level Error &
     OGMIOS_PID=$!
     MANAGED_OGMIOS=true
 else
