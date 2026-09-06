@@ -4,7 +4,7 @@ on:
   push:
     branches: [ preview, preprod, mainnet ]
   pull_request:
-    branches: [ preview ]
+    branches: [ preview, preprod, mainnet ]
 
 jobs:
   test:

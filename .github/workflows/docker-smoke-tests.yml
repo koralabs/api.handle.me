@@ -21,7 +21,7 @@ on:
       - shell/test-container.sh
       - workers/**
   pull_request:
-    branches: [ preview ]
+    branches: [ preview, preprod, mainnet ]
     paths:
       - Dockerfile
       - package.json
