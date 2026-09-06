@@ -1,6 +1,6 @@
 {
     "name": "handles-public-api",
-    "version": "1.14.1",
+    "version": "1.14.6",
     "description": "A downloadable and containerized decentralized API for Handles",
     "main": "index.js",
     "repository": "https://github.com/koralabs/handles-public-api.git",
@@ -20,7 +20,7 @@
         "@aiken-lang/merkle-patricia-forestry": "^1.3.1",
         "swagger-ui-express": "^4.5.0",
         "@valkey/valkey-glide": "^2.4.1",
-        "qs": "^6.15.2",
+        "qs": "^6.16.0",
         "protobufjs": "^7.6.5"
     }
 }
