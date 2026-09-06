@@ -13,6 +13,7 @@
         "api": "tsx -r tsconfig-paths/register -r dotenv/config express.ts",
         "readonly": "ENABLE_OGMIOS_SCANNING=false USE_LAMBDA_SCANNER=false PORT=3142 tsx -r tsconfig-paths/register -r dotenv/config express.ts",
         "bootstrap:apis": "tsx -r tsconfig-paths/register -r dotenv/config scripts/bootstrap-from-apis.ts",
+        "monitor:demeter-parity": "tsx scripts/monitor-demeter-parity.ts",
         "test": "npm run test:unit && npm run test:e2e",
         "test:unit": "UTXO_SCHEMA_VERSION=${UTXO_SCHEMA_VERSION:-1} INDEX_SCHEMA_VERSION=${INDEX_SCHEMA_VERSION:-1} jest -c jest.config.ts --runInBand",
         "test:e2e": "chmod +x ./shell/local_valkey.sh && REDIS_HOST=127.0.0.1 REDIS_PORT=6380 ./shell/local_valkey.sh && (export NETWORK=preview REDIS_HOST=127.0.0.1 REDIS_PORT=6380 UTXO_SCHEMA_VERSION=${UTXO_SCHEMA_VERSION:-1} INDEX_SCHEMA_VERSION=${INDEX_SCHEMA_VERSION:-1}; jest -c jest.e2e.config.ts --forceExit --runInBand)",
