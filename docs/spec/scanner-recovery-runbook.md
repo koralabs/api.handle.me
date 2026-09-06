@@ -28,6 +28,29 @@
 3. For `undo`, allow canonical rollback reconciliation to complete; do not edit UTxOs directly.
 4. If the intersection is no longer retained or reconciliation cannot establish a canonical cursor, restore a verified pre-fork snapshot and replay through `WatchTx`.
 
+### Read-only Demeter parity monitor
+
+Run the bounded parity monitor during rollout and soak periods:
+
+```bash
+NETWORK=preview \
+DEMETER_UTXORPC_ENDPOINT=... \
+DEMETER_UTXORPC_API_KEY=... \
+BLOCKFROST_API_KEY=... \
+PARITY_CONFIRMATIONS=20 \
+PARITY_BLOCK_COUNT=100 \
+npm run monitor:demeter-parity
+```
+
+The monitor starts from a Blockfrost-confirmed intersection, follows the same two Handle policies
+through Demeter, and compares every block identity, matching transaction set and order, input and
+reference-input references, output addresses/assets/datums/reference scripts, mint and burn
+quantities, and metadata against the legacy Blockfrost scanner representation. It is read-only and
+exits with status 2 on a parity mismatch. A window with no matching Handle transaction proves block
+coverage but not transaction-payload conversion; retain the report and continue monitoring until a
+matching transaction is observed. Verify `/mpt-root` separately to compare the scanner projection
+against the chain-published root.
+
 ---
 
 ### Cause: Scanner worker timing out (15 min)
