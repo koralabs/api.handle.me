@@ -1,6 +1,6 @@
 {
     "name": "handles-public-api",
-    "version": "1.14.5",
+    "version": "1.14.6",
     "description": "A downloadable and containerized decentralized API for Handles",
     "main": "index.js",
     "repository": "https://github.com/koralabs/handles-public-api.git",
@@ -13,6 +13,7 @@
         "api": "tsx -r tsconfig-paths/register -r dotenv/config express.ts",
         "readonly": "ENABLE_OGMIOS_SCANNING=false USE_LAMBDA_SCANNER=false PORT=3142 tsx -r tsconfig-paths/register -r dotenv/config express.ts",
         "bootstrap:apis": "tsx -r tsconfig-paths/register -r dotenv/config scripts/bootstrap-from-apis.ts",
+        "monitor:demeter-parity": "tsx scripts/monitor-demeter-parity.ts",
         "test": "npm run test:unit && npm run test:e2e",
         "test:unit": "UTXO_SCHEMA_VERSION=${UTXO_SCHEMA_VERSION:-1} INDEX_SCHEMA_VERSION=${INDEX_SCHEMA_VERSION:-1} jest -c jest.config.ts --runInBand",
         "test:e2e": "chmod +x ./shell/local_valkey.sh && REDIS_HOST=127.0.0.1 REDIS_PORT=6380 ./shell/local_valkey.sh && (export NETWORK=preview REDIS_HOST=127.0.0.1 REDIS_PORT=6380 UTXO_SCHEMA_VERSION=${UTXO_SCHEMA_VERSION:-1} INDEX_SCHEMA_VERSION=${INDEX_SCHEMA_VERSION:-1}; jest -c jest.e2e.config.ts --forceExit --runInBand)",
@@ -26,9 +27,10 @@
     "overrides": {
         "diff": "4.0.4",
         "lodash": "4.18.1",
-        "qs": "6.15.2",
+        "qs": "6.16.0",
         "minimatch": "10.2.5",
         "protobufjs": "7.6.5",
+        "undici": "6.28.1",
         "@protobufjs/utf8": "1.1.1",
         "path-to-regexp": "0.1.13",
         "picomatch": "2.3.2",
@@ -36,7 +38,8 @@
         "body-parser": "1.20.6",
         "brace-expansion": "5.0.9",
         "ip-address": "10.3.1",
-        "nanoid": "3.3.18"
+        "nanoid": "3.3.18",
+        "browserslist": "4.28.9"
     },
     "dependencies": {
         "@aiken-lang/merkle-patricia-forestry": "^1.3.1",
@@ -44,6 +47,7 @@
         "@cardano-ogmios/schema": "^6.11.0",
         "@koralabs/kora-labs-common": "^6.9.2",
         "@stricahq/cardano-codec": "^2.0.4",
+        "@utxorpc/sdk": "0.8.2",
         "@valkey/valkey-glide": "^2.4.1",
         "@vendia/serverless-express": "^4.12.6",
         "bech32": "^2.0.0",

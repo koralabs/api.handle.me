@@ -6,6 +6,7 @@ import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { isRegistryLabel } from '../utils/assetLabelRegistry';
 import { getHandlesStore } from '../stores/redis';
 import { getApiMptRebuildPendingKey, getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
+import { DemeterDeadlineError, DemeterRollbackError, isDemeterScannerEnabled, scanDemeterBlocks } from '../services/demeter/utxorpc.service';
 import { discoverHandleTxsBySlotRange, isMaestroConfigured, MaestroDiscoveryResult } from '../services/maestro/policy-txs.service';
 import { blockfrostApiCall, buildUTxOsFromKoiosTxs, defaultKoiosSettings, fetchBlockfrostDatumCbor, fetchBlockfrostTxHashes, fetchBlockfrostTxInfo, fetchKoios, fetchPaginatedResults } from '../utils/helpers';
 import { buildAndStoreMptRootHash, getChainMintingDataRootHash } from '../utils/snapshotVerification';
@@ -1061,6 +1062,84 @@ const clearStaleLockIfNeeded = (metrics: ReturnType<HandlesRepository['getMetric
     return true;
 };
 
+const processScannerBlock = (
+    block: { id: string; slot: number },
+    blockTxList: KoiosTxInfo[],
+    tip: { hash: string; slot: number },
+    datumInfoByHash = new Map<string, string>()
+) => {
+    const builtUTxOs = buildUTxOsFromKoiosTxs(blockTxList, datumInfoByHash);
+    const handleNames = builtUTxOs.flatMap((u) => u.handles?.flatMap((h) => h[1].map((assetName) => getHandleNameFromAssetName(assetName).name)) ?? []) ?? [];
+    Logger.local(`Processing block ${block.id} at slot ${block.slot} with ${builtUTxOs.length} UTxOs containing ${handleNames.join(', ')} handles from ${blockTxList.length} transactions`);
+
+    const mainBurnNames = new Set<string>();
+    const labelBurns = new Map<string, Set<string>>();
+    blockTxList.flatMap((tx) => tx.assets_minted ?? [])
+        .filter((asset) => BigInt(asset.quantity) < 0n && HANDLE_POLICIES.contains(NETWORK as Network, asset.policy_id))
+        .forEach((asset) => {
+            const { name, assetLabel, isCip67 } = getHandleNameFromAssetName(asset.asset_name);
+            if (isRegistryLabel(assetLabel)) {
+                const labels = labelBurns.get(name) ?? new Set<string>();
+                labels.add(`${assetLabel}`.toLowerCase());
+                labelBurns.set(name, labels);
+            } else if (!isCip67 || asset.asset_name.startsWith(AssetNameLabel.LBL_222) || asset.asset_name.startsWith(AssetNameLabel.LBL_000)) {
+                mainBurnNames.add(name);
+            }
+        });
+
+    const burnHandles = (store.pipeline(() => {
+        mainBurnNames.forEach((name) => handlesRepo.getHandle(name));
+    }) as (StoredHandle | undefined)[]).filter((burned): burned is StoredHandle => !!burned);
+
+    store.pipeline(() => {
+        burnHandles.forEach((burned) => handlesRepo.removeHandle(burned));
+    });
+
+    if (labelBurns.size) {
+        store.pipeline(() => {
+            labelBurns.forEach((labels, name) => {
+                labels.forEach((label) => handlesRepo.removeHandleLabel(name, label));
+            });
+        });
+    }
+
+    handlesRepo.addUTxOsWithMintDataAndUpdateIndexes(builtUTxOs);
+
+    const spentUtxoIds = blockTxList.flatMap((tx) => tx.inputs).map((input) => `${input.tx_hash}#${input.tx_index}`);
+    if (spentUtxoIds.length) handlesRepo.removeUTxOs(spentUtxoIds);
+
+    handlesRepo.setMetrics({
+        currentSlot: block.slot,
+        currentBlockHash: block.id,
+        tipBlockHash: tip.hash,
+        lastSlot: tip.slot
+    });
+    store.recordScannedBlock(block.slot, block.id);
+};
+
+const scanWithDemeter = async (metrics: ReturnType<HandlesRepository['getMetrics']>, scanBreadcrumb: (step: string, extra?: string) => void) => {
+    const start = {
+        slot: Number(metrics.currentSlot ?? 0),
+        hash: `${metrics.currentBlockHash ?? ''}`
+    };
+    if (!start.slot || !start.hash) {
+        throw new Error('Demeter scan requires a verified snapshot cursor with currentSlot and currentBlockHash');
+    }
+    const policies = Object.keys(HANDLE_POLICIES[NETWORK.toLowerCase() as Network] ?? {});
+    const timeoutMs = Math.max(1_000, scannerDeadline - Date.now() - 5_000);
+    scanBreadcrumb('demeterWatch_start', `from=${start.slot} policies=${policies.length}`);
+    const tip = await scanDemeterBlocks(start, policies, timeoutMs, async (demeterBlock, targetTip) => {
+        checkDeadline(`demeter block ${demeterBlock.ref.height}`);
+        processScannerBlock(
+            { id: demeterBlock.ref.hash, slot: demeterBlock.ref.slot },
+            demeterBlock.transactions,
+            { hash: targetTip.hash, slot: targetTip.slot }
+        );
+    });
+    scanBreadcrumb('demeterWatch_done', `tip=${tip.slot}`);
+    store.trimScannedBlocksToRecent(3000);
+};
+
 const scan = async () => {
     Logger.local(`Running scan...`);
     const metrics = handlesRepo.getMetrics();
@@ -1075,6 +1154,11 @@ const scan = async () => {
     // Is scanning fast enough to do this without MAX_TIP_SLOTS? Or a much higher one?
     handlesRepo.setMetrics({ lockLambdas: LockedLambdaReason.SCANNING, lockLambdasTimestamp: Date.now() });
     try {
+        if (isDemeterScannerEnabled()) {
+            await scanWithDemeter(metrics, scanBreadcrumb);
+            return;
+        }
+
         scanBreadcrumb('fetchPaginatedResults_start', `from=${metrics.currentBlockHash}`);
         let bResp: { hash: string; slot: number; confirmations: number; tx_count?: number }[] = await fetchPaginatedResults(
             `blocks/${metrics.currentBlockHash}/next`,
@@ -1263,74 +1347,13 @@ const scan = async () => {
                     });
                     return;
                 }
-                const block = { id: b.hash, slot: b.slot, confirmations: b.confirmations };
                 const blockTxList = txInfoByBlockHash.get(b.hash) ?? [];
-                const builtUTxOs = buildUTxOsFromKoiosTxs(blockTxList, datumInfoByHash);
-
-                const handleNames = builtUTxOs.flatMap((u) => u.handles?.flatMap((h) => h[1].map((assetName) => getHandleNameFromAssetName(assetName).name)) ?? []) ?? [];
-                Logger.local(`Processing block ${block.id} at slot ${block.slot} with ${builtUTxOs.length} UTxOs containing ${handleNames.join(', ')} handles from ${blockTxList.length} transactions`);
-
-                builtUTxOs.forEach((utxo) => {
-                    // ********** BURNS ************* //
-                    // Classify each burned asset: a 222/000 (or legacy/100) burn removes the handle
-                    // KEY; a tracked label-asset (001-004) burn only drops that label from the
-                    // handle's registry value, leaving the key in place (spec: the key lives until
-                    // the 222/000 is burnt). getHandleNameFromAssetName returns assetLabel as the raw
-                    // 4-byte CIP-67 prefix, so we classify directly.
-                    const mainBurnNames: string[] = [];
-                    const labelBurns: { name: string; label: string }[] = [];
-                    utxo.burn
-                        ?.flatMap((b) => b[1])
-                        .forEach((hex) => {
-                            const { name, assetLabel } = getHandleNameFromAssetName(hex);
-                            if (isRegistryLabel(assetLabel)) labelBurns.push({ name, label: `${assetLabel}`.toLowerCase() });
-                            else mainBurnNames.push(name);
-                        });
-
-                    const burnHandles = (store.pipeline(() => {
-                        mainBurnNames.forEach((name) => {
-                            handlesRepo.getHandle(name);
-                        });
-                    }) as (StoredHandle | undefined)[]).filter((burned): burned is StoredHandle => !!burned);
-
-                    const uniqueBurnHandles = Array.from(new Map(burnHandles.map((handle) => [handle.name, handle])).values());
-                    store.pipeline(() => {
-                        uniqueBurnHandles.forEach((burned) => {
-                            handlesRepo.removeHandle(burned);
-                        });
-                    });
-
-                    // Label-only burns: drop the label from the surviving handle. If the same tx also
-                    // burned its 222/000, removeHandle above already deleted the key and this re-read
-                    // no-ops — so ordering is safe either way.
-                    if (labelBurns.length) {
-                        store.pipeline(() => {
-                            labelBurns.forEach(({ name, label }) => {
-                                handlesRepo.removeHandleLabel(name, label);
-                            });
-                        });
-                    }
-                });
-
-                // ********* UPDATES ************ //
-                handlesRepo.addUTxOsWithMintDataAndUpdateIndexes(builtUTxOs);
-
-                // ******** SPENT UTxOs *********** //
-                const spentUtxoIds = blockTxList.flatMap((tx) => tx.inputs).map((input) => `${input.tx_hash}#${input.tx_index}`);
-                if (spentUtxoIds.length) handlesRepo.removeUTxOs(spentUtxoIds);
-
-                handlesRepo.setMetrics({
-                    currentSlot: block.slot,
-                    currentBlockHash: block.id,
-                    tipBlockHash,
-                    lastSlot
-                });
-
-                // Record the block we just processed, independent of whether it had handle txs.
-                // processRollback's missed-block drift check relies on this ledger being a true
-                // record of what we've scanned — deriving it from stored UTxO blockHashes would
-                // miss the large fraction of blocks with zero handle activity.
-                store.recordScannedBlock(block.slot, block.id);
+                processScannerBlock(
+                    { id: b.hash, slot: b.slot },
+                    blockTxList,
+                    { hash: tipBlockHash, slot: lastSlot },
+                    datumInfoByHash
+                );
             }
         }
         // Keep enough history to cover the deepest rollback check window with margin. 3000
@@ -1344,6 +1367,23 @@ const scan = async () => {
                 category: LogCategory.INFO,
                 event: 'scannerLambda.deadlineReached'
             });
+            return;
+        }
+        if (error instanceof DemeterDeadlineError) {
+            Logger.log({
+                message: `${error.message}. Pausing this invocation — next invocation will resume from the last complete block.`,
+                category: LogCategory.INFO,
+                event: 'scannerLambda.demeterDeadlineReached'
+            });
+            return;
+        }
+        if (error instanceof DemeterRollbackError) {
+            Logger.log({
+                message: `${error.message}. Entering canonical rollback reconciliation.`,
+                category: LogCategory.WARN,
+                event: 'scannerLambda.demeterRollback'
+            });
+            await processRollback({ currentSlot: Number(metrics.currentSlot ?? 0), rollbackOffset: 2160, suppressNotify: true });
             return;
         }
         if (isRetriableKoiosError(error)) {
@@ -1549,16 +1589,23 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
         }
 
         logBreadcrumb('rollback_check_start');
-        const postScanMetrics = handlesRepo.getMetrics();
-        const slotsBelow = Number(postScanMetrics.lastSlot ?? 0) - Number(postScanMetrics.currentSlot ?? 0);
-        if (slotsBelow > ROLLBACK_20_SLOT_WINDOW) {
-            Logger.log({
-                message: `Scanner is ${slotsBelow} slots behind tip, skipping rollback check until caught up`,
-                category: LogCategory.INFO,
-                event: 'scannerLambda.rollbackCheckDeferred'
-            });
+        if (isDemeterScannerEnabled()) {
+            // WatchTx reports canonical undo events and validates the persisted intersection.
+            // Running the legacy provider comparison as well would reintroduce the indexer
+            // disagreement this source is intended to remove.
+            logBreadcrumb('rollback_check_demeter_stream_owned');
         } else {
-            await checkRollback();
+            const postScanMetrics = handlesRepo.getMetrics();
+            const slotsBelow = Number(postScanMetrics.lastSlot ?? 0) - Number(postScanMetrics.currentSlot ?? 0);
+            if (slotsBelow > ROLLBACK_20_SLOT_WINDOW) {
+                Logger.log({
+                    message: `Scanner is ${slotsBelow} slots behind tip, skipping rollback check until caught up`,
+                    category: LogCategory.INFO,
+                    event: 'scannerLambda.rollbackCheckDeferred'
+                });
+            } else {
+                await checkRollback();
+            }
         }
         logBreadcrumb('rollback_check_done');
 

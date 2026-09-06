@@ -5,19 +5,59 @@
 ### Symptom: API returns `status: storage_behind` and slot not advancing
 
 **Diagnosis:**
-1. Check CloudWatch logs for `api-scanner` — look for `NOTIFY` or `ERROR` category messages
-2. Check metrics via valkey-utility: `lockLambdas`, `currentSlot`, `currentBlockHash`
-3. Check if Lambda is timing out: look for `platform.report` with `status: timeout`
+1. Check box logs with `kora-logs <env> api.handle.me --pattern 'scannerLambda|ERROR|NOTIFY' --days 1`
+2. Check `/health` and Valkey metrics: `lockLambdas`, `currentSlot`, `currentBlockHash`, `lastSlot`
+3. Check the worker's box deployment `logTail` and systemd/Fn timeout messages
 
 **Common causes and fixes:**
 
 ---
 
-### Cause: Scanner Lambda timing out (15 min)
+### Cause: Demeter UTxORPC stream failure
 
 **Symptoms:**
-- CloudWatch shows repeated `scannerLambda.lockedTooLong` warnings
-- `platform.report` shows `status: timeout`, `durationMs: 900000`
+- `scannerLambda.error`, `scannerLambda.demeterDeadlineReached`, or `scannerLambda.demeterRollback`
+- `currentSlot` remains on the last complete block
+- Logs mention a missing intersection, non-contiguous block height, conflicting tip hash, or missing payload field
+
+**Root cause:** In Demeter mode the scanner intentionally fails closed. It never falls back to another provider because advancing on two providers' conflicting views can permanently omit transactions. Matching blocks are buffered until the next block begins, so the scanner normally remains one block behind `ReadTip`.
+
+**Recovery:**
+1. Confirm `SCANNER_CHAIN_SOURCE=demeter`, `DEMETER_UTXORPC_ENDPOINT`, and `DEMETER_UTXORPC_API_KEY` are present in the function config without printing their values.
+2. Verify `ReadTip` succeeds and that `currentBlockHash/currentSlot` is a retained Demeter intersection.
+3. For `undo`, allow canonical rollback reconciliation to complete; do not edit UTxOs directly.
+4. If the intersection is no longer retained or reconciliation cannot establish a canonical cursor, restore a verified pre-fork snapshot and replay through `WatchTx`.
+
+### Read-only Demeter parity monitor
+
+Run the bounded parity monitor during rollout and soak periods:
+
+```bash
+NETWORK=preview \
+DEMETER_UTXORPC_ENDPOINT=... \
+DEMETER_UTXORPC_API_KEY=... \
+BLOCKFROST_API_KEY=... \
+PARITY_CONFIRMATIONS=20 \
+PARITY_BLOCK_COUNT=100 \
+npm run monitor:demeter-parity
+```
+
+The monitor starts from a Blockfrost-confirmed intersection, follows the same two Handle policies
+through Demeter, and compares every block identity, matching transaction set and order, input and
+reference-input references, output addresses/assets/datums/reference scripts, mint and burn
+quantities, and metadata against the legacy Blockfrost scanner representation. It is read-only and
+exits with status 2 on a parity mismatch. A window with no matching Handle transaction proves block
+coverage but not transaction-payload conversion; retain the report and continue monitoring until a
+matching transaction is observed. Verify `/mpt-root` separately to compare the scanner projection
+against the chain-published root.
+
+---
+
+### Cause: Scanner worker timing out (15 min)
+
+**Symptoms:**
+- Box logs show repeated `scannerLambda.lockedTooLong` warnings
+- Worker runtime logs show a timeout near 900 seconds
 - `lockLambdas: SCANNING` or `lockLambdas: ROLLBACK` in metrics
 - Slot not advancing
 
@@ -26,7 +66,7 @@
 The scanner falls back to Blockfrost when Koios calls fail. If both providers are down or the head points to an orphaned block, `processRollback`'s hash-set orphan detection identifies orphaned UTxOs and repairs only the affected handles. Drift candidates are scoped via the `scanned_blocks` ZSET (blocks canonical has that we never processed); if that ledger is missing or incomplete (e.g., cold boot after a reimport from a pre-`scannedBlocks` snapshot), the rollback check may either false-positive (extra `tx_info` fetches for canonical blocks we correctly scanned as handle-free) or miss genuine missed-block drift for a few scan cycles until the ledger rebuilds. This is self-healing — the scan loop writes one ledger entry per processed block and the behavior converges quickly.
 
 **Recovery:**
-1. Check breadcrumb logs in CloudWatch — they show exactly which step hung
+1. Check breadcrumb logs with `kora-logs` — they show exactly which step hung
 2. If the scanner head is stuck on an orphaned block, the hash-set rollback should self-recover on the next invocation
 3. If self-recovery is not working, clear metrics via valkey-utility to trigger a snapshot reimport:
    ```json

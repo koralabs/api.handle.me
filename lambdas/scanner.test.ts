@@ -4,16 +4,19 @@ import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { getHandlesStore, RedisHandlesStore } from '../stores/redis';
 import { getApiMptRebuildPendingKey, getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
 import * as helpers from '../utils/helpers';
+import * as demeterService from '../services/demeter/utxorpc.service';
 import type { KoiosTxInfo } from '../interfaces/provider.interface';
 
 jest.mock('../utils/helpers');
 jest.mock('../stores/redis');
 jest.mock('../repositories/handlesRepository');
 jest.mock('../services/ogmios/utils');
+jest.mock('../services/demeter/utxorpc.service');
 jest.mock('../services/maestro/policy-txs.service');
 
 import * as maestroService from '../services/maestro/policy-txs.service';
 const mockedMaestro = maestroService as jest.Mocked<typeof maestroService>;
+const mockedDemeter = demeterService as jest.Mocked<typeof demeterService>;
 
 const mockedHelpers = helpers as jest.Mocked<typeof helpers>;
 const mockedGetHandleNameFromAssetName = getHandleNameFromAssetName as jest.Mock;
@@ -190,6 +193,7 @@ const setup = ({ whitelistedApiKeys = 'allowed-key' }: { whitelistedApiKeys?: st
     mockedHelpers.fetchBlockfrostTxHashes.mockResolvedValue([] as never);
     mockedHelpers.fetchBlockfrostTxInfo.mockResolvedValue({ tx_hash: '', block_hash: '', block_height: 0, absolute_slot: 0, inputs: [], outputs: [], assets_minted: [], metadata: {}, reference_inputs: [] } as never);
     mockedHelpers.fetchBlockfrostDatumCbor.mockResolvedValue(null as never);
+    mockedDemeter.isDemeterScannerEnabled.mockReturnValue(false);
     mockedGetHandleNameFromAssetName.mockImplementation((assetName: string) => ({
         name: assetName,
         ownerTokenHex: assetName,
@@ -2408,6 +2412,54 @@ describe('Scanner lambda unit tests', () => {
     // NOTE: datum_info Blockfrost fallback is tested via fetchBlockfrostDatumCbor in helpers.blockfrost-fallback.test.ts.
     // A scanner-level datum_info fallback test is impractical here because asyncForEach in kora-labs-common
     // creates a dangling rejected promise during its internal delay, which triggers Jest's unhandled rejection detection.
+
+    // ===== Demeter UTxORPC integration =====
+    describe('Demeter UTxORPC integration', () => {
+        it('applies a complete block and detects a pure burn directly from transaction mint data', async () => {
+            // Invariant: the selected Demeter path updates outputs, spent inputs, burns, metrics, and scanned-block history in one ordered block commit.
+            // Failure caught: deriving burns only from tracked outputs would miss this pure burn because the burned asset has no output.
+            const { handlesRepo, pipelineResponses, scannerModule, store } = setup();
+            const trackedPolicy = 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a';
+            const builtUtxo = buildUtxo({ id: 'new_tx#0', slot: 150, blockHash: 'demeter_block', assetName: 'new-handle' });
+            const burnedHandle = { name: 'burned-handle', amount: 1 };
+            pipelineResponses.push([burnedHandle]);
+            mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([builtUtxo] as never);
+            mockedDemeter.isDemeterScannerEnabled.mockReturnValue(true);
+            mockedDemeter.scanDemeterBlocks.mockImplementationOnce(async (start, policies, _timeout, onBlock) => {
+                expect(start).toEqual({ slot: 130, hash: 'start_hash' });
+                expect(policies).toContain(trackedPolicy);
+                const tip = { slot: 170, hash: 'demeter_tip' };
+                await onBlock({
+                    ref: { slot: 150, hash: 'demeter_block', height: 99 },
+                    transactions: [{
+                        block_hash: 'demeter_block', block_height: 99, absolute_slot: 150,
+                        reference_inputs: [], outputs: [], inputs: [{ tx_hash: 'spent_tx', tx_index: 4 }],
+                        tx_hash: 'new_tx',
+                        assets_minted: [{ decimals: 0, quantity: '-1', policy_id: trackedPolicy, asset_name: '6275726e65642d68616e646c65', fingerprint: '' }],
+                        metadata: {}
+                    }]
+                }, tip);
+                return tip;
+            });
+            mockedGetHandleNameFromAssetName.mockReturnValue({
+                name: 'burned-handle', ownerTokenHex: '', isCip67: false, assetLabel: null
+            });
+
+            await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+            expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
+            expect(handlesRepo.removeHandle).toHaveBeenCalledWith(burnedHandle);
+            expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenCalledWith([builtUtxo]);
+            expect(handlesRepo.removeUTxOs).toHaveBeenCalledWith(['spent_tx#4']);
+            expect(handlesRepo.setMetrics).toHaveBeenCalledWith({
+                currentSlot: 150,
+                currentBlockHash: 'demeter_block',
+                tipBlockHash: 'demeter_tip',
+                lastSlot: 170
+            });
+            expect(store.recordScannedBlock).toHaveBeenCalledWith(150, 'demeter_block');
+        });
+    });
 
     // ===== Maestro discovery integration =====
     describe('Maestro discovery integration', () => {

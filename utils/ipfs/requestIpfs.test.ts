@@ -85,6 +85,95 @@ describe('requestIpfs tests', () => {
         });
     });
 
+    it('should return non-200 response bodies without CBOR validation', async () => {
+        mockIpfsRequest((response) => {
+            response.statusCode = 404;
+            response.emit('data', Buffer.from('5b2266435c34567800', 'hex'));
+            response.emit('end');
+        });
+
+        const result = await requestIpfs('https://ipfs.io/ipfs/not-found');
+
+        expect(result).toEqual({
+            statusCode: 404,
+            cbor: '5b2266435c34567800'
+        });
+    });
+
+    it('should accept valid indefinite CBOR byte strings', async () => {
+        mockIpfsRequest((response) => {
+            response.emit('data', Buffer.from('5f4101ff', 'hex'));
+            response.emit('end');
+        });
+
+        const result = await requestIpfs('https://ipfs.io/ipfs/indefinite-bytes');
+
+        expect(result).toEqual({
+            statusCode: 200,
+            cbor: '5f4101ff'
+        });
+    });
+
+    it('should reject malformed indefinite CBOR string chunks', async () => {
+        mockIpfsRequest((response) => {
+            response.emit('data', Buffer.from('5f8101ff', 'hex'));
+            response.emit('end');
+        });
+
+        const result = await requestIpfs('https://ipfs.io/ipfs/bad-indefinite-bytes');
+
+        expect(result).toEqual({
+            statusCode: 422,
+            error: expect.stringContaining('invalid indefinite string chunk')
+        });
+    });
+
+    it('should reject invalid indefinite scalars and tags', async () => {
+        mockIpfsRequest((response) => {
+            response.emit('data', Buffer.from('1f', 'hex'));
+            response.emit('end');
+        });
+
+        await expect(requestIpfs('https://ipfs.io/ipfs/indefinite-scalar')).resolves.toEqual({
+            statusCode: 422,
+            error: expect.stringContaining('invalid indefinite scalar')
+        });
+
+        jest.restoreAllMocks();
+        mockIpfsRequest((response) => {
+            response.emit('data', Buffer.from('df00ff', 'hex'));
+            response.emit('end');
+        });
+
+        await expect(requestIpfs('https://ipfs.io/ipfs/indefinite-tag')).resolves.toEqual({
+            statusCode: 422,
+            error: expect.stringContaining('invalid indefinite tag')
+        });
+    });
+
+    it('should reject unterminated and deeply nested CBOR collections', async () => {
+        mockIpfsRequest((response) => {
+            response.emit('data', Buffer.from('9f01', 'hex'));
+            response.emit('end');
+        });
+
+        await expect(requestIpfs('https://ipfs.io/ipfs/unterminated-array')).resolves.toEqual({
+            statusCode: 422,
+            error: expect.stringContaining('unterminated indefinite array')
+        });
+
+        jest.restoreAllMocks();
+        mockIpfsRequest((response) => {
+            response.emit('data', Buffer.from(`${'81'.repeat(66)}00`, 'hex'));
+            response.emit('end');
+        });
+
+        await expect(requestIpfs('https://ipfs.io/ipfs/nested-too-deeply')).resolves.toEqual({
+            statusCode: 422,
+            error: expect.stringContaining('nested too deeply')
+        });
+    });
+
     it('should resolve error when request emits an error', async () => {
         jest.spyOn(https, 'request').mockImplementation((...args: any[]) => {
             const request = new EventEmitter() as EventEmitter & { end: () => void };

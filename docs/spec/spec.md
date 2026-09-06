@@ -27,9 +27,11 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - API responses are compressed with Express `compression` middleware when clients send supported `Accept-Encoding` headers (for example `br` or `gzip`).
 - Runtime entrypoint details for local Node, container, and Lambda modes are captured in `docs/spec/runtime-entrypoints.md`.
 - Scanning mode:
-  - Default: Ogmios WebSocket scanner (`services/ogmios/ogmios.service.ts`)
-  - Optional local fallback in dev/test: scanner lambda loop (`USE_LAMBDA_SCANNER=true`)
-- Lambda mode (`lambdas/api.ts`) forces `ENABLE_OGMIOS_SCANNING=false` and serves API only.
+  - Local/container default: Ogmios WebSocket scanner (`services/ogmios/ogmios.service.ts`).
+  - Scheduled scanner default: the legacy Blockfrost/Maestro/Koios path.
+  - Scheduled scanner opt-in: Demeter UTxORPC `ReadTip` + policy-filtered `WatchTx` when `SCANNER_CHAIN_SOURCE=demeter`.
+  - Optional local fallback in dev/test: scanner lambda loop (`USE_LAMBDA_SCANNER=true`).
+- Function mode (`lambdas/api.ts`) forces `ENABLE_OGMIOS_SCANNING=false` and serves API only; the scanner is a separate box worker.
 
 ## Data Freshness Contract
 - API returns `200` when store is caught up.
@@ -177,7 +179,12 @@ API transition rule:
 - See `docs/spec/runtime-entrypoints.md` for exact mode behavior and packaging notes.
 
 ## Scanner and Rollback
-- Ogmios scanner processes each block transaction synchronously, updating UTxOs and indexes in order.
+- Ogmios and scheduled scanners process each block transaction synchronously, updating UTxOs and indexes in order.
+- Demeter mode uses one `ReadTip` boundary and a server-side `WatchTx` predicate containing both Handle policies. `movesAsset` matches resolved inputs, outputs, and mint/burn activity, so transfers away from tracked outputs and pure burns are not omitted.
+- `WatchTx` emits one event per matching transaction but no explicit end-of-block event for matching blocks. The scanner therefore buffers a block until the first event from the following block. It deliberately stops before the `ReadTip` boundary, leaving at most one complete block for the next invocation rather than committing a possibly partial tip block.
+- Every streamed block is represented: a matching block has `apply` events and a non-matching block has `idle`. Block heights must be contiguous; duplicate events are deduplicated, while a gap, conflicting tip hash, missing field, unsupported script language, invalid intersection, or provider error halts without fallback or cursor advancement.
+- Failed transactions are discarded. Successful transactions preserve stream order, resolved spent-input references, datum CBOR, metadata label 721, and Plutus V1/V2/V3 reference-script types before entering the existing repository mutation path.
+- A `WatchTx` `undo` never reverses repository mutations directly. It halts streaming and invokes the existing canonical rollback reconciliation with the full 2,160-block protocol window. Snapshot reimport remains the recovery path when the persisted intersection is unavailable.
 - Before any per-UTxO handle updates, scanners normalize and preload minting data for the full block/scan batch so Handle (`222`) and Virtual SubHandle (`000`) mint records are available regardless of tx/output ordering.
 - Minting data is persisted once per batch and then reused during per-UTxO updates to avoid duplicate mint writes while keeping the same ordering guarantees.
 - Missing minting data during handle index updates is treated as a hard failure (scanner invariant), not a soft fallback.
@@ -202,7 +209,7 @@ API transition rule:
 - `block_txs` and `asset_utxos` calls use retry+backoff on transient provider failures (including HTTP 429) before failing hard.
 - On handled Koios retry/split failures, scanner emits local `INFO` logs with batch sizing/hash context and a token-redacted curl template to reproduce request bodies for provider debugging.
 - Scanner lambda supports a function-url reindex shortcut (`/reindex` path, `reindex=true` query, or JSON body `{"reindex": true}`) and requires a whitelisted `api-key` from `WHITELISTED_API_KEYS`. Reindex and repair shortcuts must acquire the scanner lease like any other writer; if the lease is held by an active scan, the shortcut returns HTTP `409 Conflict` and the operator retries after the 60s lease TTL. This prevents shortcut paths from racing with a live cron scan on the same Valkey keys.
-- Burn processing in scanner is idempotent: missing/previously-removed burn handles are ignored so replaying the same block does not fail.
+- Burn processing reads negative quantities directly from each transaction's mint field rather than deriving burns from surviving tracked outputs. Pure burns are therefore applied even when the transaction creates no Handle-policy output. Processing remains idempotent: missing/previously-removed burn handles are ignored so replaying the same block does not fail.
 - Valkey pipeline execution must always clear pipeline state on errors; queue state is reset even when pipeline callbacks throw. Reentrant `pipeline()` calls throw `RedisHandlesStore.pipeline() called while another pipeline is already active` — the prior behavior silently reset the outer queue, dropping its commands without a signal.
 - `IndexNames.MINT` SADD members are canonically stringified (`utils/helpers.ts` `canonicalJsonStringify`) so block replay after a mid-block crash produces byte-identical members and SADD deduplicates correctly. Scanner replay safety depends on this — especially when the fallback path routes through Blockfrost metadata whose field ordering may differ from Koios.
 - Scanner `scan()` rebuilds and persists `mpt_root_hash` in a `finally` block, guarded by `endingCurrentSlot !== startingCurrentSlot`. Any exit path that advanced `currentSlot` (including `ScannerDeadlineError`, retriable Koios, rethrown errors) refreshes the stored root before unlocking. Failures in the rebuild itself are logged and do not block the lambda unlock.
