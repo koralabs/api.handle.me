@@ -1,4 +1,4 @@
-import { LockedLambdaReason, Logger } from '@koralabs/kora-labs-common';
+import { getDateStringFromSlot, LockedLambdaReason, Logger } from '@koralabs/kora-labs-common';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { fetchHealth } from '../services/ogmios/utils';
 import HealthController from './health.controller';
@@ -42,10 +42,41 @@ const buildRes = () => {
 };
 
 describe('HealthController', () => {
+    // The index is fresh unless a test says otherwise: the wall clock sits one minute after the fixture slot.
+    const freshAt = (slotDate: string | Date) => jest.spyOn(Date, 'now').mockReturnValue(new Date(slotDate).getTime() + 60_000);
+
     beforeEach(() => {
         jest.clearAllMocks();
         process.env.NETWORK = 'PREVIEW';
         delete process.env.ENABLE_OGMIOS_SCANNING;
+        freshAt(getDateStringFromSlot(baseMetrics.currentSlot));
+    });
+
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    it('returns storage_behind when the indexed slot is stale even though the scanner thinks it is caught up', async () => {
+        // Invariant: a stalled scanner is reported as behind. Failure caught: preprod's scanner froze with
+        // lastSlot == currentSlot, so isCaughtUp() stayed true and /health said "current" for 3.8 days.
+        // Negative control: removing the MAX_INDEX_AGE_MS check returns 200 "current" here.
+        jest.spyOn(Date, 'now').mockReturnValue(new Date(getDateStringFromSlot(baseMetrics.currentSlot)).getTime() + 16 * 60 * 1000);
+        MockedHandlesRepository.mockImplementation(() => ({ getMetrics: jest.fn().mockReturnValue(baseMetrics), isCaughtUp: jest.fn().mockReturnValue(true) }));
+        process.env.ENABLE_OGMIOS_SCANNING = 'false';
+        const res = buildRes();
+        await new HealthController().index(buildReq(), res, jest.fn());
+        expect(res.status).toHaveBeenCalledWith(202);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ status: 'storage_behind' }));
+    });
+
+    it('stays current within the freshness window', async () => {
+        jest.spyOn(Date, 'now').mockReturnValue(new Date(getDateStringFromSlot(baseMetrics.currentSlot)).getTime() + 14 * 60 * 1000);
+        MockedHandlesRepository.mockImplementation(() => ({ getMetrics: jest.fn().mockReturnValue(baseMetrics), isCaughtUp: jest.fn().mockReturnValue(true) }));
+        process.env.ENABLE_OGMIOS_SCANNING = 'false';
+        const res = buildRes();
+        await new HealthController().index(buildReq(), res, jest.fn());
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ status: 'current' }));
     });
 
     it('returns current status when storage is caught up and ogmios scanning is disabled', async () => {
@@ -90,6 +121,7 @@ describe('HealthController', () => {
         MockedHandlesRepository.mockImplementation(() => repoMock);
         process.env.ENABLE_OGMIOS_SCANNING = 'false';
         process.env.NETWORK = 'PREPROD';
+        freshAt('2026-03-09T00:54:34.000Z');
 
         const controller = new HealthController();
         const req = buildReq();

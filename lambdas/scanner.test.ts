@@ -2370,5 +2370,44 @@ describe('Scanner lambda unit tests', () => {
             });
             expect(store.recordScannedBlock).toHaveBeenCalledWith(150, 'demeter_block');
         });
+
+        it('rewinds an orphaned resume point to the canonical predecessor across a deep gap', async () => {
+            // Invariant: a cursor on a rolled-back fork recovers instead of retrying forever.
+            // Failure caught: preprod persisted block 6a998afe… (slot 134275878), the fork was rolled back,
+            // Demeter cancelled every WatchTx on that intersect, and the scanner stalled 3.8 days.
+            // Negative controls: without the canonical check the stream error escapes as a bootstrap failure;
+            // with the fixed 2160-block window, blocks/<tip-2160>/next starts above slot 130 and nothing rewinds.
+            const { handlesRepo, scannerModule, store } = setup();
+            mockedDemeter.isDemeterScannerEnabled.mockReturnValue(true);
+            mockedDemeter.scanDemeterBlocks.mockRejectedValueOnce(new Error('[canceled] http/2 stream closed with error code CANCEL (0x8)'));
+            // Tip is ~16k blocks (330k slots) past the cursor at slot 130.
+            mockedHelpers.blockfrostApiCall.mockImplementation(async (endpoint: string) => {
+                if (endpoint === 'blocks/start_hash') return { ok: false, status: 404, json: async () => ({}) } as never;
+                if (endpoint === 'blocks/latest') return { ok: true, status: 200, json: async () => ({ slot: 330130, height: 60000, hash: 'tip_hash' }) } as never;
+                return { ok: true, status: 200, json: async () => ({}) } as never;
+            });
+            store.getValuesFromOrderedSet.mockReturnValue([]);
+            mockedHelpers.fetchPaginatedResults.mockImplementation(async (endpoint: string) =>
+                (endpoint === `blocks/${60000 - 24750}/next` ? [{ hash: 'canonical_before', slot: 120 }, { hash: 'after', slot: 400 }] : []) as never
+            );
+
+            await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+
+            expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith(`blocks/${60000 - 24750}/next`);
+            expect(handlesRepo.setMetrics).toHaveBeenCalledWith(expect.objectContaining({ currentBlockHash: 'canonical_before', currentSlot: 120 }));
+        });
+
+        it('does not treat a stream error on a canonical resume point as a rollback', async () => {
+            // Failure caught: rewinding on every transient Demeter error would discard valid progress.
+            const { handlesRepo, scannerModule } = setup();
+            mockedDemeter.isDemeterScannerEnabled.mockReturnValue(true);
+            mockedDemeter.scanDemeterBlocks.mockRejectedValueOnce(new Error('[canceled] http/2 stream closed with error code CANCEL (0x8)'));
+            mockedHelpers.blockfrostApiCall.mockImplementation(async () => ({ ok: true, status: 200, json: async () => ({ slot: 130, height: 5000, hash: 'start_hash' }) }) as never);
+
+            await scannerModule.Internal.scan().catch(() => undefined);
+
+            expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
+            expect(handlesRepo.setMetrics).not.toHaveBeenCalledWith(expect.objectContaining({ currentBlockHash: expect.not.stringMatching(/^start_hash$/) }));
+        });
     });
 });

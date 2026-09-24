@@ -15,6 +15,11 @@ enum HealthStatus {
 
 const updatingLocks = new Set<LockedLambdaReason>([LockedLambdaReason.ROLLBACK, LockedLambdaReason.REINDEX]);
 
+// isCaughtUp() compares the index with the tip the scanner itself last observed, which freezes
+// when the scanner stalls (preprod reported "current" 3.8 days behind, 2026-09-21 -> 09-24).
+// Blocks average ~20s and the scanner runs every 2 min, so an index older than this is behind.
+const MAX_INDEX_AGE_MS = 15 * 60 * 1000;
+
 const getHealthSlotDate = (currentSlot: number) => {
     if (process.env.NETWORK?.toLowerCase() == 'preprod') {
         return new Date((1655683200 + currentSlot) * 1000);
@@ -53,7 +58,7 @@ class HealthController {
             };
 
             let status = HealthStatus.CURRENT;
-            if (!handleRepo.isCaughtUp()) {
+            if (!handleRepo.isCaughtUp() || Date.now() - new Date(slotDate).getTime() > MAX_INDEX_AGE_MS) {
                 status = HealthStatus.STORAGE_BEHIND;
             }
             const ogmiosScanningEnabled = process.env.ENABLE_OGMIOS_SCANNING?.toLocaleLowerCase() !== 'false';
