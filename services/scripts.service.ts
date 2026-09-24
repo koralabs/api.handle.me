@@ -226,7 +226,11 @@ export const getScriptsIndex = async (
     for (const { handle, family, latest } of ordered) {
         const unoptimizedCbor = await fetchUnoptimizedCbor(family, unoptimizedCborCache);
         const entry = buildScriptEntry(handle, family, latest, unoptimizedCbor);
-        if (entry) {
+        // Two contract handles can carry the same script (same address) — e.g. mid-migration when a
+        // new ordinal takes over the current proxy before the old ordinal moves back to its prior
+        // script. Entries are processed latest-first, so the first writer wins; a non-latest
+        // duplicate must never overwrite the latest entry or `latest=true` lookups find nothing.
+        if (entry && !(entry[0] in scripts)) {
             scripts[entry[0]] = entry[1];
         }
     }
