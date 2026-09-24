@@ -1116,6 +1116,16 @@ const processScannerBlock = (
     store.recordScannedBlock(block.slot, block.id);
 };
 
+// Blockfrost answers 404 for a block hash that is not on the canonical chain.
+const isCanonicalBlockHash = async (hash: string): Promise<boolean | undefined> => {
+    const response = await blockfrostApiCall(`blocks/${hash}`);
+    if (response.status === 404) return false;
+    return response.ok ? true : undefined;
+};
+
+// Mean Cardano block interval (active slot coefficient 0.05) — used only to size a rollback window.
+const AVERAGE_SLOTS_PER_BLOCK = 20;
+
 const scanWithDemeter = async (metrics: ReturnType<HandlesRepository['getMetrics']>, scanBreadcrumb: (step: string, extra?: string) => void) => {
     const start = {
         slot: Number(metrics.currentSlot ?? 0),
@@ -1127,14 +1137,25 @@ const scanWithDemeter = async (metrics: ReturnType<HandlesRepository['getMetrics
     const policies = Object.keys(HANDLE_POLICIES[NETWORK.toLowerCase() as Network] ?? {});
     const timeoutMs = Math.max(1_000, scannerDeadline - Date.now() - 5_000);
     scanBreadcrumb('demeterWatch_start', `from=${start.slot} policies=${policies.length}`);
-    const tip = await scanDemeterBlocks(start, policies, timeoutMs, async (demeterBlock, targetTip) => {
-        checkDeadline(`demeter block ${demeterBlock.ref.height}`);
-        processScannerBlock(
-            { id: demeterBlock.ref.hash, slot: demeterBlock.ref.slot },
-            demeterBlock.transactions,
-            { hash: targetTip.hash, slot: targetTip.slot }
-        );
-    });
+    let tip: Awaited<ReturnType<typeof scanDemeterBlocks>>;
+    try {
+        tip = await scanDemeterBlocks(start, policies, timeoutMs, async (demeterBlock, targetTip) => {
+            checkDeadline(`demeter block ${demeterBlock.ref.height}`);
+            processScannerBlock(
+                { id: demeterBlock.ref.hash, slot: demeterBlock.ref.slot },
+                demeterBlock.transactions,
+                { hash: targetTip.hash, slot: targetTip.slot }
+            );
+        });
+    } catch (error) {
+        // A resume point on an orphaned fork makes Demeter cancel WatchTx instead of emitting `undo`,
+        // so without this the scanner retries the same dead cursor forever (preprod stalled
+        // 2026-09-21 -> 09-24 while /health said "current"). Route it into canonical rollback.
+        if (!(error instanceof DemeterDeadlineError) && !(error instanceof DemeterRollbackError) && (await isCanonicalBlockHash(start.hash)) === false) {
+            throw new DemeterRollbackError({ slot: start.slot, hash: start.hash, height: 0 });
+        }
+        throw error;
+    }
     scanBreadcrumb('demeterWatch_done', `tip=${tip.slot}`);
     store.trimScannedBlocksToRecent(3000);
 };
@@ -1328,7 +1349,12 @@ const scan = async () => {
                 category: LogCategory.WARN,
                 event: 'scannerLambda.demeterRollback'
             });
-            await processRollback({ currentSlot: Number(metrics.currentSlot ?? 0), rollbackOffset: 2160, suppressNotify: true });
+            // The window must reach back to our cursor, or processRollback finds no canonical block at or
+            // below currentSlot and leaves an orphaned anchor in place (a deep gap exceeds 2160 blocks).
+            const rollbackSlot = Number(metrics.currentSlot ?? 0);
+            const chainTip = await getLatestChainTip();
+            const gapBlocks = Math.ceil((Math.max(0, Number(chainTip?.slot ?? 0) - rollbackSlot) / AVERAGE_SLOTS_PER_BLOCK) * 1.5);
+            await processRollback({ currentSlot: rollbackSlot, rollbackOffset: Math.max(2160, gapBlocks), suppressNotify: true });
             return;
         }
         if (isRetriableKoiosError(error)) {
