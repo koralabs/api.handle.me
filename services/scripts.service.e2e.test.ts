@@ -94,4 +94,37 @@ describe('scripts service e2e', () => {
         });
     });
 
+
+    it('keeps the latest entry when two contract handles carry the same script', async () => {
+        // Invariant: a `latest=true` persprx lookup always resolves while two ordinals share one script.
+        // Failure caught: the non-latest persprx1 (processed after persprx2) overwrote persprx2 at the shared
+        // address, leaving no latest persprx and failing every legacy mint during the mainnet repair window.
+        // Negative control: restoring the unconditional `scripts[entry[0]] = entry[1]` makes this return persprx1.
+        [
+            ['persprx1@handlecontract', previewRefAddresses[0], '4e4d2001'],
+            ['persprx2@handlecontract', previewRefAddresses[0], '4e4d2001']
+        ].forEach(([name, address, cbor]) => {
+            const handle = repo.Internal.buildHandle({
+                name,
+                hex: Buffer.from(name).toString('hex'),
+                policy: 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a',
+                handle_type: HandleType.NFT_SUBHANDLE,
+                utxo: `${Buffer.from(name).toString('hex').slice(0, 16)}#0`,
+                lovelace: 1,
+                resolved_addresses: { ada: address },
+                updated_slot_number: Date.now(),
+                script: { cbor, type: 'plutus_v2' }
+            });
+            repo.updateHolder(handle);
+            repo.save(handle);
+        });
+
+        const scripts = await getScriptsIndex(req, 'persprx');
+
+        expect(scripts[buildScriptAddress('4e4d2001')]).toEqual(expect.objectContaining({
+            handle: 'persprx2@handlecontract',
+            latest: true
+        }));
+    });
 });
+
