@@ -1,4 +1,4 @@
-import { IApiMetrics, LockedLambdaReason } from '@koralabs/kora-labs-common';
+import { getDateStringFromSlot, IApiMetrics, LockedLambdaReason } from '@koralabs/kora-labs-common';
 import request from 'supertest';
 import App from '../app';
 import { HealthResponseBody } from '../interfaces/ogmios.interfaces';
@@ -56,13 +56,17 @@ afterAll(async () => {
 describe('Health Routes Test', () => {
     let app: App | null;
     const originalEnableOgmiosScanning = process.env.ENABLE_OGMIOS_SCANNING;
+    let nowSpy: jest.SpyInstance;
     beforeEach(async () => {
         process.env.ENABLE_OGMIOS_SCANNING = '';
         lockLambdas = undefined;
         app = await new App().initialize();
+        // The fixture index (slot 50) is fresh: the wall clock sits one minute after it.
+        nowSpy = jest.spyOn(Date, 'now').mockReturnValue(new Date(getDateStringFromSlot(50)).getTime() + 60_000);
     });
 
     afterEach(() => {
+        nowSpy.mockRestore();
         jest.clearAllMocks();
         process.env.ENABLE_OGMIOS_SCANNING = originalEnableOgmiosScanning;
     });
