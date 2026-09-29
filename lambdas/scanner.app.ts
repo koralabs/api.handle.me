@@ -1102,9 +1102,15 @@ const processScannerBlock = (
         });
     }
 
-    handlesRepo.addUTxOsWithMintDataAndUpdateIndexes(builtUTxOs);
-
+    // A block's handle state is its NET effect: an output created and spent inside this block never
+    // survives it. Index handles only from surviving outputs — otherwise a handle moved by tx A and burned
+    // by tx B in the same block (chained migrate-then-burn, prep + burn) is re-created from A's
+    // already-spent output after its burn was applied above. Mint data still comes from EVERY output, so
+    // a handle minted and moved within one block keeps its mint metadata.
     const spentUtxoIds = blockTxList.flatMap((tx) => tx.inputs).map((input) => `${input.tx_hash}#${input.tx_index}`);
+    const spentInBlock = new Set(spentUtxoIds);
+    const mintingData = handlesRepo.addMintDataFromUTxOs(builtUTxOs);
+    handlesRepo.addUTxOsWithMintDataAndUpdateIndexes(builtUTxOs.filter((utxo) => !spentInBlock.has(utxo.id)), mintingData);
     if (spentUtxoIds.length) handlesRepo.removeUTxOs(spentUtxoIds);
 
     handlesRepo.setMetrics({
@@ -1649,6 +1655,7 @@ export const runSideload = async (mode: SideloadMode = 'auto') => {
 
 export const Internal = {
     checkRollback,
+    processScannerBlock,
     processRollback,
     processReindex,
     scan,
