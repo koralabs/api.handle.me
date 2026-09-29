@@ -325,4 +325,61 @@ describe('Scanner lambda e2e', () => {
         expect(repo.getMetrics().lockLambdas).toBe(LockedLambdaReason.UNLOCKED);
         expect(repo.getMetrics().tipBlockHash).toBe('koios_tip_hash');
     });
+
+    // A block's handle state is its NET effect. Chained txs land in one block (migrate-then-burn, prep +
+    // personalize), so a handle can be moved by tx A and burned by tx B in the same block. The scanner
+    // applied the burn, then indexed A's output (already spent by B) and resurrected the burned handle.
+    // Observed live on preview 2026-09-29 (sub8fc3ns1a@e2e6ge6zr1qz2ag, e2e08lr00jmyr@e2e08lhsm2uaq).
+    describe('intra-block chains', () => {
+        const { Internal } = require('./scanner.app');
+        const hexOf = (name: string) => `000de140${Buffer.from(name).toString('hex')}`;
+        const utxo = (id: string, name: string, slot: number, minted: boolean): UTxOWithTxInfo => ({
+            ...buildMintedUTxO(name),
+            id,
+            tx_id: id.split('#')[0],
+            index: Number(id.split('#')[1]),
+            slot,
+            mint: minted ? [[policy, [hexOf(name)]]] : []
+        });
+        const tx = (hash: string, inputs: string[], burned: string[] = []) => ({
+            tx_hash: hash,
+            inputs: inputs.map((i) => ({ tx_hash: i.split('#')[0], tx_index: Number(i.split('#')[1]) })),
+            assets_minted: burned.map((name) => ({ policy_id: policy, asset_name: hexOf(name), quantity: '-1' }))
+        });
+        const block = { id: 'intra_block', slot: 150 };
+        const tip = { hash: 'tip', slot: 200 };
+
+        it('does not resurrect a handle moved and then burned in the same block', () => {
+            const name = `intra-burn-${Date.now()}`;
+            repo.addUTxOsWithMintDataAndUpdateIndexes([utxo('mint_tx#0', name, 90, true)]);
+            expect(repo.getHandle(name)?.utxo).toBe('mint_tx#0');
+
+            mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([utxo('move_tx#1', name, 150, false)]);
+            Internal.processScannerBlock(block, [tx('move_tx', ['mint_tx#0']), tx('burn_tx', ['move_tx#1'], [name])] as never, tip);
+
+            expect(repo.getHandle(name)).toBeNull();
+            expect(repo.getUTxO('move_tx#1') ?? null).toBeNull();
+        });
+
+        it('lands a handle moved twice in one block on the output that survives the block', () => {
+            const name = `intra-move-${Date.now()}`;
+            repo.addUTxOsWithMintDataAndUpdateIndexes([utxo('mint_tx#0', name, 90, true)]);
+
+            mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([utxo('hop_b#0', name, 150, false), utxo('hop_c#0', name, 150, false)]);
+            Internal.processScannerBlock(block, [tx('hop_b', ['mint_tx#0']), tx('hop_c', ['hop_b#0'])] as never, tip);
+
+            expect(repo.getHandle(name)?.utxo).toBe('hop_c#0');
+            expect(repo.getUTxO('hop_b#0') ?? null).toBeNull();
+        });
+
+        it('keeps the mint data of a handle minted and moved in the same block', () => {
+            const name = `intra-mint-${Date.now()}`;
+            mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([utxo('new_mint#0', name, 150, true), utxo('new_move#0', name, 150, false)]);
+            Internal.processScannerBlock(block, [tx('new_mint', []), tx('new_move', ['new_mint#0'])] as never, tip);
+
+            const stored = repo.getHandle(name);
+            expect(stored?.utxo).toBe('new_move#0');
+            expect(stored?.created_slot_number).toBe(150);
+        });
+    });
 });
