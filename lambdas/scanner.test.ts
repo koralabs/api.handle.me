@@ -876,11 +876,13 @@ describe('Scanner lambda unit tests', () => {
         expect(handlesRepo.removeHandle).toHaveBeenCalledWith({ name: 'burn-handle' });
         expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenNthCalledWith(
             1,
-            [expect.objectContaining({ id: 'scan_newer#0' })]
+            [expect.objectContaining({ id: 'scan_newer#0' })],
+            expect.anything()
         );
         expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenNthCalledWith(
             2,
-            [expect.objectContaining({ id: 'scan_older#0' })]
+            [expect.objectContaining({ id: 'scan_older#0' })],
+            expect.anything()
         );
         const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
         expect(txInfoCalls).toHaveLength(1);
@@ -1994,7 +1996,7 @@ describe('Scanner lambda unit tests', () => {
 
         await scannerModule.Internal.scan();
 
-        expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenCalledWith([]);
+        expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenCalledWith([], expect.anything());
         expect(handlesRepo.removeUTxOs).not.toHaveBeenCalled();
     });
 
@@ -2034,7 +2036,7 @@ describe('Scanner lambda unit tests', () => {
 
         await scannerModule.Internal.scan();
 
-        expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenCalledWith(expect.anything());
+        expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenCalledWith(expect.anything(), expect.anything());
     });
 
     it('returns early for locked lambdas without stale timeout configuration', async () => {
@@ -2360,7 +2362,7 @@ describe('Scanner lambda unit tests', () => {
 
             expect(mockedHelpers.fetchPaginatedResults).not.toHaveBeenCalled();
             expect(handlesRepo.removeHandle).toHaveBeenCalledWith(burnedHandle);
-            expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenCalledWith([builtUtxo]);
+            expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).toHaveBeenCalledWith([builtUtxo], expect.anything());
             expect(handlesRepo.removeUTxOs).toHaveBeenCalledWith(['spent_tx#4']);
             expect(handlesRepo.setMetrics).toHaveBeenCalledWith({
                 currentSlot: 150,
