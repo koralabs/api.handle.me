@@ -1,0 +1,13 @@
+name: deploy-env-guard
+# deploy-box.yml refuses a dispatch whose env branch differs from the chosen environment;
+# this runs that guard script through its routing cases.
+on:
+  pull_request:
+  push:
+    branches: [preview, preprod, mainnet, master, main]
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./.github/scripts/test-deploy-env-guard.sh
