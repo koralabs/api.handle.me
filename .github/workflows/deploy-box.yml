@@ -15,24 +15,32 @@ on:
         description: Deployment environment
         required: true
         type: choice
-        options: [preview, preprod, mainnet]
-        default: preview
+        options: [auto, preview, preprod, mainnet]
+        default: auto
 jobs:
   deploy-box:
     name: Box deploy (service) from ${{ github.ref_name }}
     runs-on: ubuntu-22.04
     concurrency:
-      group: deploy-box-${{ github.event.inputs.environment }}
+      group: deploy-box-${{ ((github.event.inputs.environment == 'auto' || github.event.inputs.environment == '') && github.ref_name || github.event.inputs.environment) }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+      # Refuse a dispatch whose env branch differs from the chosen environment (auto = the branch's own env).
+      # The guard script lives in the repo, so it runs right after checkout and before any build/deploy step.
+      - name: Guard dispatch environment
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          SELECTED_ENV: ${{ github.event.inputs.environment }}
+          REF_NAME: ${{ github.ref_name }}
+        run: ./.github/scripts/deploy-env-guard.sh "$GITHUB_EVENT_NAME" "$REF_NAME" "$SELECTED_ENV"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - name: Build (box/service) + stage to R2 + signed deploy trigger
         env:
           DEPLOYABLE: api.handle.me
-          BOX_ENV: ${{ github.event.inputs.environment }}
+          BOX_ENV: ${{ ((github.event.inputs.environment == 'auto' || github.event.inputs.environment == '') && github.ref_name || github.event.inputs.environment) }}
           NODE_VERSION: '22'
           SERVICE_INSTALL_CMD: npm install
           # Also stage deployment_info.json into ./dist so the /deployment endpoint can
