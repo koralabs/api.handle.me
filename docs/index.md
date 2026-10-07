@@ -9,6 +9,7 @@
 ## Technical
 - [Spec Index](./spec/index.md)
 - [API/Scanner Spec](./spec/spec.md)
+- [DeMi Minting API — Planned Design](./spec/demi-minting-api.md)
 - [Index and Data Model](./spec/index-model.md)
 - [Runtime Entrypoints](./spec/runtime-entrypoints.md)
 - [@handlecontract Script Discovery](./spec/handlecontract-script-discovery.md)
