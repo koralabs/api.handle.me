@@ -41,8 +41,8 @@ describe('decodeCborFromIPFSFile tests', () => {
         const cid = 'zb2rhYHWj4Ls35aM5V1odX38rSJJSFyvq3x4dyfbFPwCBRBTA';
         const result = await decodeCborFromIPFSFile(cid);
         expect(result).toEqual({ test: 'test' });
-        expect(requestIpfsSpy).toBeCalledTimes(2);
-        expect(requestIpfsSpy).nthCalledWith(2, expect.stringMatching(new RegExp(`https://ipfs\\.io/ipfs/${cid}\\?pinataGatewayToken=`)));
+        expect(requestIpfsSpy).toHaveBeenCalledTimes(2);
+        expect(requestIpfsSpy).toHaveBeenNthCalledWith(2, expect.stringMatching(new RegExp(`https://ipfs\\.io/ipfs/${cid}\\?pinataGatewayToken=`)));
     });
 
     it('should unwrap constructor_0 encoded payloads', async () => {
@@ -113,7 +113,7 @@ describe('decodeCborFromIPFSFile tests', () => {
         const result = await decodeCborFromIPFSFile('zb2invalidbackup');
 
         expect(result).toBeUndefined();
-        expect(getGatewaySpy).toBeCalledTimes(2);
+        expect(getGatewaySpy).toHaveBeenCalledTimes(2);
         expect(logSpy).toHaveBeenCalledWith(
             expect.objectContaining({
                 event: 'decodeCborFromIPFSFile.error',

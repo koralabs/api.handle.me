@@ -3,15 +3,28 @@ import App from '../app';
 
 jest.mock('../services/ogmios/ogmios.service');
 
+const handleRecord = {
+    name: 'burritos',
+    utxo: 'tx_id#0',
+    policy: 'f0ff',
+    resolved_addresses: { ada: 'addr1' }
+};
+const handleHex = Buffer.from('burritos', 'utf8').toString('hex');
 const mockGetMetrics = jest.fn(() => ({ handleCount: 12, holderCount: 7 }));
 const mockCurrentHttpStatus = jest.fn(() => 200);
 const mockGetHandle = jest.fn((handleName: string) => handleName === 'burritos'
-    ? { name: 'burritos', utxo: 'tx_id#0' }
+    ? handleRecord
     : null);
-const mockGetHandleByHex = jest.fn(() => null);
+const mockGetHandleByHex = jest.fn((hex: string) => hex === handleHex ? handleRecord : null);
 const mockGetUTxO = jest.fn((utxoId: string) => utxoId === 'tx_id#0'
     ? { tx_id: 'tx_id', index: 0, lovelace: 1000000 }
     : null);
+const mockSearch = jest.fn((_pagination: unknown, _searchModel: unknown, namesOnly = false) => ({
+    searchTotal: 1,
+    handles: namesOnly ? ['burritos'] : [handleRecord]
+}));
+const mockGetHolder = jest.fn(() => null);
+const mockGetAllHolders = jest.fn(() => []);
 
 jest.mock('../repositories/handlesRepository', () => ({
     HandlesRepository: jest.fn().mockImplementation(() => ({
@@ -19,7 +32,10 @@ jest.mock('../repositories/handlesRepository', () => ({
         currentHttpStatus: mockCurrentHttpStatus,
         getHandle: mockGetHandle,
         getHandleByHex: mockGetHandleByHex,
-        getUTxO: mockGetUTxO
+        getUTxO: mockGetUTxO,
+        search: mockSearch,
+        getHolder: mockGetHolder,
+        getAllHolders: mockGetAllHolders
     }))
 }));
 
@@ -118,5 +134,81 @@ describe('MCP focused coverage', () => {
             content: [{ type: 'text', text: "'records_per_page' must be 250 or less" }],
             isError: true
         });
+    });
+
+    // Invariant: hex handle requests resolve through the hex lookup path and return the matching handle.
+    // Failure mode: ignoring the hex flag would query the plain-text index and return the wrong result.
+    // Negative control: setting hex to false makes the hex lookup assertion fail.
+    it('resolves a handle by hexadecimal asset name', async () => {
+        const response = await callTool(36, 'get_handle', { handle: handleHex, hex: true });
+
+        expect(response.status).toEqual(200);
+        expect(response.body.result.structuredContent).toEqual(expect.objectContaining({
+            status: 200,
+            handle: expect.objectContaining({ name: 'burritos', utxo: 'tx_id#0' })
+        }));
+        expect(mockGetHandleByHex).toHaveBeenCalledWith(handleHex);
+        expect(mockGetHandle).not.toHaveBeenCalled();
+    });
+
+    // Invariant: names-only searches return the repository's names without constructing handle views.
+    // Failure mode: the flag could be dropped and expose full handle records instead of names.
+    // Negative control: changing names_only to false makes the exact handles assertion fail.
+    it('returns only names when search_handles requests names_only', async () => {
+        const response = await callTool(37, 'search_handles', {
+            search: 'bur',
+            records_per_page: 25,
+            names_only: true
+        });
+
+        expect(response.status).toEqual(200);
+        expect(response.body.result.structuredContent).toEqual({
+            status: 200,
+            search_total: 1,
+            handles: ['burritos']
+        });
+        expect(mockSearch).toHaveBeenCalledWith(expect.anything(), expect.anything(), true);
+    });
+
+    // Invariant: searches reject non-positive page values before querying storage.
+    // Failure mode: zero or negative pages could produce unstable offsets or duplicate results.
+    // Negative control: changing page to one causes the repository search to run instead.
+    it('rejects a zero search page before repository access', async () => {
+        const response = await callTool(38, 'search_handles', { page: 0 });
+
+        expect(response.status).toEqual(200);
+        expect(response.body.result).toEqual({
+            content: [{ type: 'text', text: '`page` and `records_per_page` must be positive numbers' }],
+            isError: true
+        });
+        expect(mockSearch).not.toHaveBeenCalled();
+    });
+
+    // Invariant: holder lookup requires a non-empty address before repository access.
+    // Failure mode: empty addresses could be treated as broad or ambiguous holder queries.
+    // Negative control: supplying addr1 causes the repository lookup assertion to fail.
+    it('rejects an empty holder address before repository access', async () => {
+        const response = await callTool(39, 'get_holder', { address: '' });
+
+        expect(response.status).toEqual(200);
+        expect(response.body.result).toEqual({
+            content: [{ type: 'text', text: '`address` must be a non-empty string' }],
+            isError: true
+        });
+        expect(mockGetHolder).not.toHaveBeenCalled();
+    });
+
+    // Invariant: holder lists accept only deterministic ascending or descending sort orders.
+    // Failure mode: unsupported sorting could leak into repository pagination and reorder pages unpredictably.
+    // Negative control: changing sort to desc causes the holder repository to run instead.
+    it('rejects unsupported holder sorting before repository access', async () => {
+        const response = await callTool(40, 'list_holders', { sort: 'random' });
+
+        expect(response.status).toEqual(200);
+        expect(response.body.result).toEqual({
+            content: [{ type: 'text', text: '`sort` must be one of: asc, desc' }],
+            isError: true
+        });
+        expect(mockGetAllHolders).not.toHaveBeenCalled();
     });
 });
