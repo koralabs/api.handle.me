@@ -79,6 +79,17 @@ Reading Handle state directly from chain providers for every request is expensiv
 - Burst traffic: mint events and feature launches can cause sudden spikes; index freshness and rate limiting need to remain predictable.
 - Privacy/safety: personalization increases identity surface area; API responses should be treated as public data.
 
+## Planned DeMi Minting API
+
+Status: planned, not implemented. [Lean implementation design](../spec/demi-minting-api.md).
+
+- One public minting interface serves handle.me and third-party callers, sharing pricing and business rules rather than creating another minting system.
+- Build unsigned DeMi order transactions; wallets sign and submit. Existing engines retain mint execution, delivery, and refunds. New API flows do not support Legacy; existing Legacy flows remain until separately retired.
+- Provide quote, build, and status operations. Quotes do not reserve handles. Recheck terms at build time and require acceptance of changed prices.
+- Ordinary paid orders require no login/session JWT by default. Remove existing JWT dependencies only after proving equivalent contract/engine enforcement of economic terms and replay protection. Restricted benefits and operator actions retain appropriate authorization.
+- Reuse existing order tracking and refund behavior; recognize valid payments independently of client notifications. Preserve unconfirmed-input transaction chaining.
+- Keep scope small: start with ordinary root handles supported by DeMi, without a new engine, reservation service, or pricing framework.
+
 ## Future Considerations (Not Implemented Here Yet)
 - Support for new script/policy eras (e.g., decentralized minting policy transitions) with minimal breaking changes for integrators.
 - Additional “resolver UX” endpoints for wallets (pre-validated resolution results, richer personalization pointers).
