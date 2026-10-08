@@ -1,0 +1,51 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="size" content="1600x760"><link rel="stylesheet" href="handles.css"><style>
+  body { width: 1600px; height: 760px; padding: 48px 60px; }
+  h1 { font-size: 36px; font-weight: 900; letter-spacing: -0.6px; }
+  h1 + .muted { font-size: 19px; margin-top: 6px; }
+  .flow { display: grid; grid-template-columns: repeat(6, 1fr); gap: 34px; margin-top: 40px; position: relative; }
+  .stage { padding: 20px 18px 18px; position: relative; min-height: 0; }
+  .stage .e { font-size: 40px; line-height: 1; }
+  .stage .t { font-weight: 800; font-size: 20px; margin-top: 12px; }
+  .stage .d { color: #a2aec7; font-size: 15.5px; margin-top: 6px; }
+  .stage:not(:last-child)::after { content: "➜"; position: absolute; right: -29px; top: 82px; color: #22d17a; font-size: 24px; }
+  .stage.api { border-color: rgba(34, 209, 122, 0.55); box-shadow: 0 0 40px rgba(34, 209, 122, 0.16); }
+  .out { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+  .out .chip { font-size: 13.5px; }
+  .lower { display: grid; grid-template-columns: 1.35fr 1fr; gap: 34px; margin-top: 34px; }
+  .box { padding: 22px 26px; }
+  .box h2 { font-size: 15px; letter-spacing: 1.6px; text-transform: uppercase; color: #b49cff; margin-bottom: 14px; }
+  .loop { display: flex; align-items: center; gap: 14px; flex-wrap: nowrap; }
+  .loop .step { background: #141d38; border: 1px solid #263252; border-radius: 12px; padding: 12px 14px; font-size: 15.5px; flex: 1; }
+  .loop .step b { display: block; font-size: 17px; margin-bottom: 3px; }
+  .loop .arrow { color: #5cb8ff; font-size: 22px; }
+  .modes { display: grid; grid-template-columns: auto 1fr; gap: 10px 16px; font-size: 16px; align-items: baseline; }
+  .modes code { font: 700 15px "JetBrains Mono", monospace; color: #8fd0ff; white-space: nowrap; }
+</style></head><body>
+  <h1>⛓️ From chain to API</h1>
+  <div class="muted">One container runs the whole pipeline, or point the API at Ogmios you already have.</div>
+  <div class="flow">
+    <div class="panel stage"><div class="e">🟦</div><div class="t">Cardano</div><div class="d">Every Handle mint, transfer and personalization lands on-chain.</div></div>
+    <div class="panel stage"><div class="e">🖥️</div><div class="t">cardano-node</div><div class="d">Starts from a Mithril snapshot instead of syncing from genesis.</div></div>
+    <div class="panel stage"><div class="e">🔭</div><div class="t">Ogmios</div><div class="d">Streams blocks to the scanner over a lightweight protocol.</div></div>
+    <div class="panel stage"><div class="e">🧮</div><div class="t">Scanner</div><div class="d">Picks out Handle transactions and updates holders, datums and UTxOs.</div></div>
+    <div class="panel stage"><div class="e">🗄️</div><div class="t">Valkey index</div><div class="d">The indexed state, so reads never touch the chain.</div></div>
+    <div class="panel stage api"><div class="e">🚀</div><div class="t">API</div><div class="d">Express in Docker, or AWS Lambda.</div>
+      <div class="out"><span class="chip g">🌐 /handles · /holders</span><span class="chip b">📖 /swagger</span><span class="chip v">🤖 /mcp</span><span class="chip">💓 /health</span></div></div>
+  </div>
+  <div class="lower">
+    <div class="panel box"><h2>📸 Snapshots skip the hours-long rescan</h2>
+      <div class="loop">
+        <div class="step"><b>📸 Snapshot</b>Generated from the index</div><span class="arrow">➜</span>
+        <div class="step"><b>✅ Verified</b>Checked against chain data</div><span class="arrow">➜</span>
+        <div class="step"><b>☁️ S3</b>Latest + 5 days kept</div><span class="arrow">➜</span>
+        <div class="step"><b>⚡ Startup</b>Loads only verified snapshots</div>
+      </div></div>
+    <div class="panel box"><h2>🐳 Pick what the container runs</h2>
+      <div class="modes">
+        <code>MODE=all</code><span>cardano-node + Ogmios + API (default)</span>
+        <code>MODE=ogmios</code><span>Bring your own node over <span class="mono">/ipc</span></span>
+        <code>MODE=api-only</code><span>Point <span class="mono">OGMIOS_HOST</span> at existing Ogmios</span>
+      </div></div>
+  </div>
+</body></html>

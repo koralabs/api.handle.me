@@ -1,0 +1,41 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="size" content="1600x600"><link rel="stylesheet" href="handles.css"><style>
+  body { width: 1600px; height: 600px; padding: 64px 70px; display: grid; grid-template-columns: 1fr 760px; gap: 50px; align-items: center; }
+  .kicker { font-size: 22px; }
+  h1 { font-size: 60px; line-height: 1.05; font-weight: 900; letter-spacing: -1.5px; margin: 18px 0 18px; }
+  .sub { font-size: 22px; color: #a9b5cf; max-width: 640px; }
+  .chips { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 28px; }
+  .chips .chip { font-size: 16px; padding: 7px 14px; }
+  .term { position: relative; padding: 22px 26px 24px; font-size: 16.5px; line-height: 1.55; }
+  .dots { display: flex; gap: 8px; margin-bottom: 14px; }
+  .dots i { width: 12px; height: 12px; border-radius: 50%; background: #2c3757; }
+  .dots i:first-child { background: #ff6b6b; } .dots i:nth-child(2) { background: #ffcf5c; } .dots i:nth-child(3) { background: #22d17a; }
+  .k { color: #8fd0ff; } .s { color: #ffd98a; } .n { color: #cbb9ff; }
+  .card-wrap { position: absolute; right: -34px; bottom: -44px; transform: rotate(4deg) scale(0.62); transform-origin: bottom right; }
+</style></head><body>
+  <div>
+    <div class="kicker brand"><span class="dollar">$</span>handle <span class="muted" style="font-weight:500">· handles-api</span></div>
+    <h1>Every Ada Handle on Cardano, one request away ⚡</h1>
+    <div class="sub">A downloadable, self-hostable API that indexes Handles straight from the chain and serves them over REST and MCP.</div>
+    <div class="chips"><span class="chip g">⛓️ Ogmios chain scan</span><span class="chip b">🐳 One Docker image</span><span class="chip v">🤖 MCP tools</span><span class="chip">📖 Swagger</span></div>
+  </div>
+  <div class="panel term mono">
+    <div class="dots"><i></i><i></i><i></i></div>
+    <div><span class="green">$</span> curl https://api.handle.me/handles/koralabs</div>
+    <div style="margin-top:10px">{</div>
+    <div>&nbsp;&nbsp;<span class="k">"name"</span>: <span class="s">"koralabs"</span>,</div>
+    <div>&nbsp;&nbsp;<span class="k">"handle_type"</span>: <span class="s">"handle"</span>,</div>
+    <div>&nbsp;&nbsp;<span class="k">"rarity"</span>: <span class="s">"basic"</span>,</div>
+    <div>&nbsp;&nbsp;<span class="k">"length"</span>: <span class="n">8</span>,</div>
+    <div>&nbsp;&nbsp;<span class="k">"holder_type"</span>: <span class="s">"script"</span>,</div>
+    <div>&nbsp;&nbsp;<span class="k">"default_in_wallet"</span>: <span class="s">"starwood"</span>,</div>
+    <div>&nbsp;&nbsp;<span class="k">"resolved_addresses"</span>: { <span class="k">"ada"</span>: <span class="s">"addr1xynk…k00x"</span> },</div>
+    <div>&nbsp;&nbsp;<span class="k">"created_slot_number"</span>: <span class="n">75784998</span>,</div>
+    <div>&nbsp;&nbsp;<span class="muted">…</span></div>
+    <div>}</div>
+    <div class="card-wrap"><div class="handle-card">
+      <svg viewBox="0 0 300 300"><g fill="none" stroke="#262f4a" stroke-width="16" stroke-linecap="round"><path d="M-10 120 H70 L110 80 H200"/><path d="M-10 190 H60 L100 230 H170"/></g><g fill="#262f4a"><circle cx="210" cy="80" r="16"/><circle cx="180" cy="230" r="16"/></g></svg>
+      <div class="logo brand"><span class="dollar">$</span>handle</div><div class="big">$</div><div class="name">koralabs</div>
+    </div></div>
+  </div>
+</body></html>
