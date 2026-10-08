@@ -1,0 +1,26 @@
+/* Shared look for the README graphics: Handles navy, $handle green, circuit traces. */
+* { box-sizing: border-box; margin: 0; }
+html { background: #0a0f1f; }
+body { color: #e8edf7; font: 18px/1.4 "Inter", "Segoe UI", system-ui, sans-serif; overflow: hidden;
+       background: radial-gradient(900px 600px at 85% 10%, rgba(37, 99, 235, 0.28), transparent 70%),
+                   radial-gradient(800px 500px at 0% 100%, rgba(34, 209, 122, 0.12), transparent 70%), #0a0f1f; }
+.mono { font-family: "JetBrains Mono", "JetBrainsMono Nerd Font", monospace; }
+.brand { font-weight: 800; letter-spacing: -0.3px; }
+.brand b, .dollar { color: #22d17a; }
+.muted { color: #93a0bb; }
+.green { color: #22d17a; }
+.blue { color: #5cb8ff; }
+.violet { color: #b49cff; }
+.amber { color: #ffcf5c; }
+.panel { background: rgba(17, 25, 48, 0.88); border: 1px solid #263252; border-radius: 18px; }
+.chip { display: inline-block; font-size: 14px; padding: 4px 11px; border-radius: 999px; background: #1a2442; color: #c9d4ea; white-space: nowrap; }
+.chip.g { background: rgba(34, 209, 122, 0.14); color: #4ee39a; }
+.chip.b { background: rgba(92, 184, 255, 0.14); color: #8fd0ff; }
+.chip.v { background: rgba(180, 156, 255, 0.15); color: #cbb9ff; }
+/* A Handle card in the style of the standard Handle image. */
+.handle-card { position: relative; width: 300px; height: 300px; border-radius: 14px; background: #10162b; overflow: hidden;
+               border: 1px solid #2a3557; box-shadow: 0 30px 60px rgba(0, 0, 0, 0.45); }
+.handle-card .logo { position: absolute; top: 14px; left: 16px; font-weight: 800; font-size: 17px; }
+.handle-card .big { position: absolute; top: 4px; right: 14px; font-weight: 900; font-size: 92px; color: #fff; line-height: 1; }
+.handle-card .name { position: absolute; bottom: 22px; left: 0; right: 0; text-align: center; font: 800 34px "JetBrains Mono", monospace; color: #fff; }
+.handle-card svg { position: absolute; inset: 0; }
