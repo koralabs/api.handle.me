@@ -1,16 +1,44 @@
-# Decentralized Public API for Handles
+<p align="center"><img src="docs/media/hero.png" alt="handles-api: a curl request for the $koralabs Handle returning its name, rarity, holder and resolved address"></p>
 
 <p align="center">
-  <img src="./docs/handles-api.jpeg" />
+  <a href="#-quick-start">🚀 Quick start</a> ·
+  <a href="#testing-the-api">🔌 Try it</a> ·
+  <a href="#mcp-endpoint">🤖 MCP</a> ·
+  <a href="#running-automated-tests">🧪 Tests</a> ·
+  <a href="docs/index.md">📚 Docs</a>
 </p>
 
-This API uses Ogmios to scan Cardano chain data for Handle-related transactions and stores the indexed state in Valkey for fast reads. Snapshot artifacts are generated from that index and can be loaded at startup to reduce catch-up time.
+🪪 **Ada Handles** are readable names for Cardano wallets: send to `$koralabs` instead of a 100-character address. This is the API that keeps track of every one of them.
 
-Snapshot uploads are chain-verified before they are written to S3, startup ignores snapshots that do not carry that verification metadata, and the snapshot lambda keeps the latest fixed snapshot plus up to 5 days of archived snapshots in S3.
+⛓️ It follows the chain through Ogmios, indexes each Handle mint, transfer and personalization into Valkey, and answers in milliseconds. Use the hosted instance at [api.handle.me](https://api.handle.me/swagger), or run your own from a single Docker image. 🐳
 
-&nbsp;
+## ✨ What you get
 
-# Documentation
+| | |
+| --- | --- |
+| 🔎 **Handle lookups** | Holder, resolved addresses, datum, UTxO, reference token, personalization and SubHandles |
+| 🧭 **Search** | Filter by rarity, length, characters, OG, Handle type, holder or personalization; page by number or slot |
+| 👛 **Holder views** | Every Handle a stake address holds, plus its default Handle |
+| 🤖 **MCP for agents** | Seven read-only tools at `POST /mcp`, ready for AI assistants |
+| 📸 **Fast startup** | Loads a chain-verified snapshot instead of rescanning for hours |
+| 🐳 **Self-hostable** | One image runs cardano-node, Ogmios and the API together, or just the parts you need |
+| ☁️ **Serverless option** | Lambda entrypoints for the API, scanner and snapshots |
+
+## ⛓️ How it works
+
+![From chain to API: Cardano, cardano-node, Ogmios, the scanner, the Valkey index and the API, with verified S3 snapshots for fast startup and three container modes](docs/media/architecture.png)
+
+## 🚀 Quick start
+
+```sh
+docker pull koralabs/handles-api
+docker run -p 3141:3141 -v db:/db -v handles:/app/handles koralabs/handles-api
+curl http://localhost:3141/handles/koralabs
+```
+
+Lookups return `202` while the index is still catching up and `200` once it's current. [Container options](#container-runtime) · [Local development](#local-development)
+
+# 📚 Documentation
 - Index: `docs/index.md`
 - Product docs: `docs/product/index.md`
 - Technical spec: `docs/spec/index.md`
@@ -26,7 +54,7 @@ Snapshot uploads are chain-verified before they are written to S3, startup ignor
 
 &nbsp;
 
-# Getting Started
+# 🛠️ Getting Started
 
 ## Local Development
 
@@ -82,7 +110,7 @@ docker run -p 3141:3141 -v <path_to_node.socket_folder>:/ipc -v handles:/app/han
 
 &nbsp;
 
-# Testing the API 
+# Testing the API
 - Open a browser to [http://localhost:3141/swagger](http://localhost:3141/swagger)
 - You can also see the current API status at [http://localhost:3141/health](http://localhost:3141/health)
 - Active Handle policy settings are available at [http://localhost:3141/policies](http://localhost:3141/policies) as normalized JSON (`first_minting_slot`, `last_minting_slot`, `sunset_slot` per hex policy ID without `0x` prefix)
@@ -145,9 +173,9 @@ To use Preview or PreProd environments just add `-e NETWORK=preview` or `-e NETW
 All of the options below can be passed into the container using `-e ENV_VAR=value` arguments on the `docker run...` command.
 > `MODE=<api-only|ogmios|cardano-node|both|all>`
 `api-only` will skip cardano-node and Ogmios and will only run the API NodeJS Express app. This requires `OGMIOS_HOST` to be set.
-`ogmios` will run only Ogmios 
+`ogmios` runs Ogmios and the API against your own cardano-node (mount its socket at `/ipc`)
 `cardano-node` will run only cardano-node
-`both` will wun both cardano-node and Ogmios
+`both` will run both cardano-node and Ogmios
 `all` DEFAULT - This runs cardano-node, ogmios, and the API
 
 > `OGMIOS_HOST=<http url with port>` Required for running with `MODE=api-only`.
