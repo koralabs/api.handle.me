@@ -2376,9 +2376,17 @@ describe('Scanner lambda unit tests', () => {
             inFlight--;
         });
         const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        // Fake clock: real timers let event-loop lag in a busy suite wake one worker late and the next
+        // on time, shrinking the observed gap below the scheduled 167 ms although the limiter is correct.
+        jest.useFakeTimers();
         try {
-            await scannerModule.Internal.scan();
+            const scanning = scannerModule.Internal.scan();
+            let done = false;
+            void scanning.finally(() => { done = true; });
+            while (!done) await jest.advanceTimersByTimeAsync(50);
+            await scanning;
         } finally {
+            jest.useRealTimers();
             logSpy.mockRestore();
         }
         expect(store.recordScannedBlock).toHaveBeenCalledWith(100, 'block_a');
