@@ -28,3 +28,7 @@
 
 ## Environment
 - [Environment Variable Glossary](../site.env)
+
+## Draft policy proposals (not activated)
+
+- [Phase 5.1 API canonical contract and enclave — human review required](./proposals/phase5.1-api/README.md)

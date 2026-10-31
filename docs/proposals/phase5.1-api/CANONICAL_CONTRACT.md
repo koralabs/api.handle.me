@@ -1,0 +1,41 @@
+# API canonical contract — proposed, not adopted
+
+**DRAFT / NOT ACTIVATED / HUMAN REVIEW REQUIRED.** Proposed future destination: root `CANONICAL_CONTRACT.md`. This document does not install policy, certify all current behavior or authorize irreversible actions.
+
+Grounded in API mainnet `235233f0d0c3e7038e9d3f07f3a23b0cac140b91`. Phase 5.1 in `kora-bot/v3/docs/ecosystem-ownership-plan.md` remains open for per-repository human review. This proposal covers API only; it does not revive closed historical proposals.
+
+## Non-negotiables proposed for review
+
+### 1. Resolve the requested handle, never a different recipient
+
+`controllers/handles.controller.ts::getHandleFromRepo` selects name or explicit hex lookup and uses the repository's status. `repositories/handlesRepository.ts::{getHandle,getHandleByHex,prepareHandle}` copies stored records before response preparation; hex lookup must also match the stored asset hex. UTxO responses use the stored resolved ADA address, datum and UTxO identity, not a guessed recipient. Missing/invalid/restricted names must retain their distinct API errors rather than fabricating an address.
+
+Protect exact route/controller/repository, address/policy codec and API error boundary files listed in the candidate manifest. Existing anchors: `routes/handles.route.test.ts` exercises actual HTTP response/status/error paths (including invalid/unminted and legal restrictions); `repositories/tests/handles.repository.branches.test.ts` covers missing lookups, address normalization and datum/address branches. Route tests isolate the repository; they are not proof of real storage integration. `repositories/tests/repository.lifecycle.e2e.test.ts` independently persists transfers, reverse indexes and cross-chain resolved addresses against the owned local store. Negative control: returning a different resolved address or retaining the old holder membership must break those lifecycle assertions.
+
+### 2. Project chain facts, not invented chain state
+
+`services/ogmios/ogmios.service.ts::processBlock` removes spent inputs, handles burns, orders owner/reference outputs and projects UTxOs synchronously. `services/ogmios/utils/index.ts` decodes asset labels/names; `HandlesRepository.processScannedHandleInfo` interprets labels, policy, datum and slot before saving indexes. Older updates must not replace newer recipient/properties; earlier mint evidence can still correct creation history. Transfers/burns must update or remove holder/reverse indexes, not just the primary hash. Preserve personalization when the ownership UTxO moves.
+
+Anchors: `services/ogmios/tests/processBlock.unit.test.ts` covers burn/label/order branches using boundary collaborators; `services/ogmios/tests/processBlock.e2e.test.ts` includes out-of-order handle updates, new handle/metrics, nonmatching policy and datum/script projection; `repositories/tests/repository.lifecycle.e2e.test.ts` checks personalization preservation, transfer/burn indexes and cross-chain addresses. The unit tests alone do not establish end-to-end correctness. Negative control: removing slot comparisons or index removal causes the corresponding behavioral assertions to fail.
+
+**Important limit:** the repository's existing possible-double-mint branch logs evidence and increments the amount; `handles.repository.branches.test.ts` explicitly tests it. This API observes chain state; it does not mint or enforce an on-chain no-double-mint guarantee. Never claim this proposal prevents duplicate issuance or silently discard contradictory chain evidence. Signing, validator and settings mutations are untouched and not authorized here.
+
+Provider conversion is also a chain-read trust boundary: `utils/helpers.ts::buildUTxOsFromKoiosTxs` and scanner provider fetch paths must preserve transaction/output identity, datum, scripts and slot. `services/demeter/utxorpc.service.ts::{convertDemeterTx,consumeCompleteDemeterBlocks}` converts address bytes/network and commits complete blocks in stream order. `services/demeter/utxorpc.service.test.ts` checks exact transaction data, failed-transaction exclusion, unsupported scripts, deduplication and undo without committing incomplete blocks. Its real conversion/stream algorithms run with network-boundary fixtures, not a production connection. Changing the converter's output index/address or committing an incomplete block would fail these assertions. The exact helper file is mixed-responsibility; this does not freeze its parent directory.
+
+### 3. Tell readers about partial or lagging state
+
+`HandlesRepository.currentHttpStatus` returns 503 while REINDEX is rebuilding indexes, 202 for rollback/lag and 200 only when the current caught-up policy permits. `isCaughtUp` refuses uninitialized metrics and uses network-specific slot tolerance (300 mainnet / 600 testnet), not equality of tip hashes. `getHandleFromRepo` carries that status into reads. Scanner progress metrics must follow processed blocks, not claim unprocessed state.
+
+Anchor: `repositories/tests/handles.repository.branches.test.ts` ('evaluates caught-up status and HTTP code from metrics') and route status tests. Ogmios lifecycle and block tests cover resume/metrics behavior. Negative control: returning 200 under missing metrics or REINDEX breaks those status expectations. This is **not** a claim that every endpoint is a single-slot transactional read: pipeline deferral, independently read metrics and cached indexes mean cross-request/global snapshot isolation is not currently established. Human review must decide if stronger read consistency is a separate implementation task; do not certify it from this manifest.
+
+### 4. Recovery must not destroy a valid cache on refused evidence
+
+`stores/redis/index.ts` admits snapshots before replay; `utils/verifiedSnapshot.ts` validates shape, chain-root/network evidence, and the explicit verified-empty edge case. `utils/snapshotOwnership.ts`, scanner lease registration and `workers/redisSync.worker.js` bind destructive recovery work to the acquired scanner owner with fencing/transaction behavior. Controls and original data survive admission refusal or ownership loss. `utils/snapshotVerification.ts` anchors verification to chain evidence; it is not a permission to alter chain settings. Network-scoped store keys prevent accidental cross-environment data mixing.
+
+Anchors: `stores/redis/snapshotAdmission.test.ts` preserves a changed original, refuses an unowned lease, replays validated data and handles fresh404 genesis while preserving controls; `utils/verifiedSnapshot.test.ts` rejects absent verification, mismatched chain root and wrong network; `services/ogmios/tests/service.lifecycle.test.ts` refuses destructive recovery when admission fails; `workers/snapshotTransactions.node-test.mjs` exercises the actual worker transaction helpers. `stores/redis/index.test.ts` supplies additional restore/starting-point regressions. Negative control: accepting a wrong-network snapshot or deleting the original on refusal breaks the corresponding persisted-state assertions. No production cache writes or scanner/worker invocation is part of proposal validation.
+
+## Review boundary, not an exhaustive dependency freeze
+
+The candidate protects exact implementation files plus the future root manifest/contract. It does not freeze all controllers, services, stores, workers, tests, UI, infrastructure or deployment workflows. Shared library address/datum/codec dependencies are outside this repository and require their own policy; a dependency change can alter these semantics without touching the listed implementations. Moving protected behavior or adding a safety-critical implementation requires manifest review; unmatched files do not authorize weakening these invariants. Mixed repository/controller/scanner/store files cause human review even for a cosmetic edit inside them after adoption; accept or narrow that tradeoff explicitly rather than bundling an unrequested refactor.
+
+No new runtime enforcement is needed merely to draft this policy. Existing tests anchor specific behaviors, not proof that all invariants hold in every endpoint and failure mode. Adoption must be a separately reviewed exact diff. Merge approval never authorizes signing, a payment, validator/settings mutation, mint or burn.
