@@ -50,10 +50,8 @@ jobs:
           SERVICE_BUILD_CMD: npm run build:lambda && cp -r ./dist/lambdas/* ./dist && jq -n --arg version $(jq -r .version package.json) --arg build ${{ github.run_id }}-${{ github.run_attempt }} --arg commit ${{ github.sha }} --arg timestamp $(date -u +%FT%TZ) '{version:$version,build:$build,commit:$commit,timestamp:$timestamp}' > ./dist/deployment_info.json
           SERVICE_DIST: dist
           FN_FUNCTIONS: '[{"name":"api","handler":"lambdas/api.js","kind":"http","memory":512,"export":"handler"},{"name":"scanner","handler":"lambdas/scanner.js","kind":"worker","schedule":"*:0/2","memory":8192,"export":"lambdaHandler"},{"name":"snapshot","handler":"lambdas/snapshot.js","kind":"worker","schedule":"*-*-* 00,06,12,18:00:00","memory":8192,"export":"handler"}]'
-          # Publish this reviewed deployments commit before using the workflow. The producer's
-          # validation/runtime/box helpers inherit this same immutable base.
+          # --- everything below is a variable/secret so this public repo leaks nothing ---
           DEPLOY_FETCH_BASE: https://raw.githubusercontent.com/koralabs/adahandle-deployments/2b2b8350f59054a28aee6cd59ffa04253261425a/common
-          # --- everything below is a secret so this public repo leaks nothing ---
           DEPLOYMENT_ACCESS_TOKEN: ${{ secrets.DEPLOYMENT_ACCESS_TOKEN }}
           KORA_DEPLOY_HMAC_SECRET: ${{ secrets.KORA_DEPLOY_HMAC_SECRET }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
