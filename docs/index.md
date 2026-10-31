@@ -31,4 +31,4 @@
 
 ## Draft policy proposals (not activated)
 
-- [Phase 5.1 API canonical contract and enclave — human review required](./proposals/phase5.1-api/README.md)
+- [Canonical contract](../CANONICAL_CONTRACT.md) and [enclave](../.enclave) — root policy files.
