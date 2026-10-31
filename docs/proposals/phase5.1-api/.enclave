@@ -1,0 +1,21 @@
+# DRAFT candidate only; nesting, not this comment, prevents activation.
+# Exact repository-root-relative paths. No directory blanket or wildcard.
+.enclave
+CANONICAL_CONTRACT.md
+controllers/handles.controller.ts
+routes/handles.route.ts
+repositories/handlesRepository.ts
+services/ogmios/ogmios.service.ts
+services/ogmios/utils/index.ts
+services/ogmios/utils/manualRollback.ts
+services/demeter/utxorpc.service.ts
+stores/redis/index.ts
+stores/redis/keys.ts
+workers/redisSync.worker.js
+utils/verifiedSnapshot.ts
+utils/snapshotVerification.ts
+utils/snapshotOwnership.ts
+utils/policies.ts
+utils/helpers.ts
+utils/apiError.ts
+lambdas/scanner.app.ts
