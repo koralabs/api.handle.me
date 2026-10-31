@@ -1,5 +1,6 @@
 import { AssetNameLabel, asyncForEach, buildHolderInfo, HANDLE_POLICIES, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, Network, NETWORK, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { WHITELISTED_API_KEYS } from '../config';
+import { reportCoveragePause } from './scannerPause';
 import { scannerBudgetMs, SCANNER_MAX_WORK_MS } from './scannerBudget';
 import { BlockfrostBlock, KoiosAssetUTxO, KoiosDatumInfo, KoiosTxInfo } from '../interfaces/provider.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
@@ -1390,11 +1391,11 @@ const scan = async () => {
                 if (blockTxCountByBlock && typeof b.tx_count === 'number') {
                     const koiosCount = blockTxCountByBlock.get(b.hash) ?? 0;
                     if (koiosCount < b.tx_count) {
-                        Logger.log({
-                            message: `block_txs coverage incomplete for block ${b.hash} (slot ${b.slot}); pausing scan, next invocation will resume from currentBlockHash. blockfrost_tx_count=${b.tx_count} koios_block_txs_count=${koiosCount}`,
-                            category: LogCategory.WARN,
-                            event: 'scannerLambda.koiosBlockTxs.coverageIncompletePause'
-                        });
+                        reportCoveragePause(
+                            'scannerLambda.koiosBlockTxs.coverageIncompletePause',
+                            b.hash,
+                            `block_txs coverage incomplete for block ${b.hash} (slot ${b.slot}); pausing scan, next invocation will resume from currentBlockHash. blockfrost_tx_count=${b.tx_count} koios_block_txs_count=${koiosCount}`
+                        );
                         return;
                     }
                 }
@@ -1403,11 +1404,11 @@ const scan = async () => {
                 // is short, halt at the chunk's first block so we don't advance past a block that
                 // *might* have contained the missing tx.
                 if (chunkHasShortResponse) {
-                    Logger.log({
-                        message: `tx_info coverage incomplete for block ${b.hash} (slot ${b.slot}); pausing scan, next invocation will resume from currentBlockHash. received=${receivedTxHashes.length}`,
-                        category: LogCategory.WARN,
-                        event: 'scannerLambda.koiosTxInfo.coverageIncompletePause'
-                    });
+                    reportCoveragePause(
+                        'scannerLambda.koiosTxInfo.coverageIncompletePause',
+                        b.hash,
+                        `tx_info coverage incomplete for block ${b.hash} (slot ${b.slot}); pausing scan, next invocation will resume from currentBlockHash. received=${receivedTxHashes.length}`
+                    );
                     return;
                 }
                 const blockTxList = txInfoByBlockHash.get(b.hash) ?? [];
