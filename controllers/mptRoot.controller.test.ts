@@ -162,4 +162,44 @@ describe('MptRootController tests', () => {
             labels
         });
     });
+
+    it('reports verified as null when the on-chain datum cannot be decoded', async () => {
+        mockGetChainMintingDataRootHash.mockRejectedValueOnce(new Error('bad datum'));
+        const res = makeResponse();
+
+        await new MptRootController().index(makeRequest({ getMptRootHash: jest.fn().mockReturnValue('chain-root') }), res, jest.fn());
+
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+            calculated_mpt_root_hash: 'chain-root',
+            datum_mpt_root_hash: null,
+            verified: null
+        }));
+    });
+
+    it.each([
+        ['a missing handle', { label: '00001070', amount: '1' }, 'handle is required'],
+        ['an untracked label', { handle: 'alice', label: 'zzzz', amount: '1' }, 'label must be a tracked registry prefix (001/002/003/004), got "zzzz"']
+    ])('rejects a proof request with %s', async (_name, query, error) => {
+        const res = makeResponse();
+
+        await new MptRootController().proof(makeRequest({}, query), res, jest.fn());
+
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({ error });
+        expect(mockBuildLabelAssetProof).not.toHaveBeenCalled();
+    });
+
+    it.each(['index', 'proof', 'registryLabels'] as const)('passes an unexpected %s failure to next', async (method) => {
+        const failure = new Error('store exploded');
+        const req = { app: { get: jest.fn().mockImplementation(() => { throw failure; }) }, query: {} } as any;
+        const next = jest.fn();
+        const res = makeResponse();
+        if (method === 'proof') req.query = { handle: 'alice', label: '00001070', amount: '1' };
+
+        await new MptRootController()[method](req, res, next);
+
+        expect(next).toHaveBeenCalledWith(failure);
+        expect(res.status).not.toHaveBeenCalled();
+    });
 });
