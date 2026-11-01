@@ -126,6 +126,20 @@ describe('Scripts Routes Test', () => {
     });
 
     describe('[GET] /scripts', () => {
+        it('forwards a failing lookup to next() instead of answering', async () => {
+            const boom = new Error('registry down');
+            const response = mockResponse();
+            const next = jest.fn();
+            await new ScriptsController().index(
+                mockRequest({}, { get: () => { throw boom; } }),
+                response as any,
+                next
+            );
+
+            expect(next).toHaveBeenCalledWith(boom);
+            expect(response.json).not.toHaveBeenCalled();
+        });
+
         it('catalogues every @handlecontract subhandle keyed by derived script address', async () => {
             // Every `<slug><digits>@handlecontract` handle with inline CBOR ends up
             // in /scripts. Highest ordinal per family is `latest`.
