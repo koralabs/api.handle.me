@@ -88,8 +88,8 @@ describe('OgmiosService lifecycle tests', () => {
 
         expect(repo.setMetrics).toHaveBeenCalledWith(
             expect.objectContaining({
-                currentSlot: handleEraBoundaries.preview.slot,
-                currentBlockHash: handleEraBoundaries.preview.id,
+                currentSlot: 123,
+                currentBlockHash: 'block_hash',
                 firstSlot: handleEraBoundaries.preview.slot
             })
         );
@@ -112,9 +112,25 @@ describe('OgmiosService lifecycle tests', () => {
 
         await service.initialize();
 
-        expect(repo.destroy).toHaveBeenCalled();
+        expect(repo.destroy).not.toHaveBeenCalled();
         expect(repo.getStartingPoint).toHaveBeenNthCalledWith(2, expect.anything(), true);
         expect(resumeSpy).toHaveBeenNthCalledWith(2, { slot: 10, id: 'good_hash' });
+    });
+
+    // Invariant: snapshot rejection cannot create synthetic bootstrap metrics or erase data.
+    // Moving setMetrics before getStartingPoint restores a write and fails the original-image check.
+    it('preserves original cache state when snapshot admission refuses', async () => {
+        const state = { metrics: { currentSlot: 7, currentBlockHash: 'original' }, data: ['original-utxo'], control: 'original-owner' };
+        const original = structuredClone(state);
+        const repo = createRepoMock();
+        repo.getMetrics.mockImplementation(() => state.metrics);
+        repo.setMetrics.mockImplementation((metrics: any) => Object.assign(state.metrics, metrics));
+        repo.destroy.mockImplementation(() => { state.data = []; });
+        repo.getStartingPoint.mockRejectedValue(new Error('Invalid snapshot'));
+        const service = new OgmiosService(repo);
+        await expect(service.initialize()).rejects.toThrow('Invalid snapshot');
+        expect(state).toEqual(original);
+        expect(repo.rollBackToGenesis).not.toHaveBeenCalled();
     });
 
     it('resetClient closes open clients and clears reference', () => {
@@ -184,7 +200,7 @@ describe('OgmiosService lifecycle tests', () => {
         expect(resumeSpy).toHaveBeenCalledWith(handleEraBoundaries.preview);
     });
 
-    it('rolls back and calls process exit when both stored starting points are bad', async () => {
+    it('refuses both invalid stored starting points without destroying the cache', async () => {
         jest.useFakeTimers();
         const repo = createRepoMock();
         repo.getStartingPoint
@@ -198,13 +214,25 @@ describe('OgmiosService lifecycle tests', () => {
             .mockRejectedValueOnce({ code: 1000, message: 'bad point' })
             .mockResolvedValueOnce(undefined);
         process.exit = jest.fn() as any;
-        const initializePromise = service.initialize();
-        await Promise.resolve();
-        await jest.advanceTimersByTimeAsync(30_000);
-        await initializePromise;
+        await expect(service.initialize()).rejects.toMatchObject({ code: 1000, message: 'bad point' });
+        expect(repo.rollBackToGenesis).not.toHaveBeenCalled();
+        expect(repo.destroy).not.toHaveBeenCalled();
+        expect(repo.setMetrics).not.toHaveBeenCalled();
+        expect(process.exit).not.toHaveBeenCalled();
+    });
 
-        expect(repo.rollBackToGenesis).toHaveBeenCalled();
-        expect(process.exit).toHaveBeenCalledWith(2);
+    // Invariant: a rejected recovery snapshot must escape the network reconnect loop intact.
+    // Restoring the outer catch-all hangs/retries this test or writes bootstrap metrics.
+    it('propagates recovery admission refusal without bootstrap or destructive cleanup', async () => {
+        const repo = createRepoMock();
+        repo.getStartingPoint.mockResolvedValueOnce({ slot: 123, id: 'old' }).mockRejectedValueOnce(new Error('Snapshot original image changed'));
+        const service = new OgmiosService(repo);
+        jest.spyOn(service as any, '_createWebSocketClient').mockReturnValue({ readyState: WebSocket.OPEN, on: jest.fn() });
+        jest.spyOn(service as any, '_resume').mockRejectedValueOnce({ code: 1000, message: 'invalid intersection' });
+        await expect(service.initialize()).rejects.toThrow('Snapshot original image changed');
+        expect(repo.setMetrics).not.toHaveBeenCalled();
+        expect(repo.destroy).not.toHaveBeenCalled();
+        expect(repo.rollBackToGenesis).not.toHaveBeenCalled();
     });
 
     it('resume waits while websocket remains connecting', async () => {

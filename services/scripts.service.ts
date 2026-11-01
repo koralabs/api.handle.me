@@ -135,6 +135,18 @@ const getValidatorHashFromScriptCbor = (scriptCbor?: string, scriptType?: string
     return blake2b(Buffer.from(`${tag}${scriptCbor}`, 'hex'), 28);
 };
 
+// Listings are locked by the payment validator; their stake credential belongs
+// to the seller. Resolve all deployed mkpl versions locally, without fetching CBOR.
+export const getMarketplaceValidatorHashes = (repo: HandlesRepository): string[] => {
+    const hashes = new Set<string>();
+    for (const handle of repo.getSubHandlesByRootHandle(SCRIPT_ROOT_HANDLE)) {
+        if (parseScriptHandle(handle.name)?.family !== ScriptType.MARKETPLACE_CONTRACT) continue;
+        const hash = getValidatorHashFromScriptCbor(handle.script?.cbor, handle.script?.type);
+        if (hash) hashes.add(hash);
+    }
+    return [...hashes].sort();
+};
+
 const getCandidateHandles = (req: Request<any>): StoredHandle[] => {
     const handleRepo = createRepo(req);
     if (!handleRepo) return [];

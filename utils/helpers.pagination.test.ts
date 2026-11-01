@@ -4,7 +4,15 @@ jest.mock('@koralabs/kora-labs-common', () => ({
 }));
 
 import { Logger, NETWORK } from '@koralabs/kora-labs-common';
-import { blockfrostApiCall, fetchKoios, fetchPaginatedResults, fetchTxList } from './helpers';
+import { blockfrostApiCall, fetchPaginatedResults, fetchTxList } from './helpers';
+
+const jsonResponse = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
+
+let fetchKoios: typeof import('./helpers').fetchKoios;
+beforeEach(() => {
+    // A fresh process-lifetime transport per test; never clear a live provider hold.
+    jest.isolateModules(() => { fetchKoios = jest.requireActual('./helpers').fetchKoios; });
+});
 
 describe('helpers pagination tests', () => {
     const originalFetch = global.fetch;
@@ -20,7 +28,7 @@ describe('helpers pagination tests', () => {
 
     it('blockfrostApiCall should call expected endpoint and headers', async () => {
         process.env.BLOCKFROST_API_KEY = 'test-key';
-        const fetchMock = jest.fn().mockResolvedValue({ status: 200, json: async () => ({}) });
+        const fetchMock = jest.fn().mockResolvedValue(jsonResponse({}));
         global.fetch = fetchMock as any;
 
         await blockfrostApiCall('blocks/latest');
@@ -32,16 +40,14 @@ describe('helpers pagination tests', () => {
                     project_id: 'test-key',
                     'Content-Type': 'application/json'
                 },
+                redirect: 'manual',
                 signal: expect.anything()
             }
         );
     });
 
     it('fetchPaginatedResults should return empty list on 404', async () => {
-        const fetchMock = jest.fn().mockResolvedValue({
-            status: 404,
-            json: async () => []
-        });
+        const fetchMock = jest.fn().mockResolvedValue(jsonResponse([], 404));
         global.fetch = fetchMock as any;
 
         const results = await fetchPaginatedResults<string>('blocks/latest/next');
@@ -54,14 +60,8 @@ describe('helpers pagination tests', () => {
         const pageItems = new Array(100).fill(null).map((_, index) => `${index}`);
         const fetchMock = jest
             .fn()
-            .mockResolvedValueOnce({
-                status: 200,
-                json: async () => pageItems
-            })
-            .mockResolvedValue({
-                status: 500,
-                text: async () => 'upstream unavailable'
-            });
+            .mockResolvedValueOnce(jsonResponse(pageItems))
+            .mockImplementation(async () => new Response('upstream unavailable', { status: 500 }));
         global.fetch = fetchMock as any;
 
         await expect(fetchPaginatedResults<string>('blocks/latest/next')).rejects.toThrow(
@@ -69,21 +69,15 @@ describe('helpers pagination tests', () => {
         );
 
         expect(fetchMock).toHaveBeenCalledTimes(7);
-    });
+    }, 10_000);
 
     it('fetchPaginatedResults should stop when maxResults is reached', async () => {
         const pageOne = new Array(100).fill(null).map((_, index) => `page1-${index}`);
         const pageTwo = new Array(100).fill(null).map((_, index) => `page2-${index}`);
         const fetchMock = jest
             .fn()
-            .mockResolvedValueOnce({
-                status: 200,
-                json: async () => pageOne
-            })
-            .mockResolvedValueOnce({
-                status: 200,
-                json: async () => pageTwo
-            });
+            .mockResolvedValueOnce(jsonResponse(pageOne))
+            .mockResolvedValueOnce(jsonResponse(pageTwo));
         global.fetch = fetchMock as any;
 
         const results = await fetchPaginatedResults<string>('blocks/latest/next', 120);
@@ -112,6 +106,7 @@ describe('helpers pagination tests', () => {
         const koiosResponse = [{ tx_hash: 'abc' }];
         const fetchMock = jest.fn().mockResolvedValue({
             ok: true,
+            headers: new Headers(),
             text: async () => JSON.stringify(koiosResponse)
         });
         global.fetch = fetchMock as any;
@@ -137,6 +132,7 @@ describe('helpers pagination tests', () => {
         const koiosResponse = [{ tx_hash: 'abc' }];
         const fetchMock = jest.fn().mockResolvedValue({
             ok: true,
+            headers: new Headers(),
             text: async () => JSON.stringify(koiosResponse)
         });
         global.fetch = fetchMock as any;
@@ -175,18 +171,49 @@ describe('helpers pagination tests', () => {
         });
     });
 
-    it('fetchKoios carries the Retry-After wait on a throttled error so callers can honor it', async () => {
-        // Invariant: Koios's stated wait reaches the retry logic. Failure caught: retrying before Retry-After.
-        global.fetch = jest.fn().mockResolvedValue({
-            ok: false, status: 429, statusText: 'Too Many Requests',
-            headers: new Headers({ 'Retry-After': '7' }), text: async () => ''
-        }) as any;
-        await expect(fetchKoios('tx_info', 'POST', '{}')).rejects.toMatchObject({ status: 429, retryAfterMs: 7000 });
+    it('fetchKoios carries the Retry-After wait and binds the next caller', async () => {
+        // Invariant: the diagnostic wait also protects a later caller. Removing registration admits it early.
+        jest.useFakeTimers({ now: 1_000_000 });
+        try {
+            global.fetch = jest.fn().mockResolvedValue({
+                ok: false, status: 429, statusText: 'Too Many Requests',
+                headers: new Headers({ 'Retry-After': '7' }), text: async () => ''
+            }) as any;
+            await expect(fetchKoios('tx_info', 'POST', '{}')).rejects.toMatchObject({ status: 429, retryAfterMs: 7000 });
+            const nextFetch = jest.fn().mockResolvedValue({
+                ok: false, status: 503, statusText: 'Service Unavailable', headers: new Headers(), text: async () => ''
+            });
+            global.fetch = nextFetch as any;
+            const next = fetchKoios('tx_info', 'POST', '{}').catch((error: unknown) => error);
+            await jest.advanceTimersByTimeAsync(6999);
+            expect(nextFetch).not.toHaveBeenCalled();
+            await jest.advanceTimersByTimeAsync(1);
+            expect(await next).not.toHaveProperty('retryAfterMs');
+            expect(nextFetch).toHaveBeenCalledTimes(1);
+        } finally {
+            jest.useRealTimers();
+        }
+    });
 
-        global.fetch = jest.fn().mockResolvedValue({
-            ok: false, status: 503, statusText: 'Service Unavailable', headers: new Headers(), text: async () => ''
-        }) as any;
-        await expect(fetchKoios('tx_info', 'POST', '{}')).rejects.not.toHaveProperty('retryAfterMs');
+    it.each([
+        ['HTTP date', 'Wed, 01 Jan 2031 00:00:07 GMT', 7000],
+        ['past HTTP date', 'Tue, 31 Dec 2030 23:59:59 GMT', 0],
+        ['zero seconds', '0', 0]
+    ])('fetchKoios carries Retry-After %s without retrying itself', async (_name, header, expected) => {
+        // Invariant: numeric/date provider signals reach the shared request gate unchanged.
+        // Removing HTTP-date parsing makes the future-date case fail; past dates must not become negative waits.
+        const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.parse('2031-01-01T00:00:00Z'));
+        const fetch = jest.fn().mockResolvedValue({
+            ok: false, status: 429, statusText: 'Too Many Requests',
+            headers: new Headers({ 'Retry-After': header }), text: async () => ''
+        });
+        global.fetch = fetch as any;
+        try {
+            await expect(fetchKoios('tx_info', 'POST', '{}')).rejects.toMatchObject({ status: 429, retryAfterMs: expected });
+            expect(fetch).toHaveBeenCalledTimes(1);
+        } finally {
+            clock.mockRestore();
+        }
     });
 
     it('fetchTxList should compose blockfrost pagination and koios request', async () => {
@@ -194,14 +221,12 @@ describe('helpers pagination tests', () => {
         const txInfoResponse = [{ tx_hash: 'tx-hash-1', outputs: [], assets_minted: [] }];
         const fetchMock = jest.fn().mockImplementation(async (url: string) => {
             if (url.includes('blockfrost.io')) {
-                return {
-                    status: 200,
-                    json: async () => txHashes
-                };
+                return jsonResponse(txHashes);
             }
 
             return {
                 ok: true,
+                headers: new Headers(),
                 text: async () => JSON.stringify(txInfoResponse)
             };
         });

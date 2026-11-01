@@ -1,6 +1,7 @@
 import { IndexNames, Logger, UTxOFunctionName } from '@koralabs/kora-labs-common';
 import { deflateSync } from 'zlib';
-import { ORDERED_SLOTS } from '../../config/constants';
+import { createHash } from 'crypto';
+import { handleEraBoundaries, ORDERED_SLOTS } from '../../config/constants';
 import { RedisHandlesStore } from './index';
 import { getApiCacheKey, getApiMetricsKey, getApiNamespaceScanPattern } from './keys';
 import { Worker } from 'worker_threads';
@@ -22,6 +23,18 @@ describe('RedisHandlesStore critical path tests', () => {
     const originalOrderedSlots = [...ORDERED_SLOTS];
     const network = `${process.env.NETWORK ?? 'preview'}`.toLowerCase();
     const rootKey = (suffix: string) => getApiCacheKey(suffix);
+    const snapshotHash = 'cd'.repeat(32);
+    const verification = {
+        verifiedAgainstChain: true, snapshotMptRootHash: 'ab'.repeat(32),
+        chainMptRootHash: 'ab'.repeat(32), network, verifiedAtUtc: '2026-04-18T00:00:00.000Z'
+    };
+    // Negative controls: accepting invalid envelopes or deleting stale progress must fail
+    // both rejection and read-only assertions, even if no replay callbacks execute.
+    const originalMetrics = { currentSlot: '9', currentBlockHash: 'ef'.repeat(32), utxoSchemaVersion: '1' };
+    const expectReadOnlySnapshotAttempt = (spy: jest.SpyInstance) => {
+        expect(spy.mock.calls.map(([cmd]) => cmd)).toEqual(['hgetall', 'hgetall', 'get']);
+        expect(spy).toHaveBeenCalledWith('hgetall', getApiMetricsKey());
+    };
 
     afterEach(() => {
         global.fetch = originalFetch;
@@ -281,18 +294,15 @@ describe('RedisHandlesStore critical path tests', () => {
         const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
             const [cmd] = args as [string];
             if (cmd === 'scan') return ['0', []];
+            if (cmd === 'snapshotClaim') return true;
             return undefined;
-        });
-        jest.spyOn(store, 'pipeline').mockImplementation((commands: CallableFunction) => {
-            commands();
-            return [];
         });
 
         const snapshot = {
             utxos: [
                 {
                     id: 'utxo_s3#0',
-                    tx_id: 'utxo_s3',
+                    tx_id: 'ef'.repeat(32),
                     index: 0,
                     slot: 11,
                     address: 'addr_test1xyz',
@@ -300,14 +310,14 @@ describe('RedisHandlesStore critical path tests', () => {
                     handles: [],
                     mint: [],
                     metadata: {},
-                    blockHash: 'hash',
+                    blockHash: 'ab'.repeat(32),
                     blockNum: 1
                 }
             ],
             slot: 11,
-            hash: 's3_block_hash',
+            hash: 'cd'.repeat(32),
             mintingData: {
-                alpha: [{ created_slot: 11, metadata: {}, txHash: 'txhash' }]
+                alpha: [{ created_slot: 11, metadata: {}, txHash: 'ef'.repeat(32) }]
             },
             utxoSchemaVersion: 1,
             verification: {
@@ -333,12 +343,17 @@ describe('RedisHandlesStore critical path tests', () => {
             [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: updateHandleIndexes
         } as any);
 
-        expect(result).toEqual({ id: 's3_block_hash', slot: 11 });
+        expect(result).toEqual({ id: 'cd'.repeat(32), slot: 11 });
         expect(addUtxo).toHaveBeenCalledWith(expect.objectContaining({ id: 'utxo_s3#0' }));
-        expect(updateHandleIndexes).toHaveBeenCalled();
+        expect(updateHandleIndexes).toHaveBeenCalledWith(
+            snapshot.utxos[0], new Map(Object.entries(snapshot.mintingData)), expect.any(Map), expect.any(Map)
+        );
+        expect(redisSpy).toHaveBeenCalledWith('snapshotClaim', expect.objectContaining({
+            originalMetrics: {}, originalProgress: {}, requireEmpty: false
+        }));
         expect(setMetricsSpy).toHaveBeenCalledWith(
             expect.objectContaining({
-                currentBlockHash: 's3_block_hash',
+                currentBlockHash: 'cd'.repeat(32),
                 currentSlot: 11,
                 utxoSchemaVersion: 1
             })
@@ -347,11 +362,11 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(redisSpy).not.toHaveBeenCalledWith('flushdb');
     });
 
-    it('falls back to default starting metrics when snapshot is not chain-verified', async () => {
+    it('preserves original metrics when snapshot is not chain-verified', async () => {
         const store = new RedisHandlesStore();
         const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
-            const [cmd] = args as [string];
-            if (cmd === 'scan') return ['0', []];
+            const [cmd, key] = args as [string, string];
+            if (cmd === 'hgetall') return key === getApiMetricsKey() ? { ...originalMetrics } : {};
             return undefined;
         });
         jest.spyOn(store, 'getUTxOSchemaVersion').mockReturnValue(1);
@@ -359,7 +374,7 @@ describe('RedisHandlesStore critical path tests', () => {
         const compressed = deflateSync(Buffer.from(JSON.stringify({
             utxos: [],
             slot: 22,
-            hash: 'snapshot_hash',
+            hash: snapshotHash,
             mintingData: {},
             utxoSchemaVersion: 1
         })));
@@ -372,28 +387,25 @@ describe('RedisHandlesStore critical path tests', () => {
         const addUtxo = jest.fn();
         const updateHandleIndexes = jest.fn();
 
-        const result = await store.tryPopulateFromS3UTxOs({
+        await expect(store.tryPopulateFromS3UTxOs({
             [UTxOFunctionName.ADD_UTXO]: addUtxo,
             [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: updateHandleIndexes
-        } as any);
+        } as any)).rejects.toThrow('Invalid snapshot envelope, schema or verification');
 
-        expect(result).toEqual(expect.objectContaining({ id: expect.any(String), slot: expect.any(Number) }));
         expect(addUtxo).not.toHaveBeenCalled();
         expect(updateHandleIndexes).not.toHaveBeenCalled();
-        expect(setMetricsSpy).toHaveBeenCalledWith(expect.objectContaining({
-            currentBlockHash: result.id,
-            currentSlot: result.slot,
-            utxoSchemaVersion: 1
-        }));
-        expect(redisSpy).toHaveBeenCalledWith('scan', '0', { match: getApiNamespaceScanPattern(), count: 1000 });
-        expect(redisSpy).not.toHaveBeenCalledWith('flushdb');
+        expect(setMetricsSpy).not.toHaveBeenCalled();
+        expectReadOnlySnapshotAttempt(redisSpy);
     });
 
-    it('falls back to default starting metrics when snapshot file is unavailable', async () => {
+    it('initializes genesis on fresh 404 only after empty-original worker admission', async () => {
         const store = new RedisHandlesStore();
+        let admitted = false;
+        let metrics: Record<string, string> = { ...originalMetrics };
         const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
-            const [cmd] = args as [string];
-            if (cmd === 'scan') return ['0', []];
+            const [cmd, key] = args as [string, string];
+            if (cmd === 'hgetall') return key === getApiMetricsKey() ? { ...metrics } : {};
+            if (cmd === 'snapshotClaim') return admitted;
             return undefined;
         });
         jest.spyOn(store, 'getUTxOSchemaVersion').mockReturnValue(1);
@@ -404,6 +416,15 @@ describe('RedisHandlesStore critical path tests', () => {
         const addUtxo = jest.fn();
         const updateHandleIndexes = jest.fn();
 
+        // Negative controls: neither an existing image nor refused admission permits genesis.
+        await expect(store.tryPopulateFromS3UTxOs({} as any)).rejects.toThrow('Snapshot unavailable (404)');
+        expectReadOnlySnapshotAttempt(redisSpy);
+        expect(setMetricsSpy).not.toHaveBeenCalled();
+        metrics = {};
+        await expect(store.tryPopulateFromS3UTxOs({} as any)).rejects.toThrow('original cache preserved');
+        expect(setMetricsSpy).not.toHaveBeenCalled();
+        admitted = true;
+        jest.spyOn(store, 'getMetrics').mockReturnValue({ handleCount: 0 } as any);
         const result = await store.tryPopulateFromS3UTxOs({
             [UTxOFunctionName.ADD_UTXO]: addUtxo,
             [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: updateHandleIndexes
@@ -417,15 +438,19 @@ describe('RedisHandlesStore critical path tests', () => {
             currentSlot: result.slot,
             utxoSchemaVersion: 1
         }));
-        expect(redisSpy).toHaveBeenCalledWith('scan', '0', { match: getApiNamespaceScanPattern(), count: 1000 });
-        expect(redisSpy).not.toHaveBeenCalledWith('flushdb');
+        expect(result).toEqual(handleEraBoundaries[network as keyof typeof handleEraBoundaries]);
+        expect(redisSpy).toHaveBeenCalledWith('snapshotClaim', expect.objectContaining({
+            originalMetrics: {}, originalProgress: {}, requireEmpty: true
+        }));
+        expect(redisSpy.mock.calls.filter(([cmd]) => ['del', 'hset', 'scan', 'flushdb'].includes(String(cmd))))
+            .toEqual([['del', [rootKey('snapshot_loader:progress')]]]);
     });
 
-    it('falls back to default starting metrics when snapshot schema version mismatches', async () => {
+    it('preserves original metrics when snapshot schema version mismatches', async () => {
         const store = new RedisHandlesStore();
         const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
-            const [cmd] = args as [string];
-            if (cmd === 'scan') return ['0', []];
+            const [cmd, key] = args as [string, string];
+            if (cmd === 'hgetall') return key === getApiMetricsKey() ? { ...originalMetrics } : {};
             return undefined;
         });
         jest.spyOn(store, 'getUTxOSchemaVersion').mockReturnValue(2);
@@ -433,8 +458,9 @@ describe('RedisHandlesStore critical path tests', () => {
         const compressed = deflateSync(Buffer.from(JSON.stringify({
             utxos: [],
             slot: 22,
-            hash: 'snapshot_hash',
+            hash: snapshotHash,
             mintingData: {},
+            verification,
             utxoSchemaVersion: 1
         })));
         const ab = compressed.buffer.slice(compressed.byteOffset, compressed.byteOffset + compressed.byteLength);
@@ -446,31 +472,23 @@ describe('RedisHandlesStore critical path tests', () => {
         const addUtxo = jest.fn();
         const updateHandleIndexes = jest.fn();
 
-        const result = await store.tryPopulateFromS3UTxOs({
+        await expect(store.tryPopulateFromS3UTxOs({
             [UTxOFunctionName.ADD_UTXO]: addUtxo,
             [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: updateHandleIndexes
-        } as any);
+        } as any)).rejects.toThrow('Invalid snapshot envelope, schema or verification');
 
-        expect(result).toEqual(expect.objectContaining({ id: expect.any(String), slot: expect.any(Number) }));
         expect(addUtxo).not.toHaveBeenCalled();
         expect(updateHandleIndexes).not.toHaveBeenCalled();
-        expect(setMetricsSpy).toHaveBeenCalledWith(expect.objectContaining({
-            currentBlockHash: result.id,
-            currentSlot: result.slot,
-            utxoSchemaVersion: 2
-        }));
-        expect(redisSpy).toHaveBeenCalledWith('scan', '0', { match: getApiNamespaceScanPattern(), count: 1000 });
-        expect(redisSpy).not.toHaveBeenCalledWith('flushdb');
+        expect(setMetricsSpy).not.toHaveBeenCalled();
+        expectReadOnlySnapshotAttempt(redisSpy);
     });
 
-    // Invariant: a snapshot-loader progress marker is only valid for the exact
-    // snapshot bytes it was written against (same schema version AND same block
-    // hash). Across invocations, a schema bump or operator-uploaded replacement
-    // snapshot must cause the next invocation to delete progress, clearNamespace,
-    // and restart from chunk 0 — otherwise it resumes with stale offsets into
-    // new-schema data and silently corrupts the index.
-    it('tryPopulateFromS3UTxOs discards stale progress marker when snapshot hash changes', async () => {
+    // Invariant: replacing snapshot bytes must refuse stale cursors without deleting the
+    // original image. The old delete-and-restart expectation authorized destructive recovery.
+    // Negative control: deleting progress or admitting a mismatched marker fails this test.
+    it('tryPopulateFromS3UTxOs preserves stale progress when snapshot hash changes', async () => {
         const store = new RedisHandlesStore();
+        let staleDigest = '';
         const hgetAllCalls: any[] = [];
         const delCalls: any[] = [];
         const hsetCalls: any[] = [];
@@ -478,8 +496,8 @@ describe('RedisHandlesStore critical path tests', () => {
             const [cmd] = args as [string];
             if (cmd === 'hgetall') {
                 hgetAllCalls.push(args);
-                // First call returns a stale marker from a different snapshot hash
-                return { mdIdx: '50', utxoIdx: '10', utxoSchemaVersion: '1', snapshotHash: 'old_hash' };
+                return args[1] === getApiMetricsKey() ? { ...originalMetrics } :
+                    { mdIdx: '0', utxoIdx: '0', utxoSchemaVersion: '1', snapshotHash: 'ef'.repeat(32), snapshotDigest: staleDigest };
             }
             if (cmd === 'del') { delCalls.push(args); return 1; }
             if (cmd === 'hset') { hsetCalls.push(args); return 1; }
@@ -487,14 +505,13 @@ describe('RedisHandlesStore critical path tests', () => {
             return undefined;
         });
         jest.spyOn(store, 'getUTxOSchemaVersion').mockReturnValue(1);
-        jest.spyOn(store, 'setMetrics').mockImplementation(jest.fn());
+        const setMetricsSpy = jest.spyOn(store, 'setMetrics').mockImplementation(jest.fn());
         jest.spyOn(store, 'getMetrics').mockReturnValue({ handleCount: 0 } as any);
-        jest.spyOn(store, 'pipeline').mockImplementation((commands: CallableFunction) => { commands(); return []; });
 
         const snapshot = {
             utxos: [],
             slot: 11,
-            hash: 'new_hash',
+            hash: snapshotHash,
             mintingData: {},
             utxoSchemaVersion: 1,
             verification: {
@@ -509,45 +526,51 @@ describe('RedisHandlesStore critical path tests', () => {
         const ab = compressed.buffer.slice(compressed.byteOffset, compressed.byteOffset + compressed.byteLength);
         global.fetch = jest.fn().mockResolvedValue({ status: 200, arrayBuffer: async () => ab }) as any;
 
-        await store.tryPopulateFromS3UTxOs({
-            [UTxOFunctionName.ADD_UTXO]: jest.fn(),
-            [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: jest.fn()
-        } as any);
+        staleDigest = createHash('sha256').update(compressed).digest('hex');
+        const addUtxo = jest.fn();
+        const updateHandleIndexes = jest.fn();
+        await expect(store.tryPopulateFromS3UTxOs({
+            [UTxOFunctionName.ADD_UTXO]: addUtxo,
+            [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: updateHandleIndexes
+        } as any)).rejects.toThrow('Snapshot progress does not match');
 
-        // The stale progress marker must have been deleted, then the namespace
-        // must have been cleared (via SCAN/DEL), then a fresh progress marker
-        // tagged with the new snapshot hash must have been written starting at 0.
-        expect(delCalls.some((args) => Array.isArray(args[1]) && args[1].some((k: string) => k.endsWith(':snapshot_loader:progress')))).toBe(true);
-        expect(redisSpy).toHaveBeenCalledWith('scan', '0', { match: getApiNamespaceScanPattern(), count: 1000 });
-        const freshProgressWrite = hsetCalls.find((args) => args[2]?.mdIdx === '0' && args[2]?.utxoIdx === '0');
-        expect(freshProgressWrite).toBeDefined();
-        expect(freshProgressWrite?.[2]).toEqual(expect.objectContaining({ utxoSchemaVersion: '1', snapshotHash: 'new_hash' }));
+        expect(delCalls).toEqual([]);
+        expect(hsetCalls).toEqual([]);
+        expect(setMetricsSpy).not.toHaveBeenCalled();
+        expectReadOnlySnapshotAttempt(redisSpy);
+        expect(addUtxo).not.toHaveBeenCalled();
+        expect(updateHandleIndexes).not.toHaveBeenCalled();
     });
 
+    // Invariant: exact compressed-byte digest + schema/hash/cursors resume without clearing.
+    // Negative control below changes only the digest; accepting it must fail before replay.
     it('tryPopulateFromS3UTxOs resumes in-place when progress marker matches snapshot', async () => {
         const store = new RedisHandlesStore();
+        let snapshotDigest = '';
         const delCalls: any[] = [];
         const scanCalls: any[] = [];
-        jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
             const [cmd] = args as [string];
             if (cmd === 'hgetall') {
-                // Marker matches the snapshot below — resume, don't clear
-                return { mdIdx: '0', utxoIdx: '0', utxoSchemaVersion: '1', snapshotHash: 'matching_hash' };
+                return args[1] === getApiMetricsKey() ? { ...originalMetrics } :
+                    { mdIdx: '1', utxoIdx: '0', utxoSchemaVersion: '1', snapshotHash, snapshotDigest };
             }
             if (cmd === 'del') { delCalls.push(args); return 1; }
             if (cmd === 'scan') { scanCalls.push(args); return ['0', []]; }
+            if (cmd === 'snapshotClaim') return true;
             return undefined;
         });
         jest.spyOn(store, 'getUTxOSchemaVersion').mockReturnValue(1);
         jest.spyOn(store, 'setMetrics').mockImplementation(jest.fn());
         jest.spyOn(store, 'getMetrics').mockReturnValue({ handleCount: 0 } as any);
-        jest.spyOn(store, 'pipeline').mockImplementation((commands: CallableFunction) => { commands(); return []; });
 
         const snapshot = {
-            utxos: [],
+            utxos: [{ id: 'resume#0', tx_id: 'ef'.repeat(32), index: 0, slot: 11,
+                address: 'addr_test1xyz', lovelace: 1, handles: [], mint: [],
+                blockHash: 'ab'.repeat(32), blockNum: 1 }],
             slot: 11,
-            hash: 'matching_hash',
-            mintingData: {},
+            hash: snapshotHash,
+            mintingData: { alpha: [{ created_slot: 11, txHash: 'ef'.repeat(32) }] },
             utxoSchemaVersion: 1,
             verification: {
                 verifiedAgainstChain: true,
@@ -561,17 +584,29 @@ describe('RedisHandlesStore critical path tests', () => {
         const ab = compressed.buffer.slice(compressed.byteOffset, compressed.byteOffset + compressed.byteLength);
         global.fetch = jest.fn().mockResolvedValue({ status: 200, arrayBuffer: async () => ab }) as any;
 
-        await store.tryPopulateFromS3UTxOs({
-            [UTxOFunctionName.ADD_UTXO]: jest.fn(),
-            [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: jest.fn()
+        const addUtxo = jest.fn();
+        const updateHandleIndexes = jest.fn();
+        snapshotDigest = '00'.repeat(32);
+        await expect(store.tryPopulateFromS3UTxOs({} as any)).rejects.toThrow('Snapshot progress does not match');
+        expectReadOnlySnapshotAttempt(redisSpy);
+        redisSpy.mockClear();
+        snapshotDigest = createHash('sha256').update(compressed).digest('hex');
+        const result = await store.tryPopulateFromS3UTxOs({
+            [UTxOFunctionName.ADD_UTXO]: addUtxo,
+            [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: updateHandleIndexes
         } as any);
 
-        // Resume path — progress is NOT deleted mid-run; namespace is NOT scanned for clear.
-        const progressDels = delCalls.filter((args) => Array.isArray(args[1]) && args[1].some((k: string) => k.endsWith(':snapshot_loader:progress')));
-        // The terminal deleteProgress at the end of tryPopulateFromS3UTxOs will still fire once on completion.
-        expect(progressDels.length).toBeLessThanOrEqual(1);
-        // No namespace SCAN issued for clearNamespace on resume path
-        expect(scanCalls.length).toBe(0);
+        expect(result).toEqual({ id: snapshotHash, slot: 11 });
+        expect(addUtxo).toHaveBeenCalledTimes(1);
+        expect(addUtxo).toHaveBeenCalledWith(snapshot.utxos[0]);
+        expect(updateHandleIndexes).toHaveBeenCalledWith(snapshot.utxos[0],
+            new Map(Object.entries(snapshot.mintingData)), expect.any(Map), expect.any(Map));
+        expect(delCalls).toEqual([['del', [rootKey('snapshot_loader:progress')]]]);
+        expect(scanCalls).toEqual([]);
+        expect(redisSpy).not.toHaveBeenCalledWith('sadd', expect.anything(), expect.anything());
+        expect(redisSpy).toHaveBeenCalledWith('hset', rootKey('snapshot_loader:progress'), {
+            mdIdx: '1', utxoIdx: '1', utxoSchemaVersion: '1', snapshotHash, snapshotDigest
+        });
     });
 
     it('getStartingPoint uses snapshot path when schema/version requires refresh', async () => {
@@ -644,13 +679,19 @@ describe('RedisHandlesStore critical path tests', () => {
         expect(startingPoint).toEqual({ id: 'current_hash', slot: 99 });
     });
 
-    it('getStartingPoint returns null on failed retry snapshot error', async () => {
+    // Returning null previously allowed the legacy caller to interpret refusal as genesis.
+    // Negative control: catching this error and returning null makes rejects.toThrow fail.
+    it('getStartingPoint propagates failed retry snapshot error without mutating the original', async () => {
         const store = new RedisHandlesStore();
-        jest.spyOn(store, 'tryPopulateFromS3UTxOs').mockRejectedValue(new Error('network down'));
+        const redisSpy = jest.spyOn(store as any, 'redisClientCall').mockImplementation((...args: any[]) => {
+            const [cmd, key] = args;
+            if (cmd === 'hgetall') return key === getApiMetricsKey() ? { ...originalMetrics } : {};
+            return undefined;
+        });
+        global.fetch = jest.fn().mockRejectedValue(new Error('network down'));
 
-        const startingPoint = await store.getStartingPoint({} as any, true);
-
-        expect(startingPoint).toBeNull();
+        await expect(store.getStartingPoint({} as any, true)).rejects.toThrow('network down');
+        expectReadOnlySnapshotAttempt(redisSpy);
     });
 
     it('getStartingPoint returns retry snapshot point when failed path succeeds', async () => {

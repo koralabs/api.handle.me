@@ -14,6 +14,8 @@
 - [Runtime Entrypoints](./spec/runtime-entrypoints.md)
 - [@handlecontract Script Discovery](./spec/handlecontract-script-discovery.md)
 - [Scanner Recovery Runbook](./spec/scanner-recovery-runbook.md)
+- [Snapshot Admission and Ownership](./spec/snapshot-admission.md)
+- [Build and Release Guards](./build-release-guards.md)
 - [OpenAPI Swagger](./swagger.yml)
 
 - [API Plaintext Bootstrap](./spec/api-plaintext-bootstrap.md)

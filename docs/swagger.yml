@@ -28,6 +28,8 @@ tags:
   description: Handle holder wallets, scripts, addresses, stats
 - name: utils
   description: Handle utility endpoints
+- name: marketplace
+  description: Indexed Handle marketplace listings
 paths:
   "/":
     get:
@@ -196,6 +198,84 @@ paths:
             text/plain:
               schema:
                 type: string
+  "/marketplace/listings":
+    get:
+      tags:
+      - marketplace
+      summary: Retrieve indexed Handle marketplace listings
+      description: |
+        Returns a JSON array compatible with the marketplace BFF. Listings are derived
+        from current indexed UTxOs at all registered mkpl<ordinal>@handlecontract validators,
+        including outputs with seller staking credentials. No external chain or script fetch
+        is performed. Entries are sorted by handle name; there is no pagination on this endpoint.
+        Malformed or unsupported datums, missing UTxOs, and reference tokens are omitted.
+        A current store with no matching listings returns 200 and [].
+        The normal API freshness statuses apply: 202 while behind, 503 during destructive maintenance.
+        Only the two documented query parameters are accepted, each as a single non-empty string.
+      parameters:
+      - name: holder_address
+        in: query
+        required: false
+        description: |
+          Seller base, enterprise, or stake address on the API network (Byron and pointer
+          addresses are unsupported). Base addresses match their staking credential;
+          enterprise addresses match the datum owner payment credential. The marketplace
+          validator address is not the seller address.
+        schema:
+          type: string
+          minLength: 1
+      - name: search
+        in: query
+        required: false
+        description: Case-insensitive handle-name substring, at least three characters after trimming.
+        schema:
+          type: string
+          minLength: 3
+      responses:
+        '200':
+          description: Current indexed listings, or an empty array when no listings match.
+          headers:
+            X-Total-Count:
+              description: Number of valid listings after filtering.
+              schema:
+                type: integer
+                minimum: 0
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MarketplaceListing"
+        '202':
+          description: Best-effort indexed listings while the store is catching up.
+          headers:
+            X-Total-Count:
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MarketplaceListing"
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '429':
+          $ref: "#/components/responses/RateLimited"
+        '503':
+          description: Indexed listings may be incomplete during destructive scanner maintenance.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MarketplaceListing"
+        '500':
+          description: Unexpected storage or service failure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   "/handles":
     get:
       tags:
@@ -1429,6 +1509,39 @@ paths:
           description: HTTP application failure
 components:
   schemas:
+    MarketplaceListing:
+      type: object
+      required: [assetName, assetNameHex, assetLabel, policyId, utxo, holder, payoutAddress, price, slotNumber]
+      properties:
+        assetName:
+          type: string
+          description: Handle name without the dollar prefix.
+        assetNameHex:
+          type: string
+          description: Full on-chain asset-name hex, including its CIP-67 label when present.
+        assetLabel:
+          type: string
+          enum: ['', '000de140']
+          description: Empty for legacy assets; 000de140 for CIP-67 label 222 owner tokens.
+        policyId:
+          type: string
+        utxo:
+          $ref: "#/components/schemas/UTxO"
+        holder:
+          type: string
+          description: Seller stake address, or datum owner's enterprise address for a non-staked output.
+        payoutAddress:
+          type: string
+          description: First payout destination in the listing datum, encoded for the API network.
+        price:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+          description: Sum of all required datum payouts in lovelace; excludes marketplace fees.
+        slotNumber:
+          type: integer
+          minimum: 0
+          description: Slot of the current listing UTxO.
     Error:
       type: object
       description: |

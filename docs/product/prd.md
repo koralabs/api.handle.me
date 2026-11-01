@@ -42,11 +42,15 @@ Reading Handle state directly from chain providers for every request is expensiv
 - Complete API documentation in `docs/swagger.yml`.
 - Operator env glossary is maintained in `site.env` (no real secrets).
 - Runtime feature inventory and endpoint ownership are maintained in `docs/product/feature-matrix.md`.
+- Snapshot recovery must preserve existing data, metrics and control ownership when a candidate, resume marker or pre-admission ownership check is invalid. Missing snapshots permit genesis only for an absent original. See [Snapshot Admission and Ownership](../spec/snapshot-admission.md) for the bounded import and trust contract.
 - Core read API:
   - `/handles` catalog search + pagination and `/handles/list` batch reverse-lookup
   - `/handles/:handle` details and associated views (`/utxo`, `/personalized`, `/subhandle-settings`, `/subhandles`)
   - `/holders` and `/holders/:address` holder reverse lookup and aggregation
   - `/root-handles` for root handle inventory and filtering
+- Marketplace reads:
+  - `/marketplace/listings` exposes current indexed Handle listings as a BFF-compatible array with seller and name filters, prices in lovelace, and current UTxO details.
+  - Empty results are successful reads; malformed listing entries are omitted and invalid queries return client errors. Normal indexed-read freshness statuses apply.
 - Utility endpoints:
   - `/scripts` for the deployed-script catalog (every `*@handlecontract` subhandle with inline CBOR), with `?type=` slug `startsWith` filtering and `?latest=true` to scope to the highest ordinal per family
   - `/datum` CBOR/JSON encode/decode utility
@@ -66,12 +70,14 @@ Reading Handle state directly from chain providers for every request is expensiv
 
 ## Constraints
 - Scanner/index updates are synchronous by design (ordering matters)
+- Koios response rate-limit signals bind every caller in the process, including success responses with exhausted quota and errors that exhaust local retries. Register header waits before reading a potentially slow body and body waits when received; no later endpoint, split or queued request may start before the maximum stated deadline. Scanner pacing and the invocation work deadline apply to the earliest proposed request start, before waiting and again at dispatch (240 seconds for scheduled Fn; at most twelve minutes otherwise). An unadmittable provider hold exits without clearing its floor, advancing an incomplete block or starting fresh fallback work. [Implementation contract](../spec/spec.md#scanner-and-rollback).
 - API side may use async operations
 - Store-first serving model returns `202` while still catching up
 - Scheduled scanning can use managed Demeter UTxORPC without locally hosting cardano-node or Ogmios
 - Chain ingestion must preserve every Handle-policy touch, complete-block ordering, datum/script/metadata fidelity, and rollback-safe cursor semantics
 - Deployment targets include local Docker/Node and self-hosted box functions; AWS Lambda/ALB deployment is retired
 - Deployment orchestration is owned by the box workflow and the sibling `adahandle-deployments` build scripts
+- GitHub Actions runs unit tests only. Integration/e2e, browser and user-journey tests run locally against isolated fixtures, never in Actions. [Verification contract](../spec/spec.md#verification).
 
 ## Risks and Pain Points (Ecosystem-driven)
 - Resolution complexity: multiple handle “types” and standard evolutions (CIP labels, policy transitions) create integration risk.

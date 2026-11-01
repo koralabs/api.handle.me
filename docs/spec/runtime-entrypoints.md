@@ -1,10 +1,11 @@
 # Runtime Entrypoints
 
 ## Purpose
-This repo ships the same API/indexing system in three operational shapes:
+This repo ships the same API/indexing system in four operational shapes:
 - local Node.js development
 - container runtime
-- AWS Lambda entrypoints
+- self-hosted Fn entrypoints (current ecosystem deployment)
+- legacy AWS Lambda entrypoints
 
 This document maps the code entrypoints, what they start, and which environment variables affect them.
 
@@ -58,7 +59,15 @@ This document maps the code entrypoints, what they start, and which environment 
 - In container API mode, the script rewrites the packaged `swagger.yml` server URL to `http://localhost:3141` before starting `node express.js`.
 - If `NODE_DB` is empty and `DISABLE_NODE_SNAPSHOT=false`, the entrypoint downloads a Mithril cardano-node snapshot before starting the node.
 
-## Lambda Runtime
+## Self-hosted Fn Runtime
+
+The self-hosted boxes invoke the same scanner entrypoint with a 300-second function timeout and `KORA_SCANNER_DEFER_IMPORTS=true`. The bridge does not expose `getRemainingTimeInMillis`. Scheduled scans therefore receive a 240-second work budget, reserving 60 seconds for root rebuilding and lock/lease cleanup. A shorter remaining-time value from a runtime context takes precedence; a context advertising more time cannot extend the Fn cap. An exhausted work budget stops before initialization. The twelve-minute maximum remains for other runtimes, reduced when their context requires it.
+
+This corrects a software budget that previously exceeded Fn's lifetime. Provider admission checks the earliest possible request start before sleeping, so a known Retry-After beyond the work budget exits this invocation instead of parking it past Fn's cap. The provider floor remains binding on later invocations. Retry/pacing and every Koios/Blockfrost fallback request carry the same work deadline; a budget signal is never converted into fresh fallback work. Already-started prefetch and rollback asset reads drain before lease release, with their first failure stopping queued admissions. The rollback caller observes each rejection immediately rather than leaving it unhandled during a shared-helper start delay. A paused scan does not start post-scan network verification/rollback. This does not guarantee completion of an arbitrarily hung dependency or root rebuild; deadline checks remain cooperative. Coverage checks still pause without advancing the incomplete block, root rebuilding and token-conditional lease cleanup remain unchanged, and REIMPORT/REINDEX stay in the out-of-band sideload. No scanner or mint lock threshold is relaxed.
+
+Regression coverage: `lambdas/scannerBudget.test.ts` exercises cap/remaining-time boundaries; the local-only scanner integration suites, including `lambdas/scanner-budget.e2e.test.ts`, use isolated Valkey to prove a long provider hold exits within Fn's lifetime without clearing the wait, no expired fallback HTTP starts, and the cursor/lease permit the same block to resume on a later eligible invocation. Rollback cases preserve actual indexed handles, source UTxO, scanned-block ledger and MPT root on failure; they hold a live read to prove cleanup waits for it, and immediately invoke again before Redis' real lease TTL to prove token release rather than expiry. The long-hold case also requires both immediate invocations to reach Blockfrost before advancing the test clock by an hour. Neither suite submits transactions. Run integration tests locally, never in Actions.
+
+## Legacy Lambda Runtime
 
 ### API Lambda
 - `lambdas/api.ts` hydrates KMS environment variables, then loads `lambdas/api.app.ts`.

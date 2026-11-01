@@ -12,6 +12,7 @@ describe('helpers additional tests', () => {
     it('fetchKoios returns null on an empty successful response body', async () => {
         global.fetch = jest.fn().mockResolvedValue({
             ok: true,
+            headers: new Headers(),
             text: async () => ''
         }) as any;
 

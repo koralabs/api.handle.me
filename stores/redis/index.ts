@@ -1,6 +1,7 @@
 import { ApiIndexType, chunk, Holder, HolderHandleNames, IApiMetrics, IApiStore, IHandleFileContent, IndexNames, ISlotHistory, isNumeric, LogCategory, Logger, MintingData, NETWORK, SortAndLimitOptions, StoredHandle, UTxOFunctionName, UTxOFunctions, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { GlideString, HashDataType, SortOptions } from '@valkey/valkey-glide';
 import { promisify } from 'util';
+import { createHash, randomUUID } from 'crypto';
 import { MessageChannel, receiveMessageOnPort, Worker } from 'worker_threads';
 import { inflate } from 'zlib';
 import { objectStoreConfig } from '@koralabs/kora-labs-common/aws';
@@ -8,7 +9,8 @@ import { DISABLE_HANDLES_SNAPSHOT, NODE_ENV, getSnapshotUrl } from '../../config
 import { handleEraBoundaries, MAX_SETS_PER_PIPE, META_INDEXES, ORDERED_SLOTS } from '../../config/constants';
 import { getHandleNameFromAssetName } from '../../services/ogmios/utils';
 import { canonicalJsonStringify } from '../../utils/helpers';
-import { isChainVerifiedSnapshot, VerifiedHandleFileContent } from '../../utils/verifiedSnapshot';
+import { getSnapshotScannerOwner } from '../../utils/snapshotOwnership';
+import { validateSnapshot } from '../../utils/verifiedSnapshot';
 import { getApiCacheTag, getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey, getApiMptRootHashKey, getApiNamespaceScanPattern, getApiRegistryLabelsKey, getApiScannedBlocksKey } from './keys';
 
 // const glideClient = await GlideClient.createClient({
@@ -22,6 +24,7 @@ const redisTimings: Record<string, number> = {};
 export class RedisHandlesStore implements IApiStore {
     private static _worker: any;
     private static _id = 0;
+    private snapshotFence?: { key: string; owner: string; scannerKey: string; scannerOwner: string; ownsScannerLease: boolean };
     private static _pipeline: [string, any[]][] | undefined = undefined;
     // Per-active-pipeline count of HOLDER SREMs queued (keyed by holder). scard is
     // pipeline-safe but reflects PRE-batch cardinality — it cannot see sibling SREMs queued
@@ -198,151 +201,106 @@ export class RedisHandlesStore implements IApiStore {
         const currentUTxOSchemaVersion = this.getUTxOSchemaVersion();
         const url = getSnapshotUrl(NETWORK, currentUTxOSchemaVersion);
 
-        // Resume-capable loader. Progress marker lives in the namespace as a
-        // hash at {api:NETWORK}:snapshot_loader:progress. On fresh start we
-        // clearNamespace() and then write an empty progress marker. On resume
-        // we skip clearNamespace and pick up from the saved chunk index so a
-        // 15-min Lambda timeout doesn't lose progress; the next invocation
-        // continues from where we stopped.
-        //
-        // The marker is tagged with the snapshot's schema version AND block
-        // hash. Resuming only happens when both match the current S3 snapshot.
-        // A schema bump (or an operator uploading a replacement snapshot) across
-        // invocations otherwise causes the next invocation to resume from stale
-        // chunk offsets into new-schema data — see correctness-spiral V2.
         const progressKey = `${getApiCacheTag(NETWORK)}:snapshot_loader:progress`;
-        type LoaderProgress = { mdIdx: number; utxoIdx: number; utxoSchemaVersion: number; snapshotHash: string };
-        const readProgress = (): LoaderProgress | null => {
-            const raw = this.redisClientCall('hgetall', progressKey) as Record<string, string> | null;
-            if (!raw || Object.keys(raw).length === 0) return null;
-            return {
-                mdIdx: Number(raw.mdIdx ?? 0),
-                utxoIdx: Number(raw.utxoIdx ?? 0),
-                utxoSchemaVersion: Number(raw.utxoSchemaVersion ?? 0),
-                snapshotHash: `${raw.snapshotHash ?? ''}`
-            };
+        const ownerKey = `${getApiCacheTag(NETWORK)}:snapshot_loader:owner`;
+        const scannerKey = `${getApiCacheTag(NETWORK)}:scanner:lease`;
+        const readHash = (key: string): Record<string, string> => {
+            const raw = this.redisClientCall('hgetall', key);
+            return Object.fromEntries(Array.isArray(raw)
+                ? raw.map(entry => [String(entry.field ?? entry.key), String(entry.value)])
+                : Object.entries(raw ?? {}).map(([key, value]) => [key, String(value)]));
         };
-        const writeProgress = (p: LoaderProgress) => {
-            this.redisClientCall('hset', progressKey, {
-                mdIdx: String(p.mdIdx),
-                utxoIdx: String(p.utxoIdx),
-                utxoSchemaVersion: String(p.utxoSchemaVersion),
-                snapshotHash: p.snapshotHash
-            });
-        };
-        const deleteProgress = () => {
-            this.redisClientCall('del', [progressKey]);
-        };
-
-        const existing = readProgress();
-
-        // No existing progress = fresh boot (or post-reset). Clean the namespace up-front so
-        // any stale keys from a prior deploy don't coexist with whatever we're about to write.
-        // If S3 is 404 we fall through and use era-genesis metrics over a cleared namespace.
-        if (!existing) {
-            Logger.log(`Snapshot loader: fresh start — clearing namespace`);
-            this.clearNamespace();
+        // Capture before the asynchronous fetch; admission compares these exact images atomically.
+        const originalMetrics = readHash(getApiMetricsKey());
+        const originalProgress = readHash(progressKey);
+        const scannerOwner = this.redisClientCall('get', scannerKey) ?? null;
+        if (scannerOwner !== null && scannerOwner !== getSnapshotScannerOwner()) {
+            throw new Error('Snapshot scanner lease belongs to another invocation; original cache preserved');
         }
-
-        let id = handleEraBoundaries[NETWORK].id;
-        let slot = handleEraBoundaries[NETWORK].slot;
-        Logger.log(`Fetching ${url}`);
-        const awsResponse = await fetch(url);
-        if (awsResponse.status === 200) {
-            const buff = await awsResponse.arrayBuffer();
-            const unZipPromise = promisify(inflate);
-            const result = await unZipPromise(buff);
-            const text = result.toString('utf8');
-            Logger.log(`Found ${url}`);
-            const storedS3HandlesUTxOJson = JSON.parse(text) as VerifiedHandleFileContent;
-            const { utxos, slot: s3Slot, mintingData, hash: s3Hash, utxoSchemaVersion, scannedBlocks } = storedS3HandlesUTxOJson;
-
-            // Determine whether to resume or restart. Resuming requires both the schema version
-            // and the snapshot hash to match what the progress marker was written against —
-            // otherwise the prior invocation's offsets would be applied to new-schema data.
-            const progressIsReusable = !!existing
-                && existing.utxoSchemaVersion === Number(utxoSchemaVersion)
-                && existing.snapshotHash === `${s3Hash}`;
-            if (existing && !progressIsReusable) {
-                Logger.log({
-                    message: `Snapshot loader: discarding progress marker — schemaVersion=${existing.utxoSchemaVersion}→${utxoSchemaVersion} snapshotHash=${existing.snapshotHash}→${s3Hash}`,
-                    category: LogCategory.WARN,
-                    event: 'snapshotLoader.progressMismatch'
-                });
-                deleteProgress();
-                this.clearNamespace();
+        const existing = Object.keys(originalProgress).length ? originalProgress : null;
+        const response = await fetch(url);
+        let id: string;
+        let slot: number;
+        let snapshot: import('../../utils/verifiedSnapshot').VerifiedHandleFileContent | undefined;
+        let digest = '';
+        if (response.status === 200) {
+            const bytes = Buffer.from(await response.arrayBuffer());
+            digest = createHash('sha256').update(bytes).digest('hex');
+            const candidate: unknown = JSON.parse((await promisify(inflate)(bytes)).toString('utf8'));
+            validateSnapshot(candidate, currentUTxOSchemaVersion);
+            snapshot = candidate;
+            id = candidate.hash;
+            slot = candidate.slot;
+        } else if (response.status === 404 && !existing && Object.keys(originalMetrics).length === 0) {
+            id = handleEraBoundaries[NETWORK].id;
+            slot = handleEraBoundaries[NETWORK].slot;
+        } else {
+            throw new Error(`Snapshot unavailable (${response.status}); original cache preserved`);
+        }
+        const mintingChunks = snapshot ? chunk(Object.entries(snapshot.mintingData), MAX_SETS_PER_PIPE) : [];
+        const utxoChunks = snapshot ? chunk([...snapshot.utxos].sort((a, b) => a.slot - b.slot), MAX_SETS_PER_PIPE) : [];
+        let mdIdx = 0;
+        let utxoIdx = 0;
+        if (existing) {
+            mdIdx = Number(existing.mdIdx);
+            utxoIdx = Number(existing.utxoIdx);
+            if (existing.snapshotDigest !== digest || existing.snapshotHash !== id ||
+                Number(existing.utxoSchemaVersion) !== currentUTxOSchemaVersion ||
+                !/^\d+$/.test(existing.mdIdx) || !/^\d+$/.test(existing.utxoIdx) ||
+                !Number.isSafeInteger(mdIdx) || mdIdx < 0 || mdIdx > mintingChunks.length ||
+                !Number.isSafeInteger(utxoIdx) || utxoIdx < 0 || utxoIdx > utxoChunks.length ||
+                (utxoIdx > 0 && mdIdx !== mintingChunks.length)) {
+                throw new Error('Snapshot progress does not match the complete candidate; original cache preserved');
             }
-            if (progressIsReusable) {
-                Logger.log(`Snapshot loader: resuming at mdIdx=${existing!.mdIdx} utxoIdx=${existing!.utxoIdx}`);
-            } else {
-                writeProgress({ mdIdx: 0, utxoIdx: 0, utxoSchemaVersion: Number(utxoSchemaVersion), snapshotHash: `${s3Hash}` });
-            }
-            const progress: LoaderProgress = progressIsReusable
-                ? existing!
-                : { mdIdx: 0, utxoIdx: 0, utxoSchemaVersion: Number(utxoSchemaVersion), snapshotHash: `${s3Hash}` };
-
-            if (utxoSchemaVersion == currentUTxOSchemaVersion && isChainVerifiedSnapshot(storedS3HandlesUTxOJson)) {
-                const mintingDataChunks = chunk(Object.entries(mintingData), MAX_SETS_PER_PIPE);
-                for (let i = progress.mdIdx; i < mintingDataChunks.length; i++) {
-                    const mintingDataChunk = mintingDataChunks[i];
-                    this.pipeline(() => {
-                        mintingDataChunk.forEach(([handle, mintData]) => {
-                            mintData.forEach(md => this.addValueToIndexedSet(IndexNames.MINT, handle, canonicalJsonStringify(md)));
-                        });
-                    });
-                    progress.mdIdx = i + 1;
-                    if ((i + 1) % 20 === 0 || i + 1 === mintingDataChunks.length) {
-                        writeProgress(progress);
-                        Logger.log(`Snapshot loader: mintingData ${progress.mdIdx}/${mintingDataChunks.length} chunks`);
-                    }
+        }
+        const owner = randomUUID();
+        const fence = { key: ownerKey, owner, scannerKey, scannerOwner: scannerOwner ?? owner, ownsScannerLease: scannerOwner === null };
+        const admitted = this.redisClientCall('snapshotClaim', {
+            fence, scannerOriginal: scannerOwner, metricsKey: getApiMetricsKey(), progressKey, originalMetrics, originalProgress,
+            // A missing snapshot may initialize genesis ONLY when no original data exists.
+            requireEmpty: !snapshot, pattern: getApiNamespaceScanPattern(), dataRoots: this.snapshotDataRoots()
+        });
+        if (!admitted) throw new Error('Snapshot original image or ownership changed; original cache preserved');
+        this.snapshotFence = fence;
+        const writeProgress = () => this.redisClientCall('hset', progressKey, {
+            mdIdx: String(mdIdx), utxoIdx: String(utxoIdx), utxoSchemaVersion: String(currentUTxOSchemaVersion),
+            snapshotHash: id, snapshotDigest: digest
+        });
+        try {
+            if (snapshot) {
+                if (!existing) {
+                    this.clearNamespace();
+                    writeProgress();
                 }
-                writeProgress(progress);
-
-                Logger.log(`Saved minting data for ${Object.keys(mintingData).length.toLocaleString()} handles from S3 snapshot`);
-
-                utxos.sort((a, b) => a.slot - b.slot);
-
-                const utxoChunks = chunk(utxos, MAX_SETS_PER_PIPE);
+                for (; mdIdx < mintingChunks.length;) {
+                    this.pipeline(() => {
+                        for (const [handle, entries] of mintingChunks[mdIdx]) {
+                            for (const md of entries) this.addValueToIndexedSet(IndexNames.MINT, handle, canonicalJsonStringify(md));
+                        }
+                    });
+                    mdIdx++;
+                    writeProgress();
+                }
                 const handles = new Map<string, StoredHandle>();
                 const holders = new Map<string, HolderHandleNames>();
-                const mintData = new Map(Object.entries(mintingData) as [string, MintingData[]][]);
-                for (let i = progress.utxoIdx; i < utxoChunks.length; i++) {
-                    const utxoChunk = utxoChunks[i];
+                const mintData = new Map(Object.entries(snapshot.mintingData));
+                for (; utxoIdx < utxoChunks.length;) {
                     this.pipeline(() => {
-                        utxoChunk.forEach((utxo) => {
+                        for (const utxo of utxoChunks[utxoIdx]) {
                             utxoFunctions[UTxOFunctionName.ADD_UTXO](utxo);
                             utxoFunctions[UTxOFunctionName.UPDATE_HANDLE_INDEXES](utxo, mintData, handles, holders);
-                        });
+                        }
                     });
-                    progress.utxoIdx = i + 1;
-                    if ((i + 1) % 20 === 0 || i + 1 === utxoChunks.length) {
-                        writeProgress(progress);
-                        Logger.log(`Snapshot loader: utxos ${progress.utxoIdx}/${utxoChunks.length} chunks`);
-                    }
+                    utxoIdx++;
+                    writeProgress();
                 }
-                writeProgress(progress);
-
-                Logger.log(`Saved ${utxos.length.toLocaleString()} UTxOs from S3 snapshot`);
-
-                // Restore the scanned-blocks ledger in bulk so processRollback's missed-block
-                // drift detection is accurate immediately, rather than having to rebuild after
-                // ~20 blocks of forward scanning. Snapshots published before this field existed
-                // will simply have no entries; the scan loop populates going forward.
-                if (scannedBlocks?.length) {
-                    const scannedChunks = chunk(scannedBlocks, MAX_SETS_PER_PIPE);
-                    for (const scannedChunk of scannedChunks) {
-                        this.addScannedBlocks(scannedChunk);
-                    }
-                    Logger.log(`Restored ${scannedBlocks.length.toLocaleString()} scanned block hashes from S3 snapshot`);
-                }
-
-                id = s3Hash;
-                slot = s3Slot;
-            } else if (utxoSchemaVersion != currentUTxOSchemaVersion) {
-                Logger.log(`Ignoring S3 snapshot schema version ${utxoSchemaVersion}; expected ${currentUTxOSchemaVersion}`);
-            } else {
-                Logger.log(`Ignoring S3 snapshot ${url} because it is not chain-verified`);
+                for (const blocks of chunk(snapshot.scannedBlocks ?? [], MAX_SETS_PER_PIPE)) this.addScannedBlocks(blocks);
             }
+            this.setMetrics({ utxoSchemaVersion: currentUTxOSchemaVersion, indexSchemaVersion: this.getIndexSchemaVersion(), currentBlockHash: id, currentSlot: slot, startTimestamp: Date.now() });
+            this.redisClientCall('del', [progressKey]);
+        } finally {
+            this.snapshotFence = undefined;
+            this.redisClientCall('snapshotRelease', fence);
         }
         const endTime = Date.now();
         const pad = (num: number) => num.toString().padStart(2, '0');
@@ -352,8 +310,6 @@ export class RedisHandlesStore implements IApiStore {
         const metrics = this.getMetrics();
         Logger.log(`UTxO storage starting at slot: ${slot} and hash: ${id} with ${metrics.handleCount} Handles`);
 
-        this.setMetrics({ utxoSchemaVersion: currentUTxOSchemaVersion, indexSchemaVersion: this.getIndexSchemaVersion(), currentBlockHash: id, currentSlot: slot, startTimestamp: Date.now() });
-        deleteProgress();
         return { id, slot };
     }
 
@@ -391,13 +347,9 @@ export class RedisHandlesStore implements IApiStore {
                 return null;
             }
 
-            try {
-                const { id, slot } = await this.tryPopulateFromS3UTxOs(utxoFunctions);
-                return { id, slot };
-            } catch (error: any) {
-                Logger.log(`Error fetching file from online with error: ${error.message}`);
-                return null;
-            }
+            // An unavailable or invalid candidate is not permission to reset to genesis.
+            // Propagate refusal so legacy callers cannot turn it into a destructive fallback.
+            return this.tryPopulateFromS3UTxOs(utxoFunctions);
         }
     }
 
@@ -685,14 +637,18 @@ export class RedisHandlesStore implements IApiStore {
 
     // #region PRIVATE *******************************
 
+    private snapshotDataRoots(): string[] {
+        return [...Object.values(IndexNames).map(index => getApiIndexRootKey(index)), getApiMetricsKey(),
+            getApiMptRootHashKey(), getApiRegistryLabelsKey(), getApiScannedBlocksKey()];
+    }
+
     private clearNamespace() {
         let cursor = '0';
         do {
             const [nextCursor, keys] = (this.redisClientCall('scan', cursor, { match: getApiNamespaceScanPattern(), count: 1000 })) as [string, string[]];
             cursor = nextCursor;
-            if (keys && keys.length > 0) {
-                this.redisClientCall('del', keys);
-            }
+            const dataKeys = (keys ?? []).filter(key => this.snapshotDataRoots().some(root => key === root || key.startsWith(`${root}:`)));
+            if (dataKeys.length > 0) this.redisClientCall('del', dataKeys);
         } while (cursor !== '0');
     }
 
@@ -772,7 +728,7 @@ export class RedisHandlesStore implements IApiStore {
         const view = new Int32Array(sab);
 
         const { port1, port2 } = new MessageChannel();
-        RedisHandlesStore._worker.postMessage({ id, sab, payload: { id, cmd, args }, reply: port2 }, [port2]);
+        RedisHandlesStore._worker.postMessage({ id, sab, payload: { id, cmd, args, fence: this.snapshotFence }, reply: port2 }, [port2]);
 
         // Block up to 30s so we don't hang forever
         const status = Atomics.wait(view, 0, 0, 20_000);

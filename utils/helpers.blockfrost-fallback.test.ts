@@ -1,6 +1,8 @@
 import { NETWORK } from '@koralabs/kora-labs-common';
 import { fetchBlockfrostTxHashes, fetchBlockfrostTxInfo, fetchBlockfrostDatumCbor } from './helpers';
 
+const jsonResponse = (body: unknown, status = 200, statusText = '') => new Response(JSON.stringify(body), { status, statusText });
+
 describe('Blockfrost fallback functions', () => {
     const originalFetch = global.fetch;
     const originalBlockfrostApiKey = process.env.BLOCKFROST_API_KEY;
@@ -19,12 +21,12 @@ describe('Blockfrost fallback functions', () => {
         it('returns tx hashes for multiple blocks via Blockfrost pagination', async () => {
             const fetchMock = jest.fn().mockImplementation(async (url: string) => {
                 if (url.includes('blocks/block1/txs')) {
-                    return { status: 200, json: async () => ['tx1', 'tx2'] };
+                    return jsonResponse(['tx1', 'tx2']);
                 }
                 if (url.includes('blocks/block2/txs')) {
-                    return { status: 200, json: async () => ['tx3'] };
+                    return jsonResponse(['tx3']);
                 }
-                return { status: 200, json: async () => [] };
+                return jsonResponse([]);
             });
             global.fetch = fetchMock as any;
 
@@ -38,10 +40,7 @@ describe('Blockfrost fallback functions', () => {
         });
 
         it('returns empty array when blocks have no transactions', async () => {
-            global.fetch = jest.fn().mockResolvedValue({
-                status: 404,
-                json: async () => []
-            }) as any;
+            global.fetch = jest.fn().mockResolvedValue(jsonResponse([], 404)) as any;
 
             const result = await fetchBlockfrostTxHashes(['empty-block']);
             expect(result).toEqual([]);
@@ -111,15 +110,15 @@ describe('Blockfrost fallback functions', () => {
         it('maps Blockfrost tx data to KoiosTxInfo format', async () => {
             const fetchMock = jest.fn().mockImplementation(async (url: string) => {
                 if (url.includes('/txs/tx_abc/utxos')) {
-                    return { ok: true, status: 200, json: async () => mockUtxoData };
+                    return jsonResponse(mockUtxoData);
                 }
                 if (url.includes('/txs/tx_abc/metadata')) {
-                    return { ok: true, status: 200, json: async () => mockMetadata };
+                    return jsonResponse(mockMetadata);
                 }
                 if (url.includes('/txs/tx_abc')) {
-                    return { ok: true, status: 200, json: async () => mockTxData };
+                    return jsonResponse(mockTxData);
                 }
-                return { ok: false, status: 404, statusText: 'Not Found' };
+                return jsonResponse({}, 404, 'Not Found');
             });
             global.fetch = fetchMock as any;
 
@@ -170,12 +169,12 @@ describe('Blockfrost fallback functions', () => {
 
             const fetchMock = jest.fn().mockImplementation(async (url: string) => {
                 if (url.includes('/utxos')) {
-                    return { ok: true, status: 200, json: async () => mintUtxoData };
+                    return jsonResponse(mintUtxoData);
                 }
                 if (url.includes('/metadata')) {
-                    return { ok: false, status: 404, statusText: 'Not Found' };
+                    return jsonResponse({}, 404, 'Not Found');
                 }
-                return { ok: true, status: 200, json: async () => ({ block: 'b', block_height: 1, slot: 1, asset_mint_or_burn_count: 1 }) };
+                return jsonResponse({ block: 'b', block_height: 1, slot: 1, asset_mint_or_burn_count: 1 });
             });
             global.fetch = fetchMock as any;
 
@@ -212,9 +211,9 @@ describe('Blockfrost fallback functions', () => {
 
             const fetchMock = jest.fn().mockImplementation(async (url: string) => {
                 if (url.includes('/utxos')) {
-                    return { ok: true, status: 200, json: async () => noMintUtxoData };
+                    return jsonResponse(noMintUtxoData);
                 }
-                return { ok: true, status: 200, json: async () => ({ block: 'b', block_height: 1, slot: 1, asset_mint_or_burn_count: 0 }) };
+                return jsonResponse({ block: 'b', block_height: 1, slot: 1, asset_mint_or_burn_count: 0 });
             });
             global.fetch = fetchMock as any;
 
@@ -247,9 +246,9 @@ describe('Blockfrost fallback functions', () => {
 
             const fetchMock = jest.fn().mockImplementation(async (url: string) => {
                 if (url.includes('/utxos')) {
-                    return { ok: true, status: 200, json: async () => inlineDatumUtxoData };
+                    return jsonResponse(inlineDatumUtxoData);
                 }
-                return { ok: true, status: 200, json: async () => ({ block: 'b', block_height: 1, slot: 1, asset_mint_or_burn_count: 0 }) };
+                return jsonResponse({ block: 'b', block_height: 1, slot: 1, asset_mint_or_burn_count: 0 });
             });
             global.fetch = fetchMock as any;
 
@@ -272,8 +271,8 @@ describe('Blockfrost fallback functions', () => {
             };
 
             const fetchMock = jest.fn().mockImplementation(async (url: string) => {
-                if (url.includes('/utxos')) return { ok: true, status: 200, json: async () => collateralUtxoData };
-                return { ok: true, status: 200, json: async () => ({ block: 'b', block_height: 1, slot: 1, asset_mint_or_burn_count: 0 }) };
+                if (url.includes('/utxos')) return jsonResponse(collateralUtxoData);
+                return jsonResponse({ block: 'b', block_height: 1, slot: 1, asset_mint_or_burn_count: 0 });
             });
             global.fetch = fetchMock as any;
 
@@ -298,8 +297,8 @@ describe('Blockfrost fallback functions', () => {
             };
 
             const fetchMock = jest.fn().mockImplementation(async (url: string) => {
-                if (url.includes('/utxos')) return { ok: true, status: 200, json: async () => refInputUtxoData };
-                return { ok: true, status: 200, json: async () => ({ block: 'b', block_height: 1, slot: 1, asset_mint_or_burn_count: 0 }) };
+                if (url.includes('/utxos')) return jsonResponse(refInputUtxoData);
+                return jsonResponse({ block: 'b', block_height: 1, slot: 1, asset_mint_or_burn_count: 0 });
             });
             global.fetch = fetchMock as any;
 
@@ -313,11 +312,7 @@ describe('Blockfrost fallback functions', () => {
 
     describe('fetchBlockfrostDatumCbor', () => {
         it('returns datum CBOR for valid hash', async () => {
-            global.fetch = jest.fn().mockResolvedValue({
-                ok: true,
-                status: 200,
-                json: async () => ({ cbor: 'd87980' })
-            }) as any;
+            global.fetch = jest.fn().mockResolvedValue(jsonResponse({ cbor: 'd87980' })) as any;
 
             const result = await fetchBlockfrostDatumCbor('datum_hash_abc');
 
@@ -325,11 +320,7 @@ describe('Blockfrost fallback functions', () => {
         });
 
         it('returns null when datum is not found', async () => {
-            global.fetch = jest.fn().mockResolvedValue({
-                ok: false,
-                status: 404,
-                statusText: 'Not Found'
-            }) as any;
+            global.fetch = jest.fn().mockResolvedValue(jsonResponse({}, 404, 'Not Found')) as any;
 
             const result = await fetchBlockfrostDatumCbor('nonexistent');
 
@@ -342,11 +333,7 @@ describe('Blockfrost fallback functions', () => {
         // chain-accuracy rule. Now we throw on anything non-404 so the scanner
         // halts (matching dabea7e/6772557 posture).
         it('throws when Blockfrost returns a transient 5xx', async () => {
-            global.fetch = jest.fn().mockResolvedValue({
-                ok: false,
-                status: 503,
-                statusText: 'Service Unavailable'
-            }) as any;
+            global.fetch = jest.fn().mockResolvedValue(jsonResponse({}, 503, 'Service Unavailable')) as any;
 
             await expect(fetchBlockfrostDatumCbor('hash_abc')).rejects.toThrow(/503/);
         });
@@ -360,30 +347,23 @@ describe('Blockfrost fallback functions', () => {
         it('throws when reference_script_hash is set but cbor fetch fails', async () => {
             const fetchMock = jest.fn().mockImplementation(async (url: string) => {
                 if (url.includes('/txs/tx_with_ref_script') && !url.includes('/utxos') && !url.includes('/metadata')) {
-                    return { ok: true, status: 200, json: async () => ({ block: 'b', block_height: 1, slot: 1, asset_mint_or_burn_count: 0 }) };
+                    return jsonResponse({ block: 'b', block_height: 1, slot: 1, asset_mint_or_burn_count: 0 });
                 }
                 if (url.includes('/txs/tx_with_ref_script/utxos')) {
-                    return {
-                        ok: true,
-                        status: 200,
-                        json: async () => ({
-                            inputs: [],
-                            outputs: [{
-                                address: 'addr1',
-                                output_index: 0,
-                                amount: [{ unit: 'lovelace', quantity: '2000000' }],
-                                data_hash: null,
-                                inline_datum: null,
-                                collateral: false,
-                                reference_script_hash: 'script_hash_xyz'
-                            }]
-                        })
-                    };
+                    return jsonResponse({
+                        inputs: [],
+                        outputs: [{
+                            address: 'addr1', output_index: 0,
+                            amount: [{ unit: 'lovelace', quantity: '2000000' }],
+                            data_hash: null, inline_datum: null, collateral: false,
+                            reference_script_hash: 'script_hash_xyz'
+                        }]
+                    });
                 }
                 if (url.includes('/scripts/script_hash_xyz/cbor')) {
-                    return { ok: false, status: 503, statusText: 'Service Unavailable' };
+                    return jsonResponse({}, 503, 'Service Unavailable');
                 }
-                return { ok: true, status: 200, json: async () => ({}) };
+                return jsonResponse({});
             });
             global.fetch = fetchMock as any;
 

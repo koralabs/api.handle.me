@@ -23,20 +23,13 @@ class OgmiosService {
 
         const exsistingMetrics = this.scanningRepo.getMetrics();
 
-        this.scanningRepo.setMetrics({
-            currentSlot: exsistingMetrics?.currentSlot ?? handleEraBoundaries[process.env.NETWORK ?? 'preview'].slot,
-            currentBlockHash: exsistingMetrics?.currentBlockHash ?? handleEraBoundaries[process.env.NETWORK ?? 'preview'].id,
-            firstSlot: handleEraBoundaries[process.env.NETWORK ?? 'preview'].slot,
-            firstMemoryUsage: this.firstMemoryUsage,
-            startTimestamp: Date.now()
-        });
-
         // attempt ogmios resume (see if starting point exists or errors)
         const firstStartingPoint = await this.scanningRepo.getStartingPoint({
             [UTxOFunctionName.ADD_UTXO]: this.scanningRepo.addUTxO.bind(this.scanningRepo),
             [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: this.scanningRepo.updateHandleIndexes.bind(this.scanningRepo)
         });
-        // const firstStartingPoint = {id: 'eca47c4fb9ca7f8eb2c524b975da3db1d05ced0a9ef0c4ee2c40c4cf2fcb3ea5', slot: 134281477} as Point
+        let resumedPoint = firstStartingPoint;
+        let admittingRecovery = false;
 
         // eslint-disable-next-line no-constant-condition
         while (true) {
@@ -58,23 +51,21 @@ class OgmiosService {
                         break;
                     } catch (error: any) {
                         Logger.log({ message: `Error initializing Handles: ${error.message} code: ${error.code}`, category: LogCategory.ERROR, event: 'initializeStorage.firstFileFailed' });
+                        admittingRecovery = true;
                         const secondStartingPoint = await this.scanningRepo.getStartingPoint({
                             [UTxOFunctionName.ADD_UTXO]: this.scanningRepo.addUTxO.bind(this.scanningRepo),
                             [UTxOFunctionName.UPDATE_HANDLE_INDEXES]: this.scanningRepo.updateHandleIndexes.bind(this.scanningRepo)
                         }, true);
+                        admittingRecovery = false;
                         // If error, try the other file's starting point
                         if (error.code === 1000) {
-                            this.scanningRepo.destroy();
                             if (secondStartingPoint) {
                                 try {
                                     await this._resume(secondStartingPoint);
+                                    resumedPoint = secondStartingPoint;
                                     break;
                                 } catch (error: any) {
-                                    if (error.code === 1000) {
-                                        // this means the slot that came back from the files is bad
-                                        this.scanningRepo.rollBackToGenesis();
-                                        process.exit(2);
-                                    }
+                                    // An invalid intersection is not permission to erase the original cache.
                                     throw error;
                                 }
                             }
@@ -83,11 +74,20 @@ class OgmiosService {
                 }
                 this._resetClient();
             } catch (error: any) {
+                if (admittingRecovery || error.code === 1000) throw error;
                 Logger.log({ message: `Unable to connect Ogmios: ${error.message}`, category: LogCategory.ERROR, event: 'initializeStorage.failed.errorMessage' });
                 this._resetClient();
             }
             await delay(30 * 1000);
         }
+        // Admission and resume must both succeed before writing bootstrap bookkeeping.
+        this.scanningRepo.setMetrics({
+            currentSlot: resumedPoint?.slot ?? exsistingMetrics?.currentSlot ?? handleEraBoundaries[process.env.NETWORK ?? 'preview'].slot,
+            currentBlockHash: resumedPoint?.id ?? exsistingMetrics?.currentBlockHash ?? handleEraBoundaries[process.env.NETWORK ?? 'preview'].id,
+            firstSlot: handleEraBoundaries[process.env.NETWORK ?? 'preview'].slot,
+            firstMemoryUsage: this.firstMemoryUsage,
+            startTimestamp: Date.now()
+        });
     }
 
     private _resetClient() {

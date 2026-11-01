@@ -14,8 +14,8 @@ async function run() {
     if (configs[mode]) {
         args = [path.resolve('node_modules/jest/bin/jest.js'), '-c', configs[mode], '--runInBand', ...forwarded];
         if (mode !== 'unit') args.push('--forceExit');
-    } else if (mode === 'harness') {
-        args = ['--test', 'tests/valkey-harness.node-test.mjs', ...forwarded];
+    } else if (mode === 'native' || mode === 'harness') {
+        args = ['--test', mode === 'native' ? 'workers/snapshotTransactions.node-test.mjs' : 'tests/valkey-harness.node-test.mjs', ...forwarded];
     } else if (mode === 'guard') {
         args = ['--test', 'tests/network-guard.node-test.mjs', ...forwarded];
     } else throw new Error(`Unknown test profile: ${mode}`);

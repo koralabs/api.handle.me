@@ -1,10 +1,11 @@
 import { Point } from '@cardano-ogmios/schema';
-import { AssetNameLabel, asyncForEach, bech32FromHex, buildCharacters, buildDrep, buildHolderInfo, buildNumericModifiers, decodeAddress, decodeCborToJson, EMPTY, getPaymentKeyHash, getRarity, HandlePaginationModel, HandleSearchModel, HandleType, Holder, HolderHandleNames, HolderPaginationModel, HttpException, IApiMetrics, IApiStore, IHandleMetadata, IndexNames, IPersonalization, IPzDatum, IPzDatumConvertedUsingSchema, ISubHandleSettings, ISubHandleTypeSettings, LockedLambdaReason, LogCategory, Logger, MINTED_OG_LIST, MintingData, NETWORK, Sort, StoredHandle, UTxOFunctions, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
-import { designerSchema, handleDatumSchema, portalSchema, socialsSchema, subHandleSettingsDatumSchema } from '@koralabs/kora-labs-common/utils/cbor';
+import { AssetNameLabel, asyncForEach, bech32AddressFromHashes, bech32FromHex, buildCharacters, buildDrep, buildHolderInfo, buildNumericModifiers, decodeAddress, decodeCborToJson, EMPTY, getPaymentKeyHash, getRarity, HandlePaginationModel, HandleSearchModel, HandleType, Holder, HolderHandleNames, HolderPaginationModel, HttpException, IApiMetrics, IApiStore, IHandleMetadata, IndexNames, IPersonalization, IPzDatum, IPzDatumConvertedUsingSchema, ISubHandleSettings, ISubHandleTypeSettings, LockedLambdaReason, LogCategory, Logger, MINTED_OG_LIST, MintingData, NETWORK, Sort, StoredHandle, UTxO, UTxOFunctions, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { designerSchema, handleDatumSchema, marketplaceDatumSchema, portalSchema, socialsSchema, subHandleSettingsDatumSchema } from '@koralabs/kora-labs-common/utils/cbor';
 import * as crypto from 'crypto';
 import { isDatumEndpointEnabled } from '../config';
 import { MAX_SETS_PER_PIPE } from '../config/constants';
 import { BuildPersonalizationInput, HandleOnChainMetadata, MetadataLabel } from '../interfaces/ogmios.interfaces';
+import { MarketplaceListingFilters, MarketplaceListingViewModel } from '../models/view/marketplaceListing.view.model';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import {
     ensureLabel,
@@ -646,6 +647,76 @@ export class HandlesRepository {
             this.store.pipeline(() => {
                 this.addUTxO(utxo);
             });
+        }
+    }
+
+    public getMarketplaceListings(validatorHashes: string[], filters: MarketplaceListingFilters = {}): MarketplaceListingViewModel[] {
+        const validators = new Set(validatorHashes);
+        const names = [...new Set(this.getHandlesByPaymentKeyHashes([...validators]))].filter((name) => name !== EMPTY).sort();
+        const listings: MarketplaceListingViewModel[] = [];
+        for (const name of names) {
+            const handle = this.store.getHashFromIndex(IndexNames.HANDLE, name) as StoredHandle | undefined;
+            if (!handle?.utxo || (filters.search && !String(handle.name).toLowerCase().includes(filters.search))) continue;
+            const utxo = this.getUTxO(handle.utxo);
+            if (!utxo?.datum) continue;
+            // Store failures remain request failures; only malformed listing data is skipped.
+            const listing = this.buildMarketplaceListing(handle, utxo, validators, filters.holderAddress);
+            if (!listing) continue;
+            listings.push(listing);
+        }
+        return listings;
+    }
+
+    private buildMarketplaceListing(handle: StoredHandle, utxo: UTxOWithTxInfo, validators: Set<string>, holderFilter?: string): MarketplaceListingViewModel | null {
+        try {
+            const addressHex = decodeAddress(utxo.address);
+            if (!addressHex || !['1', '3', '7'].includes(addressHex[0]) || !validators.has(addressHex.slice(2, 58))) return null;
+            if (addressHex[1] !== (isTestnet ? '0' : '1') || ![58, 114].includes(addressHex.length)) return null;
+            if (!utxo.handles.some(([policy, assets]) => policy === handle.policy && assets.includes(handle.hex))) return null;
+            const asset = getHandleNameFromAssetName(handle.hex);
+            if (asset.isCip67 && asset.assetLabel !== AssetNameLabel.LBL_222) return null;
+            if (asset.name !== String(handle.name)) return null;
+            if (!Number.isSafeInteger(utxo.slot) || utxo.slot < 0) return null;
+
+            const decoded = decodeCborToJson({ cborString: utxo.datum!, schema: marketplaceDatumSchema });
+            if (!decoded || Object.keys(decoded).length !== 1) return null;
+            const fields = decoded.constructor_0;
+            if (!Array.isArray(fields) || fields.length !== 2) return null;
+            const [payouts, owner] = fields;
+            if (!Array.isArray(payouts) || !payouts.length || typeof owner !== 'string' || !/^0x[0-9a-f]{56}$/i.test(owner)) return null;
+
+            let price = 0;
+            let payoutAddress = '';
+            for (const payout of payouts) {
+                if (!payout || Object.keys(payout).length !== 1 || !Array.isArray(payout.constructor_0) || payout.constructor_0.length !== 2) return null;
+                const [encodedAddress, lovelace] = payout.constructor_0;
+                if (typeof encodedAddress !== 'string' || !/^0x[0-9a-f]+$/i.test(encodedAddress)) return null;
+                const hex = encodedAddress.slice(2);
+                const type = Number.parseInt(hex[0], 16);
+                if (!((type <= 3 && hex.length === 114) || ([6, 7].includes(type) && hex.length === 58))) return null;
+                if (!Number.isSafeInteger(lovelace) || lovelace < 0) return null;
+                price += lovelace;
+                if (!Number.isSafeInteger(price)) return null;
+                // Plutus Address data has no network ID. Apply the listing UTxO's network.
+                const address = bech32FromHex(`${hex[0]}${addressHex[1]}${hex.slice(2)}`, isTestnet);
+                payoutAddress ||= address;
+            }
+            const ownerAddress = bech32AddressFromHashes(owner.slice(2), 'key', '', 'key', 'addr', isTestnet);
+            const holder = addressHex.length === 114 ? buildHolderInfo(utxo.address).address : ownerAddress;
+            if (holderFilter && holder !== holderFilter && ownerAddress !== holderFilter) return null;
+            return {
+                assetName: String(handle.name),
+                assetNameHex: handle.hex,
+                assetLabel: asset.assetLabel ?? '',
+                policyId: handle.policy,
+                utxo: new UTxO(utxo),
+                holder,
+                payoutAddress,
+                price,
+                slotNumber: utxo.slot
+            };
+        } catch {
+            return null;
         }
     }
 

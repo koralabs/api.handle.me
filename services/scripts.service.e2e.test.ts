@@ -2,7 +2,7 @@ import { bech32AddressFromHashes, blake2b, HandleType } from '@koralabs/kora-lab
 import { RedisHandlesStore } from '../stores/redis';
 import { IRegistry } from '../interfaces/registry.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
-import { getScriptsIndex } from './scripts.service';
+import { getMarketplaceValidatorHashes, getScriptsIndex } from './scripts.service';
 
 const previewRefAddresses = [
     'addr_test1xqvz92m0wjyd6tk2g7khfr2rsy4m2v8wu7ctv4jlr8mxl6ccy24k7aygm5hv53adwjx58qftk5cwaeasket97x0kdl4smpxnjx',
@@ -126,5 +126,72 @@ describe('scripts service e2e', () => {
             latest: true
         }));
     });
-});
 
+    const saveScript = (name: string, cbor: string, type: string) => {
+        const handle = repo.Internal.buildHandle({
+            name,
+            hex: Buffer.from(name).toString('hex'),
+            policy: 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a',
+            handle_type: HandleType.NFT_SUBHANDLE,
+            utxo: `${Buffer.from(name).toString('hex').slice(0, 16)}#0`,
+            lovelace: 1,
+            resolved_addresses: { ada: previewRefAddresses[2] },
+            updated_slot_number: Date.now(),
+            script: { cbor, type }
+        });
+        repo.updateHolder(handle);
+        repo.save(handle);
+    };
+
+    it('narrows the catalog by family prefix and matches nothing for an unknown family', async () => {
+        // Invariant: `type=pers` returns only pers-family scripts; an unknown type returns an empty catalog.
+        // Failure caught: the startsWith filter being dropped would return demimnt3 too.
+        // Negative control: removing the typeFilter check fails the first expectation.
+        const pers = await getScriptsIndex(req, 'PERS');
+        expect(Object.values(pers).map(s => s.handle).sort()).toEqual(['pers1@handlecontract', 'pers2@handlecontract']);
+        expect(await getScriptsIndex(req, 'nope')).toEqual({});
+    });
+
+    it('derives the script address from the Plutus language tag and defaults unknown tags to V2', async () => {
+        // Invariant: the same CBOR under V3 yields a different validator hash than V2; unknown types hash as V2.
+        // Failure caught: ignoring script.type would give every language the V2 address.
+        // Negative control: forcing tag '02' makes the V3 address equal the V2 one and fails the inequality.
+        saveScript('mkpl1@handlecontract', '4e4d3001', 'plutusV3');
+        saveScript('mkpl2@handlecontract', '4e4d3002', 'mystery');
+        const scripts = await getScriptsIndex(req, 'mkpl');
+        const v3 = blake2b(Buffer.from('034e4d3001', 'hex'), 28);
+        const v2 = blake2b(Buffer.from('024e4d3001', 'hex'), 28);
+        expect(v3).not.toEqual(v2);
+        expect(Object.values(scripts).find(s => s.handle === 'mkpl1@handlecontract')?.validatorHash).toBe(v3);
+        expect(Object.values(scripts).find(s => s.handle === 'mkpl2@handlecontract')?.validatorHash)
+            .toBe(blake2b(Buffer.from('024e4d3002', 'hex'), 28));
+        expect(getMarketplaceValidatorHashes(repo)).toEqual([v3, blake2b(Buffer.from('024e4d3002', 'hex'), 28)].sort());
+    });
+
+    it('skips scripts whose CBOR is not valid hex', async () => {
+        // Invariant: malformed CBOR never produces a catalog entry or marketplace hash.
+        // Failure caught: odd-length hex would be hashed into a bogus address.
+        // Negative control: removing the length check lets the entry through and fails the empty expectation.
+        saveScript('mkpl1@handlecontract', 'abc', 'plutus_v2');
+        expect(await getScriptsIndex(req, 'mkpl')).toEqual({});
+        expect(getMarketplaceValidatorHashes(repo)).toEqual([]);
+    });
+
+    it('fetches unoptimized CBOR once per family and ignores failed fetches', async () => {
+        // Invariant: known families get unoptimizedCbor from the network-specific GitHub path, fetched once per family; failures leave it unset.
+        // Failure caught: per-handle fetching, wrong URL, or a failed fetch breaking the catalog.
+        // Negative control: removing the cache makes the call count 2 for pers.
+        const fetchMock = jest.spyOn(global, 'fetch' as any).mockImplementation((async (url: string) =>
+            url.includes('/pers.unoptimized.cbor')
+                ? { ok: true, text: async () => ' deadbeef\n' }
+                : { ok: false, text: async () => '' }) as any);
+        const scripts = await getScriptsIndex(req);
+        const byHandle = Object.fromEntries(Object.values(scripts).map(s => [s.handle, s.unoptimizedCbor]));
+        expect(byHandle['pers1@handlecontract']).toBe('deadbeef');
+        expect(byHandle['pers2@handlecontract']).toBe('deadbeef');
+        expect(byHandle['demimnt3@handlecontract']).toBeUndefined();
+        const urls = fetchMock.mock.calls.map(c => c[0]);
+        expect(urls).toContain('https://raw.githubusercontent.com/koralabs/handles-personalization/master/deploy/preview/pers.unoptimized.cbor');
+        expect(urls.filter(u => `${u}`.includes('/pers.unoptimized')).length).toBe(1);
+    });
+});

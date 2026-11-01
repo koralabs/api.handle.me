@@ -55,6 +55,8 @@ For external product context and Catalyst milestones, see `docs/product/ecosyste
 - Catalog search and filtering:
   - `GET /handles` and `POST /handles/list` (batch reverse-lookup)
   - `GET /root-handles` (root handle inventory; includes `minting_type` filtering)
+- Marketplace listings:
+  - `GET /marketplace/listings` (optional `holder_address` and `search`)
 - Personalization:
   - `GET /handles/:handle/personalized`
   - `GET /handles/:handle/personalized/utxo` (reference token UTxO)
@@ -206,6 +208,8 @@ API transition rule:
 - Scanner `tx_info` requests use adaptive resiliency: retriable transport/provider failures are retried with short backoff, then failing batches are split recursively to smaller `_tx_hashes` groups before falling back to Blockfrost.
 - Koios `tx_info` transient provider pool saturation responses (for example `PGRST003` connection-pool timeouts) are treated as retriable in the same retry/split flow.
 - Scanner paces Koios batch calls (`tx_info`, `block_txs`, `asset_utxos`) to stay under 6 requests/second while still using request-size batching.
+- Every `utils/helpers.ts::fetchKoios` caller shares the process-lifetime provider deadline in `utils/koiosRateLimit.ts`, separate from the next pacing start. Header registration runs in a reaction attached directly to the HTTP fetch promise, before the async admission wrapper produces its result or the helper reads `response.text()`; body `retry_after` and Google `RetryInfo.retryDelay` are registered when parsed. The maximum of numeric/fractional or HTTP-date `Retry-After`, reset-after/standard reset hints and exhausted `X-RateLimit-Remaining: 0` + reset wins; shorter/zero/past signals cannot shorten an existing hold. Success headers count too. Finite numeric header text is classified as a duration/reset number before date parsing; negative values are invalid and must not fall through to JavaScript's permissive year parser or change an existing valid hold. Valid fractional waits and HTTP dates remain supported. Error diagnostics still expose `retryAfterMs`, but a local retry decision is no longer the writer of provider state.
+- Shared admission re-reads the hold and pacing after every wake. Scanner passes its deadline callback and start interval into the helper; it checks the earliest proposed start before sleeping, then synchronously checks/claims immediately before actual fetch without an intervening await. A known hold beyond the work budget ends the invocation without shortening the provider floor. Owned retry/pacing waits and every Blockfrost fallback request use that callback too; typed budget failures cannot become fresh fallback HTTP or partial success. Prefetch stops queued batches on failure and drains already-started reads before cleanup; a paused scan returns before optional post-scan network work. Split children, final-retry failures, tip, pagination, datum/asset and non-scanner helper callers therefore observe the same hold while in-flight requests remain concurrent. No new retry/fallback, provider probe, environment variable or public endpoint contract is introduced.
 - `block_txs` and `asset_utxos` calls use retry+backoff on transient provider failures (including HTTP 429) before failing hard.
 - On handled Koios retry/split failures, scanner emits local `INFO` logs with batch sizing/hash context and a token-redacted curl template to reproduce request bodies for provider debugging.
 - Scanner lambda supports a function-url reindex shortcut (`/reindex` path, `reindex=true` query, or JSON body `{"reindex": true}`) and requires a whitelisted `api-key` from `WHITELISTED_API_KEYS`. Reindex and repair shortcuts must acquire the scanner lease like any other writer; if the lease is held by an active scan, the shortcut returns HTTP `409 Conflict` and the operator retries after the 60s lease TTL. This prevents shortcut paths from racing with a live cron scan on the same Valkey keys.
@@ -216,6 +220,63 @@ API transition rule:
 - `LBL_100` (reference token) and `LBL_001` (sub-handle settings token) processing in `updateHandleIndexes` `continue`s to the next asset on a missing inline datum rather than returning from the function. A multi-handle UTxO whose reference token happens to be malformed no longer silently abandons the other handles in that same UTxO.
 - `/mpt-root` provider probe (`probeKoiosRootHash`) rejects an empty tip response (`Koios /tip` returning `null` or no array entry) and rejects `tipSlot <= 0`. A degraded provider can no longer masquerade as a valid probe with a zero-slot tip.
 - Snapshot-import progress marker is tagged with `utxoSchemaVersion` and `snapshotHash`. An invocation that resumes with a marker whose tags don't match the currently-fetched snapshot deletes the marker, calls `clearNamespace`, and restarts from chunk 0 — so a schema bump or replaced S3 snapshot across invocations can't silently apply stale offsets to new data.
+
+### Blockfrost transport and fallback fidelity
+
+Blockfrost callers share one process-lifetime limiter instance using the same parser/admission implementation as Koios, with independent provider state. Headers register directly at response receipt, body waits at body receipt, and every applicable signal is maxed. Success/exhausted and final-attempt holds bind later callers too. Existing pagination retry counts and pacing remain; no retry/fallback is added, and an unadmittable scanner wait is not retried early.
+
+Fallback reads preserve the original `Response` contract and carry deadline admission through transaction, UTxO, datum, script and metadata requests. Known script bytes require their actual language metadata; lookup errors or missing language cannot become fabricated Plutus V2 or absent-script success. A genuine CBOR lookup 404 retains the established absence result. Transaction metadata failures propagate rather than returning stripped successful data. These are upstream data/transport corrections, not relaxed completeness or root guards.
+
+## Marketplace Listing Read Contract
+
+`GET /marketplace/listings` returns a JSON array of `MarketplaceListingViewModel` records,
+matching the marketplace BFF's `MarketAsset[]` contract. Each record includes `assetName`,
+`assetNameHex` (full on-chain asset name), `assetLabel` (empty for legacy, CIP-67 label hex
+for 222 owner tokens), `policyId`, `utxo` (including raw datum CBOR), `holder`,
+`payoutAddress`, `price`, and `slotNumber`. `price` is the sum of datum payouts in lovelace,
+excluding marketplace fees; `payoutAddress` is the first payout destination. Results are
+sorted by handle name, without pagination, and `X-Total-Count` is the filtered array size.
+
+The dynamically loaded marketplace route/controller reads `HandlesRepository`. Script
+metadata is resolved locally from all deployed `mkpl<ordinal>@handlecontract` subhandles
+using the same language-tagged validator hash calculation as `/scripts`. Candidate names
+come from the payment-key-hash index, because the contract's listing output combines the
+marketplace payment validator with the seller's stake credential. Validate each current
+UTxO's validator and asset membership; do not trust stale candidate index membership.
+Decode inline datums with `marketplaceDatumSchema`, requiring supported constructors,
+a 28-byte owner credential, non-empty valid payouts, and safe nonnegative integer prices.
+Only legacy or label-222 owner assets are exposed. Malformed/unsupported datums, missing
+UTxOs, mismatched assets, and reference tokens are skipped per record. Storage failures
+remain request errors. No remote chain queries or unoptimized-CBOR fetches occur.
+
+`holder_address` supports base, enterprise, and stake addresses on the API network;
+Byron and pointer addresses are unsupported. Base addresses normalize to their stake
+address. Staked listing holders are the output's stake address; non-staked listing holders
+are enterprise addresses reconstructed from the datum owner. An enterprise query can also
+match the datum owner's payment credential on a staked listing. `search` is a case-insensitive
+name substring with at least three characters after trimming. Unknown parameters, repeated
+or structured values, empty strings, short searches, invalid addresses, and wrong-network
+addresses return `400` with the standard `{error,message,docs}` envelope.
+
+A caught-up store returns `200`, including `[]` when there are no matches or registered
+marketplace deployments. Normal indexed-read freshness behavior remains: `202` while
+behind and `503` during destructive maintenance. Existing handle, holder, and script APIs
+retain their contracts. The marketplace static consumer's `{listings,total}` envelope is
+owned by its BFF; aligning that separate consumer mismatch is tracked in marketplace.handle.me.
+Deployment orchestration remains in the sibling deployment repository.
+
+## Verification
+The NPM Actions producer (`.github/workflows/yarn-pr-tests.yml`) invokes the existing
+`npm run test:unit` script, not `npm test`, which also dispatches local e2e tests.
+Unit-only workflow dispatch is a structural operator invariant. The local `test` and
+`test:e2e` scripts remain available; e2e/browser/user-journey tests never run in Actions.
+
+Local scanner integration tests use an isolated Valkey fixture database on loopback,
+never production Redis. Canonical rollback fixtures exercise actual HTTP helpers and
+provider conversion behind an HTTP-boundary fake and assert persisted block metrics,
+lock release, UTxOs and normalized holder ownership/indexes. A matching canonical block
+must not remove or replay valid tracked ownership. Assertions must not pin internal
+helper argument counts; admission parameters are not a persisted-state contract.
 
 ## Environment Variables
 See `site.env` for the operator-facing glossary. Commonly used ones include:

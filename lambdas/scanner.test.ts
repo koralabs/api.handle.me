@@ -65,13 +65,41 @@ const buildUtxo = ({
         }
     }) as any;
 
+const originalFetch = global.fetch;
+
 const loadScannerModule = () => {
     let scannerModule: any;
+    jest.dontMock('../utils/helpers');
     jest.isolateModules(() => {
+        const transport: typeof helpers = require('../utils/helpers');
+        // Existing Koios data/error fixtures now sit at the HTTP boundary. The real
+        // helper's response registration/admission must not be mocked with its old gate.
+        for (const name of Object.keys(transport) as (keyof typeof helpers)[]) {
+            if (name !== 'fetchKoios') Object.assign(transport, { [name]: mockedHelpers[name] });
+        }
+        global.fetch = jest.fn(async (input, init) => {
+            const url = new URL(String(input));
+            if (!url.hostname.endsWith('.koios.rest')) throw new Error(`Unexpected test network request: ${url}`);
+            const path = url.pathname.replace('/api/v1/', '') + url.search;
+            try {
+                const data = await mockedHelpers.fetchKoios(path, init?.method ?? 'GET', init?.body as string | undefined);
+                return new Response(data == null ? '' : JSON.stringify(data));
+            } catch (error) {
+                const failure = error as { status?: number; statusText?: string; retryAfterMs?: number; koiosResponse?: unknown; message?: string };
+                if (!failure.status) throw error;
+                const headers = new Headers();
+                if (failure.retryAfterMs !== undefined) headers.set('Retry-After', `${failure.retryAfterMs / 1000}`);
+                return new Response(JSON.stringify(failure.koiosResponse ?? { message: failure.message }), {
+                    status: failure.status, statusText: failure.statusText, headers
+                });
+            }
+        });
         scannerModule = require('./scanner.app');
     });
     return scannerModule;
 };
+
+afterEach(() => { global.fetch = originalFetch; });
 
 const setup = ({ whitelistedApiKeys = 'allowed-key' }: { whitelistedApiKeys?: string } = {}) => {
     process.env.WHITELISTED_API_KEYS = whitelistedApiKeys;
@@ -251,7 +279,7 @@ describe('Scanner lambda unit tests', () => {
 
         await scannerModule.Internal.checkRollback({ currentSlot: 130, lastMaxRollbackCheck: Date.now() });
 
-        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next');
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next', Infinity, { minIntervalMs: 0, beforeStart: expect.any(Function) });
         expect(handlesRepo.setMetrics).toHaveBeenNthCalledWith(
             1,
             expect.objectContaining({ lockLambdas: LockedLambdaReason.ROLLBACK, lockLambdasTimestamp: expect.any(Number) })
@@ -314,7 +342,7 @@ describe('Scanner lambda unit tests', () => {
 
         await expect(scannerModule.Internal.checkRollback({ currentSlot: 130, lastMaxRollbackCheck: Date.now() })).resolves.toBeUndefined();
 
-        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next');
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next', Infinity, { minIntervalMs: 0, beforeStart: expect.any(Function) });
     });
 
     it('filters unrelated handles from latest rollback UTxOs before index refresh', async () => {
@@ -820,8 +848,8 @@ describe('Scanner lambda unit tests', () => {
 
         await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
 
-        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/stale_hash/next', 721);
-        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(2, 'blocks/2840/next');
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/stale_hash/next', 721, { minIntervalMs: 0, beforeStart: expect.any(Function) });
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(2, 'blocks/2840/next', Infinity, { minIntervalMs: 0, beforeStart: expect.any(Function) });
         const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
         expect(txInfoCalls).toHaveLength(0);
     });
@@ -1305,7 +1333,7 @@ describe('Scanner lambda unit tests', () => {
             errorSpy.mockRestore();
         }
 
-        expect(mockedHelpers.fetchBlockfrostTxHashes).toHaveBeenCalledWith(['block_newer']);
+        expect(mockedHelpers.fetchBlockfrostTxHashes).toHaveBeenCalledWith(['block_newer'], { minIntervalMs: 0, beforeStart: expect.any(Function) });
         expect(logEntries.some((entry) => entry.includes('fallbackToBlockfrost'))).toBe(true);
     });
 
@@ -1342,7 +1370,7 @@ describe('Scanner lambda unit tests', () => {
             errorSpy.mockRestore();
         }
 
-        expect(mockedHelpers.fetchBlockfrostTxHashes).toHaveBeenCalledWith(['block_newer']);
+        expect(mockedHelpers.fetchBlockfrostTxHashes).toHaveBeenCalledWith(['block_newer'], { minIntervalMs: 0, beforeStart: expect.any(Function) });
     });
 
     it('checkRollback logs and suppresses retriable upstream errors', async () => {
@@ -1825,8 +1853,8 @@ describe('Scanner lambda unit tests', () => {
         const result = await scannerModule.lambdaHandler({} as any, {} as any);
 
         expect(result).toEqual({ isBase64Encoded: false, statusCode: 200, body: '' });
-        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/start_hash/next', 721);
-        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(2, 'blocks/4980/next');
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(1, 'blocks/start_hash/next', 721, { minIntervalMs: 0, beforeStart: expect.any(Function) });
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenNthCalledWith(2, 'blocks/4980/next', Infinity, { minIntervalMs: 0, beforeStart: expect.any(Function) });
     });
 
     it('lambdaHandler rejects function-url reindex shortcut requests without whitelisted api-key', async () => {
@@ -1933,7 +1961,7 @@ describe('Scanner lambda unit tests', () => {
 
         await scannerModule.Internal.processRollback({ currentSlot: 100 });
 
-        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next');
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next', Infinity, { minIntervalMs: 0, beforeStart: expect.any(Function) });
     });
 
     it('returns early when rollback provider blocks are all ahead of current slot', async () => {
@@ -1981,7 +2009,7 @@ describe('Scanner lambda unit tests', () => {
 
         await scannerModule.Internal.checkRollback();
 
-        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next');
+        expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next', Infinity, { minIntervalMs: 0, beforeStart: expect.any(Function) });
     });
 
     it('scan tolerates null block_txs responses', async () => {
@@ -2160,7 +2188,7 @@ describe('Scanner lambda unit tests', () => {
         try {
             await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
 
-            expect(mockedHelpers.fetchBlockfrostTxHashes).toHaveBeenCalledWith(['block_a']);
+            expect(mockedHelpers.fetchBlockfrostTxHashes).toHaveBeenCalledWith(['block_a'], { minIntervalMs: 0, beforeStart: expect.any(Function) });
             const txInfoCalls = mockedHelpers.fetchKoios.mock.calls.filter((call) => call[0] === 'tx_info');
             expect(txInfoCalls.length).toBeGreaterThan(0);
             expect(JSON.parse(txInfoCalls[0][2] as string)._tx_hashes).toContain('tx_fallback');
@@ -2193,7 +2221,7 @@ describe('Scanner lambda unit tests', () => {
         try {
             await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
 
-            expect(mockedHelpers.fetchBlockfrostTxInfo).toHaveBeenCalledWith('tx_a');
+            expect(mockedHelpers.fetchBlockfrostTxInfo).toHaveBeenCalledWith('tx_a', { minIntervalMs: 0, beforeStart: expect.any(Function) });
         } finally {
             logSpy.mockRestore();
             warnSpy.mockRestore();
@@ -2422,6 +2450,125 @@ describe('Scanner lambda unit tests', () => {
         expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(1450);   // timer granularity; the fixed backoff is 500
     }, 10_000);
 
+    it('queued workers obey a newly stated provider-wide wait', async () => {
+        // Invariant: queued six-worker reservations obey a provider hold announced after they booked.
+        // Failure caught: sleeping once and starting early; restoring the old gate fails at ~167ms.
+        const { handlesRepo, store, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_a', slot: 100, confirmations: 5, tx_count: 420 }] as never);
+        const starts: number[] = [];
+        fakeKoiosWithRowCap({ block_a: 420 }, async () => {
+            starts.push(Date.now());
+            if (starts.length === 1) {
+                const error: any = new Error('Koios tx_info request failed: 429 Too Many Requests');
+                error.status = 429; error.retryAfterMs = 1500;
+                throw error;
+            }
+        });
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        try {
+            await scannerModule.Internal.scan();
+        } finally {
+            logSpy.mockRestore();
+        }
+        expect(store.recordScannedBlock).toHaveBeenCalledWith(100, 'block_a');
+        expect(starts.length).toBeGreaterThan(6);
+        expect(Math.min(...starts.slice(1).map((t) => t - starts[0]))).toBeGreaterThanOrEqual(1450); // timer granularity
+        for (let i = 2; i < starts.length; i++) expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(150); // pacing survives the hold
+    }, 10_000);
+
+
+    it.each([
+        ['beyond deadline', 720_001, 420, false],
+        ['exact deadline', 720_000, 420, false],
+        ['before deadline', 719_000, 70, true]
+    ])('queued provider hold %s admits no expired requests', async (_name, holdMs, txCount, completes) => {
+        // Invariant: waiting for a provider hold never removes the scanner hard deadline.
+        // Failure caught: checking only before the wait admits expired requests; deleting
+        // the gate deadline check makes the exact/beyond deadline cases fail.
+        jest.useFakeTimers({ now: 1_000_000 });
+        const { handlesRepo, store, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_a', slot: 100, confirmations: 5, tx_count: txCount }] as never);
+        const starts: number[] = [];
+        fakeKoiosWithRowCap({ block_a: txCount }, async () => {
+            starts.push(Date.now() - 1_000_000);
+            if (starts.length === 1) {
+                const error: any = new Error('Koios tx_info request failed: 429 Too Many Requests');
+                error.status = 429;
+                error.retryAfterMs = holdMs - starts[0]; // hold ends at the chosen invocation-relative instant
+                throw error;
+            }
+        });
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        try {
+            const scan = scannerModule.Internal.scan();
+            await jest.advanceTimersByTimeAsync(725_000);
+            await scan;
+            expect(starts.filter((start) => start >= 720_000)).toEqual([]);
+            if (completes) {
+                expect(starts.length).toBeGreaterThan(1);
+                expect(Math.min(...starts.slice(1))).toBeGreaterThanOrEqual(holdMs);
+                expect(store.recordScannedBlock).toHaveBeenCalledWith(100, 'block_a');
+            } else {
+                expect(starts).toHaveLength(1);
+                expect(starts[0]).toBeLessThan(720_000);
+                // This regression covers request admission, not scan-progress recovery.
+            }
+        } finally {
+            logSpy.mockRestore();
+            jest.useRealTimers();
+        }
+    });
+
+    it('independent review: final retry response holds split requests', async () => {
+        // Invariant: even the response that exhausts local retries establishes the provider-wide wait.
+        // Failure caught: split children start early because only the retry branch registers Retry-After.
+        // Negative control: the original primary already fails; registration removal must restore that failure.
+        jest.useFakeTimers({ now: 1_000_000 });
+        const { handlesRepo, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_a', slot: 100, confirmations: 5, tx_count: 70 }] as never);
+        fakeKoiosWithRowCap({ block_a: 70 });
+        const network = mockedHelpers.fetchKoios.getMockImplementation()!;
+        const attempts = new Map<string, number>();
+        const splits: number[] = [];
+        let terminalAt: number | undefined;
+        mockedHelpers.fetchKoios.mockImplementation(async (path, method, body) => {
+            if (path === 'tx_info') {
+                const hashes = JSON.parse(body!)._tx_hashes as string[];
+                if (hashes.length === 35) {
+                    const attempt = (attempts.get(hashes[0]) ?? 0) + 1;
+                    attempts.set(hashes[0], attempt);
+                    if (attempt <= 4) {
+                        const error: any = new Error('Koios terminal provider hold');
+                        error.status = attempt === 4 ? 429 : 503;
+                        if (attempt === 4) {
+                            terminalAt ??= Date.now();
+                            error.retryAfterMs = 5_000;
+                        }
+                        throw error;
+                    }
+                } else {
+                    splits.push(Date.now());
+                }
+            }
+            return network(path, method, body);
+        });
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        try {
+            const scan = scannerModule.Internal.scan();
+            await jest.advanceTimersByTimeAsync(50_000);
+            await scan;
+            expect(terminalAt).toBeGreaterThan(1_000_000);
+            expect(splits.length).toBeGreaterThan(0);
+            expect(Math.min(...splits)).toBeGreaterThanOrEqual(terminalAt! + 5_000);
+        } finally {
+            logSpy.mockRestore();
+            jest.useRealTimers();
+        }
+    });
+
     // NOTE: datum_info Blockfrost fallback is tested via fetchBlockfrostDatumCbor in helpers.blockfrost-fallback.test.ts.
     // A scanner-level datum_info fallback test is impractical here because asyncForEach in kora-labs-common
     // creates a dangling rejected promise during its internal delay, which triggers Jest's unhandled rejection detection.
@@ -2495,7 +2642,7 @@ describe('Scanner lambda unit tests', () => {
 
             await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
 
-            expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith(`blocks/${60000 - 24750}/next`);
+            expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith(`blocks/${60000 - 24750}/next`, Infinity, { minIntervalMs: 0, beforeStart: expect.any(Function) });
             expect(handlesRepo.setMetrics).toHaveBeenCalledWith(expect.objectContaining({ currentBlockHash: 'canonical_before', currentSlot: 120 }));
         });
 
@@ -2516,7 +2663,7 @@ describe('Scanner lambda unit tests', () => {
             await scannerModule.Internal.scan().catch(() => undefined);
 
             expect(mockedDemeter.scanDemeterBlocks).not.toHaveBeenCalled();
-            expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/start_hash/next', expect.any(Number));
+            expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/start_hash/next', expect.any(Number), { minIntervalMs: 0, beforeStart: expect.any(Function) });
         });
 
         it('keeps a near-tip cursor on Demeter', async () => {

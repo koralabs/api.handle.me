@@ -1,6 +1,8 @@
-import { AssetNameLabel, delay, HANDLE_POLICIES, LogCategory, Logger, Network, NETWORK, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, HANDLE_POLICIES, LogCategory, Logger, Network, NETWORK, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { KoiosAsset, KoiosOutput, KoiosTxInfo } from '../interfaces/provider.interface';
 import { getHandleNameFromAssetName } from '../services/ogmios/utils';
+import { createProviderLimiter, KoiosAdmission, observeKoiosBody, requestKoios } from './koiosRateLimit';
+import { isRequestDeadlineError } from './requestDeadline';
 
 export const defaultKoiosSettings = { _inputs: true, _withdrawals: false, _certs: false, _governance: false, _scripts: true, _bytecode: true, _metadata: true, _assets: true };
 
@@ -26,17 +28,29 @@ const KOIOS_REQUEST_TIMEOUT_MS = 20_000;
 
 const BLOCKFROST_REQUEST_TIMEOUT_MS = 20_000;
 
-export const blockfrostApiCall = async (endpointSegment: string) => {
+const blockfrost = createProviderLimiter();
+
+export const blockfrostApiCall = async (endpointSegment: string, admission?: KoiosAdmission): Promise<Response> => {
     const headers = {
         project_id: process.env.BLOCKFROST_API_KEY ?? '',
         'Content-Type': 'application/json'
     };
 
     const url = `https://cardano-${NETWORK.toLowerCase()}.blockfrost.io/api/v0/${endpointSegment}`;
-    return await fetch(url, { headers, signal: AbortSignal.timeout(BLOCKFROST_REQUEST_TIMEOUT_MS) });
+    // An implicit redirect would dispatch outside admission and hide its wait.
+    const { response } = await blockfrost.request(() => fetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(BLOCKFROST_REQUEST_TIMEOUT_MS) }), admission);
+    // Observe body hints without consuming the Response returned to callers.
+    // Header registration already ran directly on the fetch promise.
+    try {
+        await response.clone().json().then((body) => blockfrost.observeBody(body));
+    } catch (error) {
+        if (isRequestDeadlineError(error)) throw error;
+        // Non-JSON or unreadable bodies remain the original caller's response.
+    }
+    return response;
 };
 
-export const fetchPaginatedResults = async <T>(endpointSegment: string, maxResults = Infinity): Promise<T[]> => {
+export const fetchPaginatedResults = async <T>(endpointSegment: string, maxResults = Infinity, admission?: KoiosAdmission): Promise<T[]> => {
     const maxCount = 100;
     const maxRetries = 5;
     let page = 1;
@@ -51,16 +65,16 @@ export const fetchPaginatedResults = async <T>(endpointSegment: string, maxResul
             // scanner invisibly for ~24h — it kept reporting success while indexing nothing.
             let response: Awaited<ReturnType<typeof blockfrostApiCall>> | undefined;
             for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-                response = await blockfrostApiCall(`${endpointSegment}?order=asc&count=${maxCount}&page=${page}`);
+                response = await blockfrostApiCall(`${endpointSegment}?order=asc&count=${maxCount}&page=${page}`, admission);
                 if (response.status === 404 || response.status < 300) break;
                 const retriable = response.status === 429 || response.status === 403 || response.status >= 500;
                 if (!retriable || attempt === maxRetries) {
-                    const body = await response.text().catch(() => '');
+                    const body = await response.text().catch((error) => { if (isRequestDeadlineError(error)) throw error; return ''; });
                     throw new Error(
                         `Blockfrost ${response.status} for ${endpointSegment} (page ${page})${retriable ? ` after ${maxRetries} retries` : ''}: ${body.slice(0, 200)}`
                     );
                 }
-                await delay(Math.min(2000, 200 * 2 ** attempt));
+                await blockfrost.wait(Math.min(2000, 200 * 2 ** attempt), admission);
             }
 
             if (!response || response.status === 404) {
@@ -70,7 +84,7 @@ export const fetchPaginatedResults = async <T>(endpointSegment: string, maxResul
             results = results.concat(items);
             hasMorePages = items.length === maxCount;
             page += 1;
-            await delay(100);
+            await blockfrost.wait(100, admission);
         }
     } catch (error) {
         Logger.log({ message: `Error fetching ${endpointSegment}: ${error}`, category: LogCategory.NOTIFY, event: 'fetchPaginatedResults' });
@@ -92,7 +106,7 @@ export const fetchTxList = async (block: string) => {
     return txList;
 };
 
-export const fetchKoios = async (path: string, method = 'GET', body?: string) => {
+export const fetchKoios = async (path: string, method = 'GET', body?: string, admission?: KoiosAdmission) => {
     const url = `https://${NETWORK.toLowerCase() === 'mainnet' ? 'api' : NETWORK.toLowerCase()}.koios.rest/api/v1/${path}`;
     const koiosToken = process.env.KOIOS_API_BEARER_TOKEN?.trim();
     const headers: Record<string, string> = {
@@ -101,13 +115,15 @@ export const fetchKoios = async (path: string, method = 'GET', body?: string) =>
     if (koiosToken) {
         headers.Authorization = `Bearer ${koiosToken}`;
     }
-    const response = await fetch(url, {
+    const { response, headerWait } = await requestKoios(() => fetch(url, {
         method,
         headers,
         body,
+        // Surface every response to the limiter; never replay through fetch's redirect engine.
+        redirect: 'manual',
         signal: AbortSignal.timeout(KOIOS_REQUEST_TIMEOUT_MS)
-    });
-
+    }), admission);
+    // The direct transport reaction already registered headers before wrapper adoption.
     const responseText = await response.text();
     const parseResponseJson = () => {
         if (!responseText) return null;
@@ -125,10 +141,9 @@ export const fetchKoios = async (path: string, method = 'GET', body?: string) =>
         error.status = response.status;
         error.statusText = response.statusText;
         error.koiosResponse = responseJson;
-        const retryAfter = response.headers.get('retry-after');
-        if (retryAfter) {
-            const seconds = Number(retryAfter);
-            error.retryAfterMs = Number.isFinite(seconds) ? seconds * 1000 : Math.max(0, Date.parse(retryAfter) - Date.now());
+        const bodyWait = observeKoiosBody(responseJson);
+        if (headerWait !== undefined || bodyWait !== undefined) {
+            error.retryAfterMs = Math.max(headerWait ?? 0, bodyWait ?? 0);
         }
         if (!responseJson && responseText) {
             error.responseText = responseText.slice(0, 512);
@@ -136,7 +151,9 @@ export const fetchKoios = async (path: string, method = 'GET', body?: string) =>
         throw error;
     }
 
-    return parseResponseJson();
+    const responseJson = parseResponseJson();
+    observeKoiosBody(responseJson);
+    return responseJson;
 };
 
 const resolveKoiosOutputDatum = (output: KoiosTxInfo['outputs'][number], datumByHash: Map<string, string>): string | undefined =>
@@ -247,16 +264,11 @@ export const buildUTxOsFromKoiosTxs = (transactions: KoiosTxInfo[], datumByHash 
 // ========== Blockfrost fallback for scanner ==========
 
 const BLOCKFROST_FALLBACK_MIN_INTERVAL_MS = 110; // ~9 RPS
-let lastBlockfrostFallbackCallTime = 0;
 
-const blockfrostFallbackJson = async (endpointSegment: string): Promise<any> => {
-    const now = Date.now();
-    const elapsed = now - lastBlockfrostFallbackCallTime;
-    if (elapsed < BLOCKFROST_FALLBACK_MIN_INTERVAL_MS) {
-        await delay(BLOCKFROST_FALLBACK_MIN_INTERVAL_MS - elapsed);
-    }
-    lastBlockfrostFallbackCallTime = Date.now();
-    const response = await blockfrostApiCall(endpointSegment);
+const blockfrostFallbackJson = async (endpointSegment: string, admission?: KoiosAdmission): Promise<any> => {
+    const response = await blockfrostApiCall(endpointSegment, {
+        ...admission, minIntervalMs: Math.max(BLOCKFROST_FALLBACK_MIN_INTERVAL_MS, admission?.minIntervalMs ?? 0)
+    });
     if (!response.ok) {
         const error: any = new Error(`Blockfrost ${endpointSegment}: ${response.status} ${response.statusText}`);
         error.status = response.status;
@@ -265,18 +277,18 @@ const blockfrostFallbackJson = async (endpointSegment: string): Promise<any> => 
     return response.json();
 };
 
-export const fetchBlockfrostTxHashes = async (blockHashes: string[]): Promise<{ block_hash: string; tx_hash: string }[]> => {
+export const fetchBlockfrostTxHashes = async (blockHashes: string[], admission?: KoiosAdmission): Promise<{ block_hash: string; tx_hash: string }[]> => {
     const rows: { block_hash: string; tx_hash: string }[] = [];
     for (const blockHash of blockHashes) {
-        const txHashes = await fetchPaginatedResults<string>(`blocks/${blockHash}/txs`);
+        const txHashes = await fetchPaginatedResults<string>(`blocks/${blockHash}/txs`, Infinity, admission);
         for (const tx_hash of txHashes) rows.push({ block_hash: blockHash, tx_hash });
     }
     return rows;
 };
 
-export const fetchBlockfrostTxInfo = async (txHash: string): Promise<KoiosTxInfo> => {
-    const txData = await blockfrostFallbackJson(`txs/${txHash}`);
-    const utxoData = await blockfrostFallbackJson(`txs/${txHash}/utxos`);
+export const fetchBlockfrostTxInfo = async (txHash: string, admission?: KoiosAdmission): Promise<KoiosTxInfo> => {
+    const txData = await blockfrostFallbackJson(`txs/${txHash}`, admission);
+    const utxoData = await blockfrostFallbackJson(`txs/${txHash}/utxos`, admission);
 
     // Compute minted/burned assets from input/output difference
     const assetTotals = new Map<string, bigint>();
@@ -343,28 +355,29 @@ export const fetchBlockfrostTxInfo = async (txHash: string): Promise<KoiosTxInfo
             // Match the fetchBlockfrostDatumCbor posture: persist no script
             // and move on. Other errors propagate (transient 5xx, network)
             // so the scanner halts and retries cleanly.
+            // Fetch BOTH the cbor and the script-type metadata. The type
+            // (plutusV1/V2/V3, camelCase from Blockfrost) flows into
+            // handle.script.type and feeds the validator-hash language
+            // tag in scripts.service.ts. Hardcoding 'plutusV2' (the
+            // historical default) produced wrong hashes for V3 scripts
+            // and broke BFF tx builders that look up the script address
+            // by validatorHash. Mirror the koios path which also passes
+            // through Blockfrost's camelCase type raw.
+            let scriptCbor: { cbor?: string };
             try {
-                // Fetch BOTH the cbor and the script-type metadata. The type
-                // (plutusV1/V2/V3, camelCase from Blockfrost) flows into
-                // handle.script.type and feeds the validator-hash language
-                // tag in scripts.service.ts. Hardcoding 'plutusV2' (the
-                // historical default) produced wrong hashes for V3 scripts
-                // and broke BFF tx builders that look up the script address
-                // by validatorHash. Mirror the koios path which also passes
-                // through Blockfrost's camelCase type raw.
-                const [scriptCbor, scriptMeta] = await Promise.all([
-                    blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}/cbor`),
-                    blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}`).catch(() => ({}))
-                ]);
-                if (scriptCbor?.cbor) {
-                    output.reference_script = {
-                        bytes: scriptCbor.cbor,
-                        type: scriptMeta?.type ?? 'plutusV2'
-                    };
-                }
+                scriptCbor = await blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}/cbor`, admission);
             } catch (e: any) {
-                if (e?.status !== 404) throw e;
+                if (isRequestDeadlineError(e) || e?.status !== 404) throw e;
+                continue;
             }
+            if (!scriptCbor?.cbor) continue;
+            // Once bytes exist, even a metadata 404 is unknown language,
+            // not evidence of script absence. Preserve the actual read error.
+            const scriptMeta = await blockfrostFallbackJson(`scripts/${bfOutput.reference_script_hash}`, admission);
+            if (typeof scriptMeta?.type !== 'string' || !scriptMeta.type.trim()) {
+                throw new Error(`Blockfrost script ${bfOutput.reference_script_hash}: missing language metadata`);
+            }
+            output.reference_script = { bytes: scriptCbor.cbor, type: scriptMeta.type };
         }
     }
 
@@ -381,13 +394,14 @@ export const fetchBlockfrostTxInfo = async (txHash: string): Promise<KoiosTxInfo
     let metadata: KoiosTxInfo['metadata'] = {};
     if (txData.asset_mint_or_burn_count > 0) {
         try {
-            const metadataArray = await blockfrostFallbackJson(`txs/${txHash}/metadata`);
+            const metadataArray = await blockfrostFallbackJson(`txs/${txHash}/metadata`, admission);
             if (Array.isArray(metadataArray)) {
                 for (const entry of metadataArray) {
                     metadata[entry.label] = entry.json_metadata;
                 }
             }
         } catch (e: any) {
+            if (isRequestDeadlineError(e) || e?.status !== 404) throw e;
             Logger.log({
                 message: `Failed to fetch metadata for ${txHash}: ${e?.message ?? e}`,
                 category: LogCategory.NOTIFY,
@@ -409,9 +423,9 @@ export const fetchBlockfrostTxInfo = async (txHash: string): Promise<KoiosTxInfo
     };
 };
 
-export const fetchBlockfrostDatumCbor = async (datumHash: string): Promise<string | null> => {
+export const fetchBlockfrostDatumCbor = async (datumHash: string, admission?: KoiosAdmission): Promise<string | null> => {
     try {
-        const data = await blockfrostFallbackJson(`scripts/datum/${datumHash}/cbor`);
+        const data = await blockfrostFallbackJson(`scripts/datum/${datumHash}/cbor`, admission);
         return data?.cbor ?? null;
     } catch (e: any) {
         // 404 = the chain has no datum bytes registered for this hash. That is a
@@ -419,7 +433,7 @@ export const fetchBlockfrostDatumCbor = async (datumHash: string): Promise<strin
         // were never published). Persist null and move on; this is NOT a coverage
         // gap, it's the chain saying the datum doesn't exist. Transient errors
         // (5xx, network) must throw so the scanner halts and retries cleanly.
-        if (e?.status === 404) return null;
+        if (!isRequestDeadlineError(e) && e?.status === 404) return null;
         throw e;
     }
 };
