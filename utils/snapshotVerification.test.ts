@@ -158,4 +158,68 @@ describe('snapshotVerification', () => {
 
         await expect(probeProviderMptRootHash()).resolves.toBeNull();
     });
+    // Invariant: a healthy Koios answer yields the chain root and tip slot the /mpt-root check compares.
+    // Failure mode: a broken datum/tip parse would return a wrong root or null and mask real drift.
+    // Negative control: the 'aa' root below would not match if the extractor read another field.
+    it('probeProviderMptRootHash returns the Koios root and tip slot', async () => {
+        const { probeProviderMptRootHash } = await import('./snapshotVerification');
+        mockFetchKoios.mockImplementation(async (path: string) =>
+            path === 'asset_utxos' ? [{ inline_datum: { bytes: `d8799f5820${'aa'.repeat(32)}ff` } }] : [{ abs_slot: 123 }]);
+
+        await expect(probeProviderMptRootHash()).resolves.toEqual({ provider: 'koios', rootHash: 'aa'.repeat(32), tipSlot: 123 });
+        expect(mockBlockfrostApiCall).not.toHaveBeenCalled();
+    });
+
+    const blockfrostJson = (body: unknown) => ({ ok: true, json: async () => body });
+    const blockfrostRoutes = (utxos: unknown, tip: unknown = { slot: 456 }) => async (path: string) => {
+        if (path.startsWith('assets/')) return blockfrostJson([{ address: 'addr_test1abc', quantity: '1' }]);
+        if (path === 'blocks/latest') return blockfrostJson(tip);
+        return blockfrostJson(utxos);
+    };
+
+    // Invariant: when Koios is down the Blockfrost path supplies the independent root.
+    // Failure mode: a broken fallback leaves the check with no provider at all.
+    it('probeProviderMptRootHash falls back to Blockfrost when Koios throws', async () => {
+        const { probeProviderMptRootHash } = await import('./snapshotVerification');
+        mockFetchKoios.mockRejectedValue(new Error('koios down'));
+        mockBlockfrostApiCall.mockImplementation(blockfrostRoutes([{ inline_datum: `d8799f5820${'bb'.repeat(32)}ff` }]));
+
+        await expect(probeProviderMptRootHash()).resolves.toEqual({ provider: 'blockfrost', rootHash: 'bb'.repeat(32), tipSlot: 456 });
+        expect(mockBlockfrostApiCall).toHaveBeenCalledWith(expect.stringContaining('/utxos/'));
+    });
+
+    // Invariant: an unusable Blockfrost answer is never reported as a valid probe.
+    it.each([
+        ['no inline datum', [{}], { slot: 456 }],
+        ['malformed root', [{ inline_datum: 'd8799f4101ff' }], { slot: 456 }],
+        ['non-numeric tip slot', [{ inline_datum: `d8799f5820${'bb'.repeat(32)}ff` }], { slot: 'x' }]
+    ])('probeProviderMptRootHash returns null for Blockfrost with %s', async (_name, utxos, tip) => {
+        const { probeProviderMptRootHash } = await import('./snapshotVerification');
+        mockFetchKoios.mockResolvedValue(null);
+        mockBlockfrostApiCall.mockImplementation(blockfrostRoutes(utxos, tip));
+
+        await expect(probeProviderMptRootHash()).resolves.toBeNull();
+    });
+
+    // Invariant: the label proof's roots match independently built label-aware roots, so the engine's
+    // spend proof can never disagree with the stored root. Failure mode: a wrong old/new root deadlocks mints.
+    it('buildLabelAssetProof reports the roots before and after adding a label, and rejects unindexed handles', async () => {
+        const { buildHandleSetMptRootHash, buildLabelAssetProof, GHOST_HANDLES } = await import('./snapshotVerification');
+        const { LBL_001 } = await import('./assetLabelRegistry');
+        const ghosts = GHOST_HANDLES[process.env.NETWORK?.toLowerCase() ?? ''] ?? [];
+        const store: any = { getKeysFromIndex: () => ['alpha', 'beta'], getAllHandleRegistryLabels: () => ({}) };
+
+        const proof = await buildLabelAssetProof(store, ' alpha ', LBL_001.toUpperCase(), 1n);
+
+        expect(proof).toEqual(expect.objectContaining({
+            handle: 'alpha', hex_name: Buffer.from('alpha').toString('hex'), label: LBL_001, amount: '1',
+            old_labels: '', new_labels: LBL_001
+        }));
+        expect(proof.current_root).toBe(await buildHandleSetMptRootHash(['alpha', 'beta'], ghosts, {}));
+        expect(proof.new_root).toBe(await buildHandleSetMptRootHash(['alpha', 'beta'], ghosts, { alpha: LBL_001 }));
+        expect(proof.new_root).not.toBe(proof.current_root);
+
+        await expect(buildLabelAssetProof(store, 'ghost-not-indexed', LBL_001, 1n)).rejects.toThrow();
+        await expect(buildLabelAssetProof(store, 'alpha', LBL_001, 2n)).rejects.toThrow('INVALID_AMOUNT');
+    });
 });
