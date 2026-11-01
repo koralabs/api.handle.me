@@ -30,7 +30,7 @@
         "diff": "4.0.4",
         "lodash": "4.18.1",
         "qs": "6.16.2",
-        "minimatch": "10.2.5",
+        "minimatch": "11.0.1",
         "protobufjs": "7.6.5",
         "undici": "6.29.1",
         "@protobufjs/utf8": "1.1.1",
