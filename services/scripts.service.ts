@@ -103,28 +103,33 @@ const getUnoptimizedCborUrl = (family: string): string | null => {
     return `${GITHUB_RAW_BASE_URL}/${repo}/master/deploy/${getNetwork()}/${family}.unoptimized.cbor`;
 };
 
-const fetchUnoptimizedCbor = async (
-    family: string,
-    cache: Map<string, Promise<string | undefined>>
-): Promise<string | undefined> => {
-    const cached = cache.get(family);
-    if (cached) return cached;
+// Every /scripts call used to fetch each family's CBOR from GitHub serially, so a request took many
+// round trips and Cloudflare/rate limits hit the HAL engine. The files only change on a re-deploy:
+// a found file is reused for a long time, a miss is retried soon.
+const FOUND_TTL_MS = 60 * 60_000;
+const MISS_TTL_MS = 60_000;
+const unoptimizedCborCache = new Map<string, { at: number; request: Promise<string | undefined>; found: boolean }>();
+
+const fetchUnoptimizedCbor = (family: string): Promise<string | undefined> => {
+    const cached = unoptimizedCborCache.get(family);
+    if (cached && Date.now() - cached.at < (cached.found ? FOUND_TTL_MS : MISS_TTL_MS)) return cached.request;
 
     const url = getUnoptimizedCborUrl(family);
-    const request = (async () => {
+    const entry = { at: Date.now(), found: false, request: Promise.resolve<string | undefined>(undefined) };
+    entry.request = (async () => {
         if (!url) return undefined;
         try {
             const response = await fetch(url);
             if (!response.ok) return undefined;
             const body = (await response.text()).trim();
+            entry.found = !!body;
             return body || undefined;
         } catch {
             return undefined;
         }
     })();
-
-    cache.set(family, request);
-    return request;
+    unoptimizedCborCache.set(family, entry);
+    return entry.request;
 };
 
 const getValidatorHashFromScriptCbor = (scriptCbor?: string, scriptType?: string): string | null => {
@@ -233,11 +238,10 @@ export const getScriptsIndex = async (
     // Surface latest first so dict iteration order puts active deployments up front.
     ordered.sort((a, b) => Number(b.latest) - Number(a.latest));
 
-    const unoptimizedCborCache = new Map<string, Promise<string | undefined>>();
+    const cbors = new Map(await Promise.all([...families.keys()].map(async (family) => [family, await fetchUnoptimizedCbor(family)] as const)));
     const scripts: { [scriptAddress: string]: ScriptDetails } = {};
     for (const { handle, family, latest } of ordered) {
-        const unoptimizedCbor = await fetchUnoptimizedCbor(family, unoptimizedCborCache);
-        const entry = buildScriptEntry(handle, family, latest, unoptimizedCbor);
+        const entry = buildScriptEntry(handle, family, latest, cbors.get(family));
         // Two contract handles can carry the same script (same address) — e.g. mid-migration when a
         // new ordinal takes over the current proxy before the old ordinal moves back to its prior
         // script. Entries are processed latest-first, so the first writer wins; a non-latest
