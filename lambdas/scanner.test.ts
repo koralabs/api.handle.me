@@ -2028,7 +2028,7 @@ describe('Scanner lambda unit tests', () => {
         expect(handlesRepo.removeUTxOs).not.toHaveBeenCalled();
     });
 
-    it('scan halts without crashing when tx_info returns null for a requested hash', async () => {
+    it('scan recovers from Blockfrost without crashing when tx_info returns null for a requested hash', async () => {
         // Null tx_info response yields zero rows — the coverage check fires
         // and pauses the scan rather than crashing or silently advancing
         // past the missed tx. Pre-halt behaviour processed an empty txList
@@ -2041,15 +2041,14 @@ describe('Scanner lambda unit tests', () => {
             if (path === 'tx_info' && body?.includes('tx_newer')) return null as never;
             return [] as never;
         });
+        mockedHelpers.fetchBlockfrostTxInfo.mockResolvedValue({ tx_hash: 'tx_newer', block_hash: 'block_newer', block_height: 1, absolute_slot: 101, inputs: [], outputs: [], assets_minted: [], metadata: {}, reference_inputs: [] } as never);
         mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([
             { ...buildUtxo({ id: 'scan_newer#0', slot: 101, blockHash: 'block_newer', assetName: 'asset-a' }), handles: undefined }
         ] as never);
 
         await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
 
-        // Scan halted before any block was processed, so no
-        // UTxO/handle-index mutation should have occurred.
-        expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).not.toHaveBeenCalled();
+        expect(mockedHelpers.fetchBlockfrostTxInfo).toHaveBeenCalledWith('tx_newer', expect.anything());
         expect(handlesRepo.removeUTxOs).not.toHaveBeenCalled();
     });
 
@@ -2228,17 +2227,10 @@ describe('Scanner lambda unit tests', () => {
         }
     });
 
-    it('scan halts at the first block whose tx_info coverage is incomplete (block_txs path)', async () => {
-        // Validates: when Koios's /tx_info returns HTTP 200 with fewer rows
-        // than the request listed (empirically observed — see
-        // project_known_integrity_gaps.md gap #3, dominant cause is a provider tx-index
-        // outpacing Koios's tx_info indexer), the scanner halts before
-        // advancing past any block in the affected chunk. The next
-        // invocation will retry from currentBlockHash, by which time Koios
-        // will have caught up.
-        // Failure mode caught: regression to advancing past a missed tx,
-        // which left preview pz_settings pointing at a UTxO consumed 3+
-        // days earlier (slot 111168833 / tx abbf7e561505d8).
+    it('scan reads txs missing from a short Koios tx_info response from Blockfrost and advances', async () => {
+        // Validates: when Koios tx_info answers 200 with fewer rows than requested, the missing tx is
+        // read from Blockfrost and the block is processed instead of pausing the scan.
+        // Failure mode caught: pausing on every invocation because the fallback only ran on thrown errors.
         const { handlesRepo, store, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
 
@@ -2274,6 +2266,7 @@ describe('Scanner lambda unit tests', () => {
             return [] as never;
         });
 
+        mockedHelpers.fetchBlockfrostTxInfo.mockResolvedValue({ tx_hash: 'tx_dropped', block_hash: 'block_a', block_height: 1, absolute_slot: 100, inputs: [], outputs: [], assets_minted: [], metadata: {}, reference_inputs: [] } as never);
         mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
 
         const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -2281,21 +2274,41 @@ describe('Scanner lambda unit tests', () => {
         try {
             await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
 
-            // Negative control: the scanner must NOT advance currentSlot
-            // past block_a, and must NOT record block_a as scanned. If the
-            // halt regresses, both of these would be called.
-            expect(handlesRepo.setMetrics).not.toHaveBeenCalledWith(
-                expect.objectContaining({ currentBlockHash: 'block_a' })
-            );
-            expect(store.recordScannedBlock).not.toHaveBeenCalledWith(100, 'block_a');
-
-            // Blockfrost must not be touched on the short-response path —
-            // we deliberately avoid the slower second-indexer round-trip
-            // and let the next Lambda tick refetch.
-            expect(mockedHelpers.fetchBlockfrostTxInfo).not.toHaveBeenCalled();
+            expect(mockedHelpers.fetchBlockfrostTxInfo).toHaveBeenCalledTimes(1);
+            expect(mockedHelpers.fetchBlockfrostTxInfo).toHaveBeenCalledWith('tx_dropped', expect.anything());
+            expect(store.recordScannedBlock).toHaveBeenCalledWith(100, 'block_a');
         } finally {
             logSpy.mockRestore();
             warnSpy.mockRestore();
+        }
+    });
+
+    it('scan reads a block Koios returns zero txs for from Blockfrost and advances; pauses if Blockfrost is short too', async () => {
+        // Validates: Koios block_txs short vs Blockfrost tx_count falls back to Blockfrost's tx list; only
+        // when Blockfrost is also short does the scan pause.
+        // Failure mode caught: hundreds of daily 'coverage incomplete' pauses on one block.
+        for (const blockfrostRows of [[{ block_hash: 'block_k', tx_hash: 'tx_1' }, { block_hash: 'block_k', tx_hash: 'tx_2' }], [{ block_hash: 'block_k', tx_hash: 'tx_1' }]]) {
+            const advances = blockfrostRows.length === 2;
+            jest.clearAllMocks();
+            const { handlesRepo, store, scannerModule } = setup();
+            handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+            mockedHelpers.fetchPaginatedResults.mockImplementation(async (endpoint: string) =>
+                (endpoint.includes('blocks/start_hash/next') ? [{ hash: 'block_k', slot: 100, confirmations: 5, tx_count: 2 }] : []) as never);
+            mockedHelpers.fetchKoios.mockImplementation(async (path: string, _m?: string, body?: string) => {
+                if (path === 'tx_info') return (JSON.parse(body ?? '{}')._tx_hashes ?? []).map((tx_hash: string) => ({ tx_hash, block_hash: 'block_k', block_height: 1, absolute_slot: 100, inputs: [], outputs: [], assets_minted: [], metadata: {}, reference_inputs: [] })) as never;
+                return [] as never;
+            });
+            mockedHelpers.fetchBlockfrostTxHashes.mockResolvedValue(blockfrostRows as never);
+            mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([] as never);
+            const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+            try {
+                await expect(scannerModule.Internal.scan()).resolves.toBeUndefined();
+                expect(mockedHelpers.fetchBlockfrostTxHashes).toHaveBeenCalledWith(['block_k'], expect.anything());
+                if (advances) expect(store.recordScannedBlock).toHaveBeenCalledWith(100, 'block_k');
+                else expect(store.recordScannedBlock).not.toHaveBeenCalledWith(100, 'block_k');
+            } finally {
+                logSpy.mockRestore();
+            }
         }
     });
 
