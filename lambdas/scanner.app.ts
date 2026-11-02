@@ -1355,11 +1355,34 @@ const scan = async () => {
             // Keep the per-block mapping returned by Koios block_txs so we can compare its row
             // count to Blockfrost's tx_count below.
             const blockTxRows = await getBatchedTxHashesWithFallback(blockChunk.map((block) => block.hash));
+            // Koios can answer 200 with fewer (or zero) rows for a block Blockfrost already lists with
+            // N txs. Retrying Koios next invocation just repeats the pause, so read those blocks from
+            // Blockfrost now; the coverage check below still halts if Blockfrost is short too.
+            const blockTxCounts = blockTxRows.reduce<Map<string, number>>((acc, r) => { acc.set(r.block_hash, (acc.get(r.block_hash) ?? 0) + 1); return acc; }, new Map());
+            const shortBlockHashes = blockChunk.filter((block) => typeof block.tx_count === 'number' && (blockTxCounts.get(block.hash) ?? 0) < block.tx_count).map((block) => block.hash);
+            if (shortBlockHashes.length) {
+                Logger.local({
+                    message: `Koios block_txs short for ${shortBlockHashes.length} block(s); reading them from Blockfrost`,
+                    category: LogCategory.INFO,
+                    event: 'scannerLambda.koiosBlockTxs.shortFallbackToBlockfrost'
+                });
+                const short = new Set(shortBlockHashes);
+                const kept = blockTxRows.filter((r) => !short.has(r.block_hash));
+                blockTxRows.length = 0;
+                blockTxRows.push(...kept, ...await fetchBlockfrostTxHashes(shortBlockHashes, koiosAdmission()));
+            }
             const blockTxCountByBlock = blockTxRows.reduce<Map<string, number>>((acc, r) => { acc.set(r.block_hash, (acc.get(r.block_hash) ?? 0) + 1); return acc; }, new Map());
             const txHashes = [...new Set(blockTxRows.map((r) => r.tx_hash))];
             scanBreadcrumb('getBatchedTxHashes_done', `txCount=${txHashes.length} source=block_txs`);
             scanBreadcrumb('getBatchedTxInfo_start');
             const txList = await getBatchedTxInfoWithFallback(txHashes);
+            // Koios tx_info can return a shortened array; fetch the missing txs from Blockfrost.
+            const receivedTx = new Set(txList.map((t) => t.tx_hash));
+            for (const txHash of txHashes) {
+                if (receivedTx.has(txHash)) continue;
+                checkDeadline('tx_info_short_fallback');
+                txList.push(await fetchBlockfrostTxInfo(txHash, koiosAdmission()));
+            }
             scanBreadcrumb('getBatchedTxInfo_done', `txInfoCount=${txList.length}`);
             scanBreadcrumb('getBatchedDatumInfo_start');
             const datumInfoByHash = await getBatchedDatumInfoWithFallback(txList);
