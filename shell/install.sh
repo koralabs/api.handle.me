@@ -43,6 +43,6 @@ ${SUDO} cp ./ogmios-install/bin/ogmios /bin/ogmios && ${SUDO} chmod +x /bin/ogmi
 # shellcheck source=/dev/null
 source "${HOME}/.nvm/nvm.sh"
 export TMPDIR=/tmp
-nvm install 21
-nvm use 21
+nvm install 26
+nvm use 26
 echo "NodeJS Version is $(node -v)"

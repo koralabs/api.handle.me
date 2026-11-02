@@ -94,7 +94,7 @@ if [[ "${MODE}" == "ogmios" || "${MODE}" == "all" || "${MODE}" == "api-only" ]];
     # shellcheck source=/dev/null
     source "${HOME}/.nvm/nvm.sh"
     export TMPDIR=/tmp
-    nvm use 21
+    nvm use 26
     sed -i 's https://api.handle.me http://localhost:3141 ' swagger.yml
     sleep 5
     NODE_ENV=${NODE_ENV:-production} NETWORK=${NETWORK} OGMIOS_HOST=${OGMIOS_HOST} DISABLE_HANDLES_SNAPSHOT=${DISABLE_HANDLES_SNAPSHOT:-false} node express.js &
