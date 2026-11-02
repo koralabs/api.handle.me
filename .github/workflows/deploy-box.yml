@@ -41,12 +41,12 @@ jobs:
         run: ./.github/scripts/deploy-env-guard.sh "$GITHUB_EVENT_NAME" "$REF_NAME" "$SELECTED_ENV"
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '26'
       - name: Build (box/service) + stage to R2 + signed deploy trigger
         env:
           DEPLOYABLE: api.handle.me
           BOX_ENV: ${{ ((github.event.inputs.environment == 'auto' || github.event.inputs.environment == '') && github.ref_name || github.event.inputs.environment) }}
-          NODE_VERSION: '22'
+          NODE_VERSION: 26
           SERVICE_INSTALL_CMD: npm ci --include=dev
           # Also stage deployment_info.json into ./dist so the /deployment endpoint can
           # read it at runtime (the box runs functions with cwd=dist, same as swagger.yml).
