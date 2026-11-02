@@ -59,7 +59,7 @@ test -x /app/cardano-node
 command -v ogmios >/dev/null
 command -v tini >/dev/null
 source ~/.nvm/nvm.sh
-nvm use 21 >/dev/null
+nvm use 26 >/dev/null
 node -v >/dev/null
 test -f /app/mainnet/config.json
 test -f /app/preprod/config.json
