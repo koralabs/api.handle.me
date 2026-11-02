@@ -556,6 +556,8 @@ paths:
                 $ref: "#/components/schemas/Error"
   "/handles/{handle}/utxo":
     get:
+      description: >-
+        Get the UTxO holding the Handle. The response is always JSON. With no `Accept` header, or `*/*`, the embedded `datum` field is decoded to JSON; send `Accept: text/plain`, `application/cbor` or `application/cbor-hex` to get `datum` as the raw CBOR hex string.
       tags:
       - handles
       parameters:
@@ -658,6 +660,8 @@ paths:
           description: Handle not found
   "/handles/{handle}/subhandle-settings":
     get:
+      description: >-
+        Get the root Handle's SubHandle settings. With no `Accept` header, or `*/*`, the response is JSON and the embedded settings datum is decoded to JSON. Send `Accept: text/plain` to get only the raw settings datum as a CBOR hex string.
       tags:
       - handles
       parameters:
@@ -692,6 +696,8 @@ paths:
           description: Handle not found
   "/handles/{handle}/subhandle-settings/utxo":
     get:
+      description: >-
+        Get the UTxO holding the root Handle's SubHandle settings. The response is always JSON. With no `Accept` header, or `*/*`, the embedded `datum` field is decoded to JSON; send `Accept: text/plain`, `application/cbor` or `application/cbor-hex` to get `datum` as the raw CBOR hex string.
       tags:
       - handles
       parameters:
@@ -893,11 +899,8 @@ paths:
       deprecated: true
       tags:
       - handles
-      description: Get the datum in the same UTxO as the Handle, if present.
-        This endpoint will return a plain text response of just the Cbor string if the 
-        `Accepts` header is `text/plain`. If the `Accepts` header is `application/json` 
-        the API will attempt to convert the Cbor to JSON, but may fail of the object 
-        isn't actually JSON.
+      description: >-
+        Get the datum in the same UTxO as the Handle, if present. With no `Accept` header, or `*/*`, the datum is decoded to JSON (this fails if the datum cannot be decoded). Send `Accept: text/plain`, `application/cbor` or `application/cbor-hex` to get the raw CBOR hex string as plain text.
       parameters:
       - name: handle
         in: path
