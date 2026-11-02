@@ -15,6 +15,8 @@
 - [@handlecontract Script Discovery](./spec/handlecontract-script-discovery.md)
 - [Scanner Recovery Runbook](./spec/scanner-recovery-runbook.md)
 - [Snapshot Admission and Ownership](./spec/snapshot-admission.md)
+- [Target-specific Mainnet Guard Readiness](./spec/mainnet-guard-readiness.md)
+- [Mainnet Provider Continuation](./spec/mainnet-provider-continuation.md)
 - [Build and Release Guards](./build-release-guards.md)
 - [OpenAPI Swagger](./swagger.yml)
 
@@ -26,3 +28,7 @@
 
 ## Environment
 - [Environment Variable Glossary](../site.env)
+
+## Draft policy proposals (not activated)
+
+- [Canonical contract](../CANONICAL_CONTRACT.md) and [enclave](../.enclave) — root policy files.

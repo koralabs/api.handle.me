@@ -27,6 +27,7 @@ The old campaign fixture on6380 was identified by exact container ID/name/image/
 - `npm run test:guard`: strict Node transport/credential/child/worker/owned-listener tests, including unfaked AWS and native-client denial.
 - `npm run test:unit`: strict worker isolation and system-boundary fakes already used by unit tests.
 - `npm run test:e2e`: starts/verifies the real owned fixture and runs all existing e2e assertions; an unfaked AWS client must still fail.
+- `npm run test:snapshot-transactions`: original real WATCH/fence tests plus an unfaked AWS-denial case under the native profile.
 - `npm run test:valkey-harness`: actual authenticated Glide round trip plus ownership/configuration failure controls.
 - `npm run test:critical`: existing complete critical suite and unchanged coverage thresholds with the same real fixture and AWS denial.
 

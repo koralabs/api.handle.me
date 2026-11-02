@@ -1,6 +1,7 @@
 // Invariant: every environment installs the locked compiler graph without fetching sibling fallback.
 // Failure caught: floating npm install or reintroduction of the source-rewriting helper fetch.
 // Negative controls: restore floating install, sibling fetch or mutable base; command/fetch assertions fail.
+import '../../tests/network-guard.cjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

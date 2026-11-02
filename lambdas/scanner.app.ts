@@ -1,5 +1,6 @@
 import { AssetNameLabel, asyncForEach, buildHolderInfo, HANDLE_POLICIES, IndexNames, LockedLambdaReason, LogCategory, Logger, MintingData, Network, NETWORK, StoredHandle, UTxOFunctionName, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { WHITELISTED_API_KEYS } from '../config';
+import { reportCoveragePause } from './scannerPause';
 import { scannerBudgetMs, SCANNER_MAX_WORK_MS } from './scannerBudget';
 import { BlockfrostBlock, KoiosAssetUTxO, KoiosDatumInfo, KoiosTxInfo } from '../interfaces/provider.interface';
 import { HandlesRepository } from '../repositories/handlesRepository';
@@ -1354,11 +1355,34 @@ const scan = async () => {
             // Keep the per-block mapping returned by Koios block_txs so we can compare its row
             // count to Blockfrost's tx_count below.
             const blockTxRows = await getBatchedTxHashesWithFallback(blockChunk.map((block) => block.hash));
+            // Koios can answer 200 with fewer (or zero) rows for a block Blockfrost already lists with
+            // N txs. Retrying Koios next invocation just repeats the pause, so read those blocks from
+            // Blockfrost now; the coverage check below still halts if Blockfrost is short too.
+            const blockTxCounts = blockTxRows.reduce<Map<string, number>>((acc, r) => { acc.set(r.block_hash, (acc.get(r.block_hash) ?? 0) + 1); return acc; }, new Map());
+            const shortBlockHashes = blockChunk.filter((block) => typeof block.tx_count === 'number' && (blockTxCounts.get(block.hash) ?? 0) < block.tx_count).map((block) => block.hash);
+            if (shortBlockHashes.length) {
+                Logger.local({
+                    message: `Koios block_txs short for ${shortBlockHashes.length} block(s); reading them from Blockfrost`,
+                    category: LogCategory.INFO,
+                    event: 'scannerLambda.koiosBlockTxs.shortFallbackToBlockfrost'
+                });
+                const short = new Set(shortBlockHashes);
+                const kept = blockTxRows.filter((r) => !short.has(r.block_hash));
+                blockTxRows.length = 0;
+                blockTxRows.push(...kept, ...await fetchBlockfrostTxHashes(shortBlockHashes, koiosAdmission()));
+            }
             const blockTxCountByBlock = blockTxRows.reduce<Map<string, number>>((acc, r) => { acc.set(r.block_hash, (acc.get(r.block_hash) ?? 0) + 1); return acc; }, new Map());
             const txHashes = [...new Set(blockTxRows.map((r) => r.tx_hash))];
             scanBreadcrumb('getBatchedTxHashes_done', `txCount=${txHashes.length} source=block_txs`);
             scanBreadcrumb('getBatchedTxInfo_start');
             const txList = await getBatchedTxInfoWithFallback(txHashes);
+            // Koios tx_info can return a shortened array; fetch the missing txs from Blockfrost.
+            const receivedTx = new Set(txList.map((t) => t.tx_hash));
+            for (const txHash of txHashes) {
+                if (receivedTx.has(txHash)) continue;
+                checkDeadline('tx_info_short_fallback');
+                txList.push(await fetchBlockfrostTxInfo(txHash, koiosAdmission()));
+            }
             scanBreadcrumb('getBatchedTxInfo_done', `txInfoCount=${txList.length}`);
             scanBreadcrumb('getBatchedDatumInfo_start');
             const datumInfoByHash = await getBatchedDatumInfoWithFallback(txList);
@@ -1390,11 +1414,11 @@ const scan = async () => {
                 if (blockTxCountByBlock && typeof b.tx_count === 'number') {
                     const koiosCount = blockTxCountByBlock.get(b.hash) ?? 0;
                     if (koiosCount < b.tx_count) {
-                        Logger.log({
-                            message: `block_txs coverage incomplete for block ${b.hash} (slot ${b.slot}); pausing scan, next invocation will resume from currentBlockHash. blockfrost_tx_count=${b.tx_count} koios_block_txs_count=${koiosCount}`,
-                            category: LogCategory.WARN,
-                            event: 'scannerLambda.koiosBlockTxs.coverageIncompletePause'
-                        });
+                        reportCoveragePause(
+                            'scannerLambda.koiosBlockTxs.coverageIncompletePause',
+                            b.hash,
+                            `block_txs coverage incomplete for block ${b.hash} (slot ${b.slot}); pausing scan, next invocation will resume from currentBlockHash. blockfrost_tx_count=${b.tx_count} koios_block_txs_count=${koiosCount}`
+                        );
                         return;
                     }
                 }
@@ -1403,11 +1427,11 @@ const scan = async () => {
                 // is short, halt at the chunk's first block so we don't advance past a block that
                 // *might* have contained the missing tx.
                 if (chunkHasShortResponse) {
-                    Logger.log({
-                        message: `tx_info coverage incomplete for block ${b.hash} (slot ${b.slot}); pausing scan, next invocation will resume from currentBlockHash. received=${receivedTxHashes.length}`,
-                        category: LogCategory.WARN,
-                        event: 'scannerLambda.koiosTxInfo.coverageIncompletePause'
-                    });
+                    reportCoveragePause(
+                        'scannerLambda.koiosTxInfo.coverageIncompletePause',
+                        b.hash,
+                        `tx_info coverage incomplete for block ${b.hash} (slot ${b.slot}); pausing scan, next invocation will resume from currentBlockHash. received=${receivedTxHashes.length}`
+                    );
                     return;
                 }
                 const blockTxList = txInfoByBlockHash.get(b.hash) ?? [];
