@@ -47,7 +47,7 @@
         "@aiken-lang/merkle-patricia-forestry": "^1.3.1",
         "@cardano-ogmios/client": "^6.11.0",
         "@cardano-ogmios/schema": "^6.11.0",
-        "@koralabs/kora-labs-common": "6.21.2",
+        "@koralabs/kora-labs-common": "6.21.6",
         "@stricahq/cardano-codec": "^2.0.4",
         "@utxorpc/sdk": "0.8.2",
         "@valkey/valkey-glide": "^2.4.1",
