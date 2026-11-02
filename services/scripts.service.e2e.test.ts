@@ -181,6 +181,9 @@ describe('scripts service e2e', () => {
         // Invariant: known families get unoptimizedCbor from the network-specific GitHub path, fetched once per family; failures leave it unset.
         // Failure caught: per-handle fetching, wrong URL, or a failed fetch breaking the catalog.
         // Negative control: removing the cache makes the call count 2 for pers.
+        // The service caches per family across calls (earlier tests cached misses): move the clock past the found TTL so this test starts from an empty cache.
+        const realNow = Date.now();
+        jest.spyOn(Date, 'now').mockReturnValue(realNow + 2 * 60 * 60_000);
         const fetchMock = jest.spyOn(global, 'fetch' as any).mockImplementation((async (url: string) =>
             url.includes('/pers.unoptimized.cbor')
                 ? { ok: true, text: async () => ' deadbeef\n' }
