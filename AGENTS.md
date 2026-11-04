@@ -1,5 +1,15 @@
 # AGENTS.md
 
+## REQUIRED FIRST ACTION — Canonical contract
+
+**Before doing any other work in this repo**, including answering the user's first question:
+
+1. Read [`CANONICAL_CONTRACT.md`](./CANONICAL_CONTRACT.md).
+2. Output its full contents verbatim to the user.
+3. Then state: "I have read this repo's canonical contract, I understand its rules, and I will follow them."
+
+This precedes everything else in this file. Skip it only if the user explicitly says "skip the contract" in this session.
+
 ## Master AGENTS.md
 - [REQUIREMENT] Read the AGENTS.md in this project's parent folder for complete instructions and inter-project (sibling) references
 
