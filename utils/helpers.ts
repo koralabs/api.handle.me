@@ -142,6 +142,7 @@ export const fetchKoios = async (path: string, method = 'GET', body?: string, ad
         error.statusText = response.statusText;
         error.koiosResponse = responseJson;
         const bodyWait = observeKoiosBody(responseJson);
+        if (bodyWait !== undefined && bodyWait > 0) admission?.onWait?.(Date.now() + bodyWait);
         if (headerWait !== undefined || bodyWait !== undefined) {
             error.retryAfterMs = Math.max(headerWait ?? 0, bodyWait ?? 0);
         }
@@ -152,7 +153,8 @@ export const fetchKoios = async (path: string, method = 'GET', body?: string, ad
     }
 
     const responseJson = parseResponseJson();
-    observeKoiosBody(responseJson);
+    const bodyWait = observeKoiosBody(responseJson);
+    if (bodyWait !== undefined && bodyWait > 0) admission?.onWait?.(Date.now() + bodyWait);
     return responseJson;
 };
 

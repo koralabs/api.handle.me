@@ -1,6 +1,7 @@
 export interface KoiosAdmission {
     beforeStart?: (earliestStartAtMs?: number) => void;
     minIntervalMs?: number;
+    onWait?: (notBefore: number) => void;
 }
 
 const seconds = (value: unknown): number | undefined => {
@@ -89,7 +90,12 @@ export const createProviderLimiter = () => {
         wait: (delayMs: number, admission: KoiosAdmission = {}): Promise<void> => admit(Date.now() + delayMs, admission, () => undefined, false),
         // Attach receipt handling to fetch itself, before this wrapper's adoption turns.
         request: (dispatch: () => Promise<Response>, admission: KoiosAdmission = {}): Promise<{ response: Response; headerWait: number | undefined }> =>
-            admit(0, admission, () => dispatch().then((response) => ({ response, headerWait: observeHeaders(response.headers) })), true)
+            admit(0, admission, () => dispatch().then((response) => {
+                const now = Date.now();
+                const headerWait = observeHeaders(response.headers, now);
+                if (headerWait !== undefined && headerWait > 0) admission.onWait?.(now + headerWait);
+                return { response, headerWait };
+            }), true)
     };
 };
 
