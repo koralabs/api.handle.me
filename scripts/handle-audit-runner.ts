@@ -49,7 +49,7 @@ export async function run() {
         limits[provider].notBefore = Math.max(limits[provider].notBefore ?? 0, notBefore);
         saveLimits();
     };
-    const backoff = (provider: 'api' | 'koios') => {
+    const backoff = (provider: 'api' | 'koios', reason: string) => {
         const limit = limits[provider];
         const attempts = (limit.noResetAttempts ?? 0) + 1;
         const base = 5000 * 2 ** Math.min(attempts - 1, 6);
@@ -57,12 +57,17 @@ export async function run() {
         limit.noResetAttempts = attempts;
         delete limit.blockedWithoutReset;
         rememberWait(provider, Date.now() + delay);
-        process.stderr.write(`${provider} 429 without a reset; backing off ${delay}ms (attempt ${attempts})\n`);
+        process.stderr.write(`${provider} ${reason}; backing off ${delay}ms (attempt ${attempts})\n`);
     };
     const waitForProvider = async (provider: 'api' | 'koios') => {
-        if (limits[provider].blockedWithoutReset) backoff(provider);
+        if (limits[provider].blockedWithoutReset) backoff(provider, '429 without a reset');
         const wait = (limits[provider].notBefore ?? 0) - Date.now();
         if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    };
+    const transientNetworkError = (error: unknown) => {
+        if (!error || typeof error !== 'object') return false;
+        const { name, message } = error as { name?: unknown; message?: unknown };
+        return name === 'TimeoutError' || (name === 'TypeError' && message === 'fetch failed');
     };
     const clearBackoff = (provider: 'api' | 'koios') => {
         if (limits[provider].noResetAttempts) {
@@ -99,13 +104,21 @@ export async function run() {
         const url = `${apiBase}/handles?page=${page}&sort=asc&records_per_page=${pageSize}`;
         let response: Response;
         for (;;) {
-            const result = await limiter.request(() => fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(30_000) }), {
-                minIntervalMs: 200, onWait: (until) => rememberWait('api', until)
-            });
+            let result: Awaited<ReturnType<typeof limiter.request>>;
+            try {
+                result = await limiter.request(() => fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(30_000) }), {
+                    minIntervalMs: 200, onWait: (until) => rememberWait('api', until)
+                });
+            } catch (error) {
+                if (!transientNetworkError(error)) throw error;
+                backoff('api', 'network error');
+                await waitForProvider('api');
+                continue;
+            }
             response = result.response;
             if (response.status !== 429) break;
             if (result.headerWait === undefined || result.headerWait <= 0) {
-                backoff('api');
+                backoff('api', '429 without a reset');
                 await waitForProvider('api');
             } else {
                 process.stderr.write(`API rate limited; waiting ${result.headerWait}ms before resuming\n`);
@@ -144,9 +157,14 @@ export async function run() {
             } catch (error: any) {
                 // The shared limiter retains the server's wait across the next request.
                 // Without a stated wait, stop with the last completed batch preserved.
+                if (transientNetworkError(error)) {
+                    backoff('koios', 'network error');
+                    await waitForProvider('koios');
+                    continue;
+                }
                 if (error?.status !== 429) throw error;
                 if (!Number.isFinite(error.retryAfterMs) || error.retryAfterMs <= 0) {
-                    backoff('koios');
+                    backoff('koios', '429 without a reset');
                     await waitForProvider('koios');
                 } else {
                     if (progress) save(progress, { checkpointId, checked, findings, notBefore: Date.now() + error.retryAfterMs });

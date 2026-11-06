@@ -146,6 +146,32 @@ it('waits for the API response deadline before retrying enumeration', async () =
     expect(saved('')).toMatchObject({ checked: 0, enumerationEnded: true, findings: [] });
 });
 
+// A response-body timeout retries the unfinished batch without violating its already received header.
+// Dropping the persisted provider hold dispatches the retry at the shorter five-second backoff.
+it('recovers from a timeout while honoring previously received headers', async () => {
+    writeFileSync(output + '.checkpoint', JSON.stringify({ checkpointId: 'test', network: 'mainnet', api: 'https://audit.example', ended: true, handles: [handle(0)] }));
+    writeFileSync(output + '.progress', JSON.stringify({ checkpointId: 'test', checked: 0, findings: [] }));
+    process.argv.push('--resume');
+    jest.spyOn(Math, 'random').mockReturnValue(0);
+    const starts: number[] = [];
+    global.fetch = jest.fn(async () => {
+        starts.push(Date.now());
+        if (starts.length > 1) return new Response(JSON.stringify(rows(0, 1)));
+        const response = new Response('', { headers: { 'Retry-After': '10' } });
+        jest.spyOn(response, 'text').mockRejectedValue(new DOMException('timeout', 'TimeoutError'));
+        return response;
+    });
+    const { run } = await import('./handle-audit-runner');
+    const pending = run();
+    await jest.advanceTimersByTimeAsync(9999);
+    expect(starts).toEqual([epoch]);
+    await jest.advanceTimersByTimeAsync(1);
+    await pending;
+    expect(starts).toEqual([epoch, epoch + 10000]);
+    expect(saved('')).toMatchObject({ checked: 1, findings: [{ name: 'h0', status: 'mismatch' }] });
+    jest.restoreAllMocks();
+});
+
 // Headerless 429s back off progressively and preserve the next start across a process restart.
 // Removing the wait or resetting the attempt count dispatches the next request too early.
 it('backs off on headerless 429s and resumes the pending wait after restart', async () => {
