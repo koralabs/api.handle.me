@@ -1355,11 +1355,19 @@ const scan = async () => {
             // Keep the per-block mapping returned by Koios block_txs so we can compare its row
             // count to Blockfrost's tx_count below.
             const blockTxRows = await getBatchedTxHashesWithFallback(blockChunk.map((block) => block.hash));
-            // Koios can answer 200 with fewer (or zero) rows for a block Blockfrost already lists with
-            // N txs. Retrying Koios next invocation just repeats the pause, so read those blocks from
-            // Blockfrost now; the coverage check below still halts if Blockfrost is short too.
-            const blockTxCounts = blockTxRows.reduce<Map<string, number>>((acc, r) => { acc.set(r.block_hash, (acc.get(r.block_hash) ?? 0) + 1); return acc; }, new Map());
-            const shortBlockHashes = blockChunk.filter((block) => typeof block.tx_count === 'number' && (blockTxCounts.get(block.hash) ?? 0) < block.tx_count).map((block) => block.hash);
+            // Our scanner must account for the expected number of distinct transactions before
+            // advancing a block. Fetch another list when our first enumeration is incomplete.
+            const countDistinctByBlock = (rows: typeof blockTxRows) => {
+                const byBlock = new Map<string, Set<string>>();
+                for (const row of rows) {
+                    if (!row.block_hash || !row.tx_hash) continue;
+                    if (!byBlock.has(row.block_hash)) byBlock.set(row.block_hash, new Set());
+                    byBlock.get(row.block_hash)!.add(row.tx_hash);
+                }
+                return byBlock;
+            };
+            const blockTxCounts = countDistinctByBlock(blockTxRows);
+            const shortBlockHashes = blockChunk.filter((block) => typeof block.tx_count === 'number' && (blockTxCounts.get(block.hash)?.size ?? 0) < block.tx_count).map((block) => block.hash);
             if (shortBlockHashes.length) {
                 Logger.local({
                     message: `Koios block_txs short for ${shortBlockHashes.length} block(s); reading them from Blockfrost`,
@@ -1371,7 +1379,7 @@ const scan = async () => {
                 blockTxRows.length = 0;
                 blockTxRows.push(...kept, ...await fetchBlockfrostTxHashes(shortBlockHashes, koiosAdmission()));
             }
-            const blockTxCountByBlock = blockTxRows.reduce<Map<string, number>>((acc, r) => { acc.set(r.block_hash, (acc.get(r.block_hash) ?? 0) + 1); return acc; }, new Map());
+            const expectedTxByBlock = countDistinctByBlock(blockTxRows);
             const txHashes = [...new Set(blockTxRows.map((r) => r.tx_hash))];
             scanBreadcrumb('getBatchedTxHashes_done', `txCount=${txHashes.length} source=block_txs`);
             scanBreadcrumb('getBatchedTxInfo_start');
@@ -1395,38 +1403,28 @@ const scan = async () => {
                 existing.push(tx);
                 txInfoByBlockHash.set(blockHash, existing);
             }
-            // block_txs discovery (Koios) and tx-info fetch (Koios) can run at slightly different
-            // speeds: /tx_info may respond 200 with a shortened array for a freshly-included tx. If
-            // we advanced currentSlot past a block whose tx_info we don't yet have, that tx would be
-            // lost forever. Halt the scan at the first block with incomplete coverage so the next
-            // invocation retries from currentBlockHash, by which time Koios will have caught up.
+            // Never advance the cursor when our transaction fetch has not accounted for the
+            // discovered transactions. The next invocation resumes from the last complete block.
             const chunkHasShortResponse = txList.length < txHashes.length;
             for (const b of blockChunk) {
                 const receivedTxHashes = (txInfoByBlockHash.get(b.hash) ?? []).map((t) => t.tx_hash);
 
-                // block_txs-vs-Blockfrost cross-check: when Blockfrost lists
-                // a block as having N txs but Koios's block_txs returned
-                // fewer, the two providers disagree about this block's
-                // contents (typically because we're inside the k=2160 reorg
-                // window and Blockfrost's chain at this height isn't on
-                // Koios's chain). Halting prevents silently advancing on
-                // one provider's chain while the other can't see it.
-                if (blockTxCountByBlock && typeof b.tx_count === 'number') {
-                    const koiosCount = blockTxCountByBlock.get(b.hash) ?? 0;
-                    if (koiosCount < b.tx_count) {
-                        reportCoveragePause(
-                            'scannerLambda.koiosBlockTxs.coverageIncompletePause',
-                            b.hash,
-                            `block_txs coverage incomplete for block ${b.hash} (slot ${b.slot}); pausing scan, next invocation will resume from currentBlockHash. blockfrost_tx_count=${b.tx_count} koios_block_txs_count=${koiosCount}`
-                        );
-                        return;
-                    }
+                // Unknown or malformed counts cannot establish that the block is complete.
+                const koiosCount = expectedTxByBlock.get(b.hash)?.size ?? 0;
+                if (!Number.isSafeInteger(b.tx_count) || b.tx_count! < 0 || koiosCount !== b.tx_count) {
+                    reportCoveragePause(
+                        'scannerLambda.koiosBlockTxs.coverageIncompletePause',
+                        b.hash,
+                        `block_txs coverage incomplete for block ${b.hash} (slot ${b.slot}); pausing scan, next invocation will resume from currentBlockHash. blockfrost_tx_count=${b.tx_count} koios_block_txs_count=${koiosCount}`
+                    );
+                    return;
                 }
 
-                // The block_txs path has no per-block expected mapping here: if anything in the chunk
-                // is short, halt at the chunk's first block so we don't advance past a block that
-                // *might* have contained the missing tx.
-                if (chunkHasShortResponse) {
+                // A full chunk count is insufficient if a discovered transaction is assigned
+                // to a different block: advancing would permanently lose its effects.
+                const expected = expectedTxByBlock.get(b.hash) ?? new Set<string>();
+                const received = new Set(receivedTxHashes);
+                if (chunkHasShortResponse || [...expected].some((hash) => !received.has(hash))) {
                     reportCoveragePause(
                         'scannerLambda.koiosTxInfo.coverageIncompletePause',
                         b.hash,

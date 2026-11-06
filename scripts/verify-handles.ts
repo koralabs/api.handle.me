@@ -1,195 +1,65 @@
 /**
- * verify-handles.ts
- *
- * Full-chain handle verification. Iterates every handle in the API, queries
- * Koios asset_utxos to get the canonical on-chain UTxO, and compares against
- * the stored `utxo` field. Reports any stale handles where stored ≠ canonical.
- *
- * Usage:
- *   NETWORK=mainnet npx tsx scripts/verify-handles.ts [--output stale.json]
- *
- * Env:
- *   API_BASE               — defaults to https://api.handle.me (or preprod/preview)
- *   NETWORK                — mainnet | preprod | preview (used for API_BASE default)
- *   KOIOS_API_BEARER_TOKEN — for Koios rate-limit bypass
- *   MAX_HANDLES            — cap number of handles processed (for testing)
- *   START_SLOT             — only check handles with updated_slot_number >= this
- *
- * Output (JSON to stdout or --output file):
- *   [{ name, hex, policy, stored_tx, stored_slot, canonical_tx, canonical_block }]
+ * Read-only comparison of API ownership-token UTxOs with Koios.
+ * NETWORK=mainnet npx tsx scripts/verify-handles.ts --output tmp/handle-audit.json
+ * MAX_HANDLES may limit a sample. A paginated live API is not a chain snapshot;
+ * recheck every finding before any repair. This does not detect missing API records.
  */
 import 'dotenv/config';
 import { writeFileSync } from 'fs';
 import { fetchKoios } from '../utils/helpers';
+import { createProviderLimiter } from '../utils/koiosRateLimit';
+import { ApiHandle, Finding, compareBatch } from './handle-audit';
 
-interface StaleHandle {
-    name: string;
-    hex: string;
-    policy: string;
-    stored_tx: string;
-    stored_slot: number;
-    canonical_tx: string;
-    canonical_block: number;
-}
+const network = (process.env.NETWORK ?? 'preview').toLowerCase();
+const apiBase = process.env.API_BASE ?? (network === 'mainnet' ? 'https://api.handle.me' : `https://${network}.api.handle.me`);
+const maxHandles = Number(process.env.MAX_HANDLES ?? Infinity);
+const pageSize = 250;
+const batchSize = 20;
+const limiter = createProviderLimiter();
 
-const NETWORK = (process.env.NETWORK ?? 'preview').toLowerCase();
-const API_BASE = process.env.API_BASE
-    ?? (NETWORK === 'mainnet' ? 'https://api.handle.me'
-        : `https://${NETWORK}.api.handle.me`);
-const MAX_HANDLES = Number(process.env.MAX_HANDLES ?? Infinity);
-const START_SLOT = Number(process.env.START_SLOT ?? 0);
-const HANDLE_POLICY = 'f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a';
-
-const ASSET_UTXOS_BATCH = 20;
-const ASSET_UTXOS_RPS = 6;
-const ASSET_UTXOS_INTERVAL_MS = Math.ceil(1000 / ASSET_UTXOS_RPS);
-const API_PAGE_SIZE = 250;
-
-const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-const getOutputArg = (): string | null => {
-    const idx = process.argv.indexOf('--output');
-    return idx > 0 && process.argv[idx + 1] ? process.argv[idx + 1] : null;
-};
-
-interface ApiHandle {
-    name: string;
-    hex: string;
-    policy: string;
-    utxo: string;
-    updated_slot_number: number;
-}
-
-const fetchAllHandles = async (): Promise<ApiHandle[]> => {
-    const all: ApiHandle[] = [];
-    let page = 1;
-    const slotFilter = START_SLOT > 0 ? `&slot_number=${START_SLOT}` : '';
-
-    while (all.length < MAX_HANDLES) {
-        const url = `${API_BASE}/handles?page=${page}&sort=asc&records_per_page=${API_PAGE_SIZE}${slotFilter}`;
-        const resp = await fetch(url);
-        if (!resp.ok) {
-            console.error(`page ${page} failed: ${resp.status}`);
-            break;
-        }
-        const data = (await resp.json()) as any[];
-        if (!data.length) break;
-
-        for (const h of data) {
-            all.push({
-                name: h.name,
-                hex: h.hex,
-                policy: h.policy ?? HANDLE_POLICY,
-                utxo: h.utxo,
-                updated_slot_number: h.updated_slot_number
-            });
-            if (all.length >= MAX_HANDLES) break;
-        }
-        process.stderr.write(`\rfetched ${all.length} handles (page ${page})`);
-        if (data.length < API_PAGE_SIZE) break;
-        if (all.length >= MAX_HANDLES) break;
-        page++;
-        await delay(150);
-    }
-    process.stderr.write('\n');
-    return all;
-};
-
-const verifyBatch = async (batch: ApiHandle[]): Promise<StaleHandle[]> => {
-    const assetList: [string, string][] = batch.map((h) => [h.policy, h.hex]);
-    let koiosResults: any[] = [];
-    try {
-        koiosResults = (await fetchKoios(
-            'asset_utxos',
-            'POST',
-            JSON.stringify({ _asset_list: assetList, _extended: true })
-        )) as any[];
-    } catch (e: any) {
-        console.error(`koios batch error: ${e?.message ?? e}`);
-        return [];
-    }
-
-    // Build canonical map: asset_hex → { tx_hash, block_height }
-    const canonicalByHex = new Map<string, { tx: string; block: number }>();
-    for (const u of koiosResults) {
-        for (const a of u.asset_list ?? []) {
-            if (a.policy_id === HANDLE_POLICY) {
-                canonicalByHex.set(a.asset_name, { tx: u.tx_hash, block: u.block_height });
+async function run() {
+    if (!(maxHandles > 0)) throw new Error('MAX_HANDLES must be positive');
+    const handles: ApiHandle[] = [];
+    const seen = new Set<string>();
+    let ended = false;
+    for (let page = 1; handles.length < maxHandles; page++) {
+        const url = `${apiBase}/handles?page=${page}&sort=asc&records_per_page=${pageSize}`;
+        const { response } = await limiter.request(() => fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(30_000) }), { minIntervalMs: 200 });
+        if (!response.ok) throw new Error(`API page ${page}: HTTP ${response.status}`);
+        const result: unknown = await response.json();
+        if (!Array.isArray(result)) throw new Error(`API page ${page}: expected an array`);
+        if (!result.length) { ended = true; break; }
+        if (page % 25 === 0) process.stderr.write(`enumerated ${handles.length + result.length} records (page ${page})\n`);
+        for (const h of result) {
+            if (!h || typeof h.name !== 'string' || typeof h.policy !== 'string' || typeof h.hex !== 'string' || typeof h.utxo !== 'string' || !h.utxo) {
+                throw new Error(`API page ${page}: handle missing ownership identity or UTxO`);
             }
+            if (seen.has(h.name)) throw new Error(`API pagination repeated ${h.name}; results are not a consistent enumeration`);
+            seen.add(h.name);
+            handles.push(h);
+            if (handles.length >= maxHandles) break;
         }
     }
-
-    const stale: StaleHandle[] = [];
-    for (const h of batch) {
-        const storedTx = h.utxo?.split('#')[0];
-        const canonical = canonicalByHex.get(h.hex);
-        if (!canonical) continue; // not found on-chain — could be burned/transferred off-policy
-        if (storedTx && storedTx !== canonical.tx) {
-            stale.push({
-                name: h.name,
-                hex: h.hex,
-                policy: h.policy,
-                stored_tx: storedTx,
-                stored_slot: h.updated_slot_number,
-                canonical_tx: canonical.tx,
-                canonical_block: canonical.block
-            });
+    const findings: Finding[] = [];
+    for (let i = 0; i < handles.length; i += batchSize) {
+        const batch = handles.slice(i, i + batchSize);
+        const rows = await fetchKoios('asset_utxos', 'POST', JSON.stringify({ _asset_list: batch.map((h) => [h.policy, h.hex]), _extended: true }), { minIntervalMs: 250 });
+        if (!Array.isArray(rows) || rows.some((r) => !r || typeof r.tx_hash !== 'string' || !Number.isInteger(r.tx_index) || !Array.isArray(r.asset_list))) {
+            throw new Error(`Invalid asset_utxos response at batch ${i / batchSize + 1}`);
         }
+        findings.push(...compareBatch(batch, rows));
+        if ((i / batchSize) % 50 === 0) process.stderr.write(`checked ${Math.min(i + batchSize, handles.length)}/${handles.length}, findings ${findings.length}\n`);
     }
-    return stale;
-};
+    const report = { network, api: apiBase, checked: handles.length, enumerationEnded: ended, sampled: !ended,
+        caveat: 'Live pagination is not a snapshot; missing API records are not checked. Recheck findings before repair.', findings };
+    const outputIndex = process.argv.indexOf('--output');
+    const json = JSON.stringify(report, null, 2) + '\n';
+    if (outputIndex !== -1) {
+        const path = process.argv[outputIndex + 1];
+        if (!path) throw new Error('--output requires a path');
+        writeFileSync(path, json);
+    } else process.stdout.write(json);
+    if (findings.some((f) => f.status === 'unresolved')) process.exitCode = 2;
+}
 
-const run = async () => {
-    console.error(`=== Handle Verification: ${NETWORK} ===`);
-    console.error(`API base: ${API_BASE}`);
-    console.error(`Start slot: ${START_SLOT}, max handles: ${MAX_HANDLES === Infinity ? 'all' : MAX_HANDLES}`);
-
-    const handles = await fetchAllHandles();
-    console.error(`\nFetched ${handles.length} handles. Verifying against Koios asset_utxos...`);
-
-    const stale: StaleHandle[] = [];
-    let lastProgressLog = Date.now();
-
-    for (let i = 0; i < handles.length; i += ASSET_UTXOS_BATCH) {
-        const batch = handles.slice(i, i + ASSET_UTXOS_BATCH);
-        const batchStale = await verifyBatch(batch);
-        stale.push(...batchStale);
-
-        if (Date.now() - lastProgressLog > 2000) {
-            process.stderr.write(
-                `\rchecked ${Math.min(i + ASSET_UTXOS_BATCH, handles.length)}/${handles.length} · stale=${stale.length}`
-            );
-            lastProgressLog = Date.now();
-        }
-        await delay(ASSET_UTXOS_INTERVAL_MS);
-    }
-    process.stderr.write('\n');
-
-    console.error(`\n=== RESULTS ===`);
-    console.error(`Total checked:  ${handles.length}`);
-    console.error(`Stale handles:  ${stale.length} (${((stale.length / handles.length) * 100).toFixed(3)}%)`);
-
-    if (stale.length) {
-        console.error(`\nBy canonical block (top 20):`);
-        const byBlock = new Map<number, number>();
-        for (const s of stale) byBlock.set(s.canonical_block, (byBlock.get(s.canonical_block) ?? 0) + 1);
-        const sortedBlocks = [...byBlock].sort((a, b) => b[1] - a[1]).slice(0, 20);
-        for (const [block, count] of sortedBlocks) {
-            console.error(`  block ${block}: ${count} stale`);
-        }
-    }
-
-    const outputPath = getOutputArg();
-    const jsonOutput = JSON.stringify(stale, null, 2);
-    if (outputPath) {
-        writeFileSync(outputPath, jsonOutput);
-        console.error(`\nWrote ${stale.length} stale handles to ${outputPath}`);
-    } else {
-        process.stdout.write(jsonOutput);
-    }
-};
-
-run().catch((e) => {
-    console.error(e);
-    process.exit(1);
-});
+run().catch((e) => { console.error(e); process.exitCode = 1; });

@@ -181,15 +181,35 @@ describe('Scanner lambda e2e', () => {
         expect([...store.getScannedBlockHashesInRange(201, 201)]).toEqual([]);
     });
 
+    it('keeps the persisted cursor and handle when a discovered transaction is assigned to another block', async () => {
+        // Invariant: an incomplete block must not alter the durable cursor or indexed owner.
+        // Without per-block transaction coverage, the cursor advances and the stored scan ledger records the block.
+        mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ height: 5000, slot: 220, hash: 'tip_hash' }) } as never);
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'next_hash', slot: 201, confirmations: 21, tx_count: 1 }] as never);
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') return [{ block_hash: 'next_hash', tx_hash: 'tx_1' }] as never;
+            if (path === 'tx_info') return [{ tx_hash: 'tx_1', block_hash: 'other_hash', inputs: [], outputs: [], assets_minted: [] }] as never;
+            return [] as never;
+        });
+        const oldHandle = repo.getHandle('rollback');
+        await lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
+        expect(repo.getMetrics()).toEqual(expect.objectContaining({ currentSlot: 140, currentBlockHash: 'provider_block', lockLambdas: LockedLambdaReason.UNLOCKED }));
+        expect([...store.getScannedBlockHashesInRange(201, 201)]).toEqual([]);
+        expect(repo.getHandle('rollback')).toEqual(oldHandle);
+    });
+
     it('scans block updates and persists handle + metrics', async () => {
         const handleName = `scanner-${Date.now()}`;
 
         mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ height: 5000 }) } as never);
-        mockedHelpers.fetchPaginatedResults
-            .mockResolvedValueOnce([{ hash: 'ignored_future', slot: 999 }] as never)
-            .mockResolvedValueOnce([{ hash: 'next_hash', slot: 101, confirmations: 21 }] as never);
+        mockedHelpers.fetchPaginatedResults.mockImplementation(async (path: string) =>
+            (path === 'blocks/provider_block/next' ? [{ hash: 'next_hash', slot: 101, confirmations: 21, tx_count: 1 }] : []) as never);
         mockedHelpers.buildUTxOsFromKoiosTxs.mockReturnValue([buildMintedUTxO(handleName)]);
-        mockedHelpers.fetchKoios.mockResolvedValue([] as never);
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') return [{ block_hash: 'next_hash', tx_hash: 'scan_tx' }] as never;
+            if (path === 'tx_info') return [{ tx_hash: 'scan_tx', block_hash: 'next_hash', inputs: [] }] as never;
+            return [] as never;
+        });
 
         const result = await lambdaHandler({} as AWSLambda.ALBEvent, {} as AWSLambda.Context);
 
@@ -215,10 +235,10 @@ describe('Scanner lambda e2e', () => {
 
         mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: true, json: async () => ({ height: 5000 }) } as never);
         mockedHelpers.fetchPaginatedResults
-            .mockResolvedValueOnce([{ hash: 'next_hash', slot: 101, confirmations: 21 }] as never)
+            .mockResolvedValueOnce([{ hash: 'next_hash', slot: 101, confirmations: 21, tx_count: 1 }] as never)
             .mockResolvedValueOnce([] as never);
         mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
-            if (path === 'block_txs') return [{ tx_hash: 'scan_tx' }] as never;
+            if (path === 'block_txs') return [{ block_hash: 'next_hash', tx_hash: 'scan_tx' }] as never;
             if (path === 'tx_info') {
                 txInfoAttempts++;
                 if (txInfoAttempts === 1) {
@@ -449,6 +469,56 @@ describe('Scanner lambda e2e', () => {
         });
         const block = { id: 'intra_block', slot: 150 };
         const tip = { hash: 'tip', slot: 200 };
+
+        it('moves both legacy handles from separate listings into one wallet output', () => {
+            // Invariant: one transaction moving multiple legacy handles updates every owner and UTxO.
+            // If either asset is dropped during conversion or indexing, its old listing remains visible.
+            const names = ['xn--8o8hx2f', 'xn--kong-tz14c'];
+            const assets = names.map((name) => Buffer.from(name).toString('hex'));
+            for (let i = 0; i < names.length; i++) {
+                repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo(`old${i}#0`, names[i], 90, true), handles: [[policy, [assets[i]]]], mint: [[policy, [assets[i]]]] }]);
+            }
+            const owner = 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746';
+            mockedHelpers.buildUTxOsFromKoiosTxs.mockImplementation(actualHelpers.buildUTxOsFromKoiosTxs);
+            Internal.processScannerBlock(block, [{
+                tx_hash: 'cancel', block_hash: block.id, block_height: 123, absolute_slot: block.slot,
+                inputs: [{ tx_hash: 'old0', tx_index: 0 }, { tx_hash: 'old1', tx_index: 0 }],
+                assets_minted: [], metadata: {}, outputs: [{ tx_hash: 'cancel', tx_index: 0, value: '2000000',
+                    payment_addr: { bech32: owner }, asset_list: assets.map((asset_name) => ({ policy_id: policy, asset_name, quantity: '1' })) }]
+            }] as never, tip);
+            for (const name of names) {
+                expect(repo.getHandle(name)).toEqual(expect.objectContaining({ utxo: 'cancel#0', resolved_addresses: expect.objectContaining({ ada: owner }) }));
+            }
+            expect(repo.getUTxO('old0#0') ?? null).toBeNull();
+            expect(repo.getUTxO('old1#0') ?? null).toBeNull();
+        });
+
+        it('reapplies a verified shared output without moving the scanner cursor', () => {
+            // Invariant: targeted recovery updates both holders and UTxOs without replaying the historical block.
+            // Updating only the handle hash leaves the old holder index or UTxO behind.
+            const names = ['xn--8o8hx2f', 'xn--kong-tz14c'];
+            const assets = names.map((name) => Buffer.from(name).toString('hex'));
+            for (let i = 0; i < names.length; i++) {
+                repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo(`old${i}#0`, names[i], 90, true), handles: [[policy, [assets[i]]]], mint: [[policy, [assets[i]]]] }]);
+            }
+            const oldHolder = repo.getHandle(names[0])!.holder;
+            const owner = 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746';
+            const before = repo.getMetrics();
+            const canonical = { ...utxo('cancel#0', names[0], 150, false), address: owner, handles: [[policy, assets]] as [string, string[]][] };
+            repo.addUTxOsWithMintDataAndUpdateIndexes([canonical]);
+            repo.removeUTxOs(['old0#0', 'old1#0']);
+            const newHolder = repo.getHandle(names[0])!.holder;
+            expect(newHolder).not.toBe(oldHolder);
+            for (const name of names) {
+                expect(repo.getHandle(name)).toEqual(expect.objectContaining({ utxo: 'cancel#0', holder: newHolder, resolved_addresses: expect.objectContaining({ ada: owner }) }));
+                expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, newHolder)?.has(name)).toBe(true);
+                expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, oldHolder)?.has(name) ?? false).toBe(false);
+            }
+            expect(repo.getUTxO('cancel#0')).toEqual(expect.objectContaining({ address: owner }));
+            expect(repo.getUTxO('old0#0') ?? null).toBeNull();
+            expect(repo.getUTxO('old1#0') ?? null).toBeNull();
+            expect(repo.getMetrics()).toEqual(expect.objectContaining({ currentSlot: before.currentSlot, currentBlockHash: before.currentBlockHash }));
+        });
 
         it('does not resurrect a handle moved and then burned in the same block', () => {
             const name = `intra-burn-${Date.now()}`;

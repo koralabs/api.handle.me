@@ -859,15 +859,15 @@ describe('Scanner lambda unit tests', () => {
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
 
         mockedHelpers.fetchPaginatedResults.mockResolvedValue([
-            { hash: 'block_newer', slot: 101, confirmations: 5 },
-            { hash: 'block_older', slot: 100, confirmations: 1 }
+            { hash: 'block_newer', slot: 101, confirmations: 5, tx_count: 1 },
+            { hash: 'block_older', slot: 100, confirmations: 1, tx_count: 1 }
         ] as never);
         mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
             if (path === 'block_txs') {
                 const parsedBody = JSON.parse(body ?? '{}');
                 return (parsedBody._block_hashes ?? []).flatMap((blockHash: string) => {
-                    if (blockHash === 'block_newer') return [{ tx_hash: 'tx_newer' }];
-                    if (blockHash === 'block_older') return [{ tx_hash: 'tx_older' }];
+                    if (blockHash === 'block_newer') return [{ block_hash: blockHash, tx_hash: 'tx_newer' }];
+                    if (blockHash === 'block_older') return [{ block_hash: blockHash, tx_hash: 'tx_older' }];
                     return [];
                 }) as never;
             }
@@ -927,13 +927,13 @@ describe('Scanner lambda unit tests', () => {
     it('scan writes tip metrics from latest blockfrost tip (not chunk tail)', async () => {
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
-        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_chunk_tail', slot: 101, confirmations: 5 }] as never);
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_chunk_tail', slot: 101, confirmations: 5, tx_count: 1 }] as never);
         mockedHelpers.blockfrostApiCall.mockImplementation(async (endpoint: string) => {
             if (endpoint === 'blocks/latest') return { ok: true, json: async () => ({ hash: 'real_tip_hash', slot: 999 }) } as never;
             return { ok: true, json: async () => ({}) } as never;
         });
         mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
-            if (path === 'block_txs') return [{ tx_hash: 'tx_1' }] as never;
+            if (path === 'block_txs') return [{ block_hash: 'block_chunk_tail', tx_hash: 'tx_1' }] as never;
             if (path === 'tx_info') return [{ tx_hash: 'tx_1', block_hash: 'block_chunk_tail', inputs: [] }] as never;
             return [] as never;
         });
@@ -958,10 +958,10 @@ describe('Scanner lambda unit tests', () => {
             lastSlot: 100,
             lockLambdas: LockedLambdaReason.UNLOCKED
         });
-        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_chunk_tail', slot: 101, confirmations: 5 }] as never);
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_chunk_tail', slot: 101, confirmations: 5, tx_count: 1 }] as never);
         mockedHelpers.blockfrostApiCall.mockResolvedValue({ ok: false } as never);
         mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
-            if (path === 'block_txs') return [{ tx_hash: 'tx_1' }] as never;
+            if (path === 'block_txs') return [{ block_hash: 'block_chunk_tail', tx_hash: 'tx_1' }] as never;
             if (path === 'tx_info') return [{ tx_hash: 'tx_1', block_hash: 'block_chunk_tail', inputs: [] }] as never;
             return [] as never;
         });
@@ -1456,7 +1456,8 @@ describe('Scanner lambda unit tests', () => {
         const blocks = Array.from({ length: 55 }, (_, index) => ({
             hash: `${'b'.repeat(56)}${index.toString().padStart(8, '0')}`,
             slot: 101 + index,
-            confirmations: 5
+            confirmations: 5,
+            tx_count: 1
         }));
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
         mockedHelpers.fetchPaginatedResults.mockResolvedValue(blocks as never);
@@ -1464,11 +1465,11 @@ describe('Scanner lambda unit tests', () => {
         mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
             if (path === 'block_txs') {
                 const parsedBody = JSON.parse(body ?? '{}');
-                return (parsedBody._block_hashes ?? []).map((blockHash: string) => ({ tx_hash: `tx_${blockHash.slice(-8)}` })) as never;
+                return (parsedBody._block_hashes ?? []).map((blockHash: string) => ({ block_hash: blockHash, tx_hash: `tx_${blockHash.slice(-8)}` })) as never;
             }
             if (path === 'tx_info') {
                 const parsedBody = JSON.parse(body ?? '{}');
-                return (parsedBody._tx_hashes ?? []).map((txHash: string) => ({ tx_hash: txHash, block_hash: 'none', inputs: [] })) as never;
+                return (parsedBody._tx_hashes ?? []).map((txHash: string) => ({ tx_hash: txHash, block_hash: `${'b'.repeat(56)}${txHash.slice(-8)}`, inputs: [] })) as never;
             }
             return [] as never;
         });
@@ -1553,7 +1554,8 @@ describe('Scanner lambda unit tests', () => {
         const blocks = Array.from({ length: 80 }, (_, index) => ({
             hash: `${'c'.repeat(56)}${index.toString().padStart(8, '0')}`,
             slot: 101 + index,
-            confirmations: 5
+            confirmations: 5,
+            tx_count: 0
         }));
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
         mockedHelpers.fetchPaginatedResults.mockResolvedValue(blocks as never);
@@ -2012,10 +2014,10 @@ describe('Scanner lambda unit tests', () => {
         expect(mockedHelpers.fetchPaginatedResults).toHaveBeenCalledWith('blocks/4980/next', Infinity, { minIntervalMs: 0, beforeStart: expect.any(Function) });
     });
 
-    it('scan tolerates null block_txs responses', async () => {
+    it('scan tolerates null block_txs responses for an empty block', async () => {
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
-        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5, tx_count: 0 }] as never);
         mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
             if (path === 'block_txs') return null as never;
             return [] as never;
@@ -2055,7 +2057,7 @@ describe('Scanner lambda unit tests', () => {
     it('scan defaults handleNames to empty when UTxO collection flatMap returns undefined', async () => {
         const { handlesRepo, scannerModule } = setup();
         handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
-        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5 }] as never);
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_newer', slot: 101, confirmations: 5, tx_count: 0 }] as never);
         mockedHelpers.fetchKoios.mockResolvedValue([] as never);
         const builtUtxos: any[] = [];
         (builtUtxos as any).flatMap = () => undefined;
@@ -2236,14 +2238,14 @@ describe('Scanner lambda unit tests', () => {
 
         mockedHelpers.fetchPaginatedResults.mockImplementation(async (endpoint: string) => {
             if (endpoint.includes('blocks/start_hash/next')) {
-                return [{ hash: 'block_a', slot: 100, confirmations: 5 }] as never;
+                return [{ hash: 'block_a', slot: 100, confirmations: 5, tx_count: 2 }] as never;
             }
             return [] as never;
         });
 
         mockedHelpers.fetchKoios.mockImplementation(async (path: string, _method?: string, body?: string) => {
             if (path === 'block_txs') {
-                return [{ tx_hash: 'tx_present' }, { tx_hash: 'tx_dropped' }] as never;
+                return [{ block_hash: 'block_a', tx_hash: 'tx_present' }, { block_hash: 'block_a', tx_hash: 'tx_dropped' }] as never;
             }
             if (path === 'tx_info') {
                 const parsedBody = JSON.parse(body ?? '{}');
@@ -2280,6 +2282,66 @@ describe('Scanner lambda unit tests', () => {
         } finally {
             logSpy.mockRestore();
             warnSpy.mockRestore();
+        }
+    });
+
+    it('does not advance without a valid expected transaction count', async () => {
+        // Invariant: an unknown block transaction count cannot prove complete discovery.
+        // Removing the count guard records the block as scanned with an empty transaction list.
+        const { handlesRepo, store, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_a', slot: 100, confirmations: 5 }] as never);
+        mockedHelpers.fetchKoios.mockResolvedValue([] as never);
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        try {
+            await scannerModule.Internal.scan();
+            expect(store.recordScannedBlock).not.toHaveBeenCalledWith(100, 'block_a');
+            expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).not.toHaveBeenCalled();
+        } finally {
+            logSpy.mockRestore();
+        }
+    });
+
+    it('does not count duplicate transaction rows as complete block coverage', async () => {
+        // Invariant: two rows naming one transaction cannot satisfy a two-transaction block.
+        // Counting rows rather than unique transaction hashes advances past the missing transaction.
+        const { handlesRepo, store, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_a', slot: 100, confirmations: 5, tx_count: 2 }] as never);
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') return [{ block_hash: 'block_a', tx_hash: 'tx_1' }, { block_hash: 'block_a', tx_hash: 'tx_1' }] as never;
+            if (path === 'tx_info') return [{ tx_hash: 'tx_1', block_hash: 'block_a', inputs: [], outputs: [], assets_minted: [] }] as never;
+            return [] as never;
+        });
+        mockedHelpers.fetchBlockfrostTxHashes.mockResolvedValue([{ block_hash: 'block_a', tx_hash: 'tx_1' }] as never);
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        try {
+            await scannerModule.Internal.scan();
+            expect(store.recordScannedBlock).not.toHaveBeenCalledWith(100, 'block_a');
+            expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).not.toHaveBeenCalled();
+        } finally {
+            logSpy.mockRestore();
+        }
+    });
+
+    it('does not advance when a discovered transaction is returned under the wrong block', async () => {
+        // A complete count is not complete coverage if a transaction is assigned to another block.
+        // Removing the per-block check incorrectly records block_a as scanned without tx_1.
+        const { handlesRepo, store, scannerModule } = setup();
+        handlesRepo.getMetrics.mockReturnValue({ currentBlockHash: 'start_hash', lockLambdas: LockedLambdaReason.UNLOCKED });
+        mockedHelpers.fetchPaginatedResults.mockResolvedValue([{ hash: 'block_a', slot: 100, confirmations: 5, tx_count: 1 }] as never);
+        mockedHelpers.fetchKoios.mockImplementation(async (path: string) => {
+            if (path === 'block_txs') return [{ block_hash: 'block_a', tx_hash: 'tx_1' }] as never;
+            if (path === 'tx_info') return [{ tx_hash: 'tx_1', block_hash: 'other_block', inputs: [], outputs: [], assets_minted: [] }] as never;
+            return [] as never;
+        });
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        try {
+            await scannerModule.Internal.scan();
+            expect(store.recordScannedBlock).not.toHaveBeenCalledWith(100, 'block_a');
+            expect(handlesRepo.addUTxOsWithMintDataAndUpdateIndexes).not.toHaveBeenCalled();
+        } finally {
+            logSpy.mockRestore();
         }
     });
 
