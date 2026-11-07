@@ -18,6 +18,7 @@ import OgmiosService from './services/ogmios/ogmios.service';
 import { dynamicallyLoad } from './utils/util';
 import { validatePlaintextStartup } from './utils/startupEnvironment';
 import { localRepairGuard } from './utils/localRepairGuard';
+import { localRepairReaderAdmission } from './utils/localRepairReaderGate';
 
 export interface AppOptions {
     disableOgmios?: boolean;
@@ -93,7 +94,8 @@ class App {
         this.app.use(express.text());
         this.app.use(express.json());
         this.app.use(express.urlencoded({ extended: true }));
-        if (process.env.API_TEST_MODE === 'integration' && process.env.API_TEST_VALKEY_RECEIPT && process.env.REDIS_HOST === '127.0.0.1' && process.env.REDIS_PORT === '6380' && process.env.NETWORK === 'preview') {
+        if (process.env.API_TEST_MODE === 'integration' && process.env.API_TEST_VALKEY_RECEIPT && process.env.REDIS_HOST === '127.0.0.1' && process.env.REDIS_PORT === '6381' && process.env.NETWORK === 'preview') {
+            this.app.use(localRepairReaderAdmission(() => new this.registry.handlesStore() as any));
             this.app.use(localRepairGuard(() => new this.registry.handlesStore() as any));
         }
         // discoveryMiddleware (Link rel=service-doc, X-API-Version) is auto-loaded

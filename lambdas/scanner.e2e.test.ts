@@ -1,14 +1,17 @@
-import { getPaymentKeyHash, IndexNames, LockedLambdaReason, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { buildHolderInfo, getPaymentKeyHash, IndexNames, LockedLambdaReason, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { RedisHandlesStore } from '../stores/redis';
-import { getApiCacheKey, getApiMetricsKey, getApiMptRebuildPendingKey, getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
+import { getApiCacheKey, getApiIndexKey, getApiIndexRootKey, getApiMetricsKey, getApiMptRebuildPendingKey, getApiMptRootHashKey, getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
 import { buildAndStoreMptRootHash } from '../utils/snapshotVerification';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { GlideClient } from '@valkey/valkey-glide';
+import http from 'node:http';
 import express from 'express';
 import request from 'supertest';
 import { localRepairGuard } from '../utils/localRepairGuard';
+import { localRepairGate, localRepairReaderAdmission } from '../utils/localRepairReaderGate';
 import * as helpers from '../utils/helpers';
 import { repairPreflight } from '../utils/repairPreflight';
 import { localKoiosRepair, localRepair } from '../utils/localRepair';
@@ -120,7 +123,7 @@ describe('Scanner lambda e2e', () => {
     beforeEach(() => {
         // Cache resets intentionally preserve control keys. Each case owns its recovery
         // fixture; a prior forced reindex failure must not select recovery in this case.
-        store.redisClientCall('del', [getApiScannerRecoveryKey()]);
+        store.redisClientCall('del', [getApiScannerRecoveryKey(), getApiCacheKey('local-repair:reader-gate'), getApiCacheKey('local-repair:readers'), getApiCacheKey('local-repair:experimental-undo-log')]);
         repo.rollBackToGenesis();
         repo.addUTxOsWithMintData([buildTrackedUtxo()]);
         repo.setMetrics({
@@ -134,6 +137,136 @@ describe('Scanner lambda e2e', () => {
             lockLambdas: LockedLambdaReason.UNLOCKED
         });
         jest.clearAllMocks();
+    });
+
+    // A partial experimental batch must be undoable against real repository index keys.
+    // Deleting the preimage-aware recovery makes the injected failure strand the owner changes.
+    it.each([
+        ['hash', "redis.call('HSET', KEYS[6], ARGV[4], ARGV[5])"],
+        ['sets', "if ARGV[13] == 'absent' then redis.call('ZREM', KEYS[10], ARGV[12]) else redis.call('ZADD', KEYS[10], ARGV[13], ARGV[12]) end"]
+    ])('recovers a partial experimental batch against repository indexes after %s', async (_phase, marker) => {
+        const ownerMint = buildMintedUTxO('journal-owner');
+        const siblingMint = buildMintedUTxO('journal-sibling');
+        const first: UTxOWithTxInfo = {
+            ...ownerMint, id: 'journal-shared#0', tx_id: 'journal-shared',
+            handles: [[policy, [...ownerMint.handles[0][1], ...siblingMint.handles[0][1]]]],
+            mint: [[policy, [...ownerMint.mint![0][1], ...siblingMint.mint![0][1]]]],
+            metadata: { '721': { [policy]: { ...(ownerMint.metadata!['721'] as any)[policy], ...(siblingMint.metadata!['721'] as any)[policy] } } }
+        };
+        repo.addUTxOsWithMintDataAndUpdateIndexes([first]);
+        const handle = repo.getHandle('journal-owner')!;
+        const siblingBefore = repo.getHandle('journal-sibling');
+        const root = await buildAndStoreMptRootHash(store);
+        const metrics = repo.getMetrics();
+        const control = ['repair', 'scanner', 'gate', 'readers', 'journal', 'pending', 'sibling-journal'].map(key => getApiCacheKey(`experimental-repository:${key}:${randomUUID()}`));
+        const keys = [...control.slice(0, 5), getApiIndexKey(IndexNames.HANDLE, handle.name), getApiIndexKey(IndexNames.HOLDER, handle.holder),
+            getApiIndexKey(IndexNames.ADDRESS, first.address), getApiIndexKey(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(first.address)!),
+            getApiIndexRootKey(IndexNames.UTXO_SLOT), control[5], getApiMetricsKey()];
+        const child = spawnSync(process.execPath, ['--input-type=module', '-e', "import {readerGate,apply,undo} from './workers/experimentalMultiIndexJournal.mjs'; process.stdout.write(JSON.stringify({readerGate,apply,undo}))"], { encoding: 'utf8' });
+        expect({ status: child.status, stderr: child.stderr }).toEqual({ status: 0, stderr: '' });
+        const scripts = JSON.parse(child.stdout) as { readerGate: string; apply: string; undo: string };
+        const owners = ['repair-owner', 'scanner-owner', 'gate-owner'];
+        const evalScript = (script: string, args: string[]) => store.redisClientCall('customCommand', ['EVAL', script, `${keys.length}`, ...keys, ...args]);
+        try {
+            store.redisClientCall('customCommand', ['SET', control[0], owners[0], 'PX', '120000']);
+            store.redisClientCall('customCommand', ['SET', control[1], owners[1], 'PX', '120000']);
+            expect(evalScript(scripts.readerGate, ['admit', 'active-reader'])).toBe(1);
+            expect(evalScript(scripts.readerGate, ['close', ...owners])).toBe(1);
+            const injected = scripts.apply.replace(marker, `${marker}; error('injected repository failure')`);
+            expect(injected).not.toBe(scripts.apply);
+            const args = [...owners, 'utxo', 'wrong#0', handle.name, '0', handle.name, '0', handle.name, '0', first.id, 'absent'];
+            expect(() => evalScript(scripts.apply, args)).toThrow('READERS_ACTIVE');
+            expect(repo.getHandle(handle.name)).toEqual(handle);
+            expect(evalScript(scripts.readerGate, ['release', 'active-reader'])).toBe(1);
+            expect(() => evalScript(injected, args)).toThrow('injected repository failure');
+            expect(repo.getHandle(handle.name)?.utxo).toBe('wrong#0');
+            expect(evalScript(scripts.readerGate, ['admit', 'late-reader'])).toBe(0);
+            expect(evalScript(scripts.undo, [...owners, 'partial'])).toBe(1);
+            expect(repo.getHandle(handle.name)).toEqual(handle);
+            expect(repo.getHandle('journal-sibling')).toEqual(siblingBefore);
+            expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, handle.holder)?.has(handle.name)).toBe(true);
+            expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, handle.holder)?.has('journal-sibling')).toBe(true);
+            expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, first.address)?.has(handle.name)).toBe(true);
+            expect(store.getValuesFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(first.address)!)?.has(handle.name)).toBe(true);
+            expect(store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, first.slot)).toContain(first.id);
+            expect(repo.getUTxO(first.id)?.handles).toEqual(first.handles);
+            expect(repo.getHandle('journal-sibling')?.utxo).toBe(first.id);
+            expect(store.getMptRootHash()).toBe(root);
+            expect(repo.getMetrics()).toEqual(expect.objectContaining({ currentSlot: metrics.currentSlot, currentBlockHash: metrics.currentBlockHash }));
+
+            // Both shared-output owners need separate journals. Recover in reverse order:
+            // the second journal's preimage includes the first write's removed slot member.
+            const siblingKeys = [...keys];
+            siblingKeys[4] = control[6];
+            siblingKeys[5] = getApiIndexKey(IndexNames.HANDLE, 'journal-sibling');
+            const siblingArgs = [...owners, 'utxo', 'wrong-sibling#0', 'journal-sibling', '0', 'journal-sibling', '0', 'journal-sibling', '0', first.id, 'absent'];
+            const evalSibling = (script: string, args: string[]) => store.redisClientCall('customCommand', ['EVAL', script, `${siblingKeys.length}`, ...siblingKeys, ...args]);
+            expect(evalScript(scripts.apply, args)).toBe(1);
+            expect(() => evalSibling(injected, siblingArgs)).toThrow('injected repository failure');
+            expect(repo.getHandle('journal-sibling')?.utxo).toBe('wrong-sibling#0');
+            expect(evalSibling(scripts.undo, [...owners, 'partial'])).toBe(1);
+            expect(evalSibling(scripts.readerGate, ['open', ...owners])).toBe(0);
+            expect(evalSibling(scripts.readerGate, ['admit', 'late-reader'])).toBe(0);
+            expect(evalScript(scripts.undo, owners)).toBe(1);
+            expect(repo.getHandle(handle.name)).toEqual(handle);
+            expect(repo.getHandle('journal-sibling')).toEqual(siblingBefore);
+            expect(repo.getUTxO(first.id)?.handles).toEqual(first.handles);
+            expect(store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, first.slot)).toContain(first.id);
+            for (const name of [handle.name, 'journal-sibling']) {
+                expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, handle.holder)?.has(name)).toBe(true);
+                expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, first.address)?.has(name)).toBe(true);
+                expect(store.getValuesFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(first.address)!)?.has(name)).toBe(true);
+            }
+            expect(store.getMptRootHash()).toBe(root);
+            expect(repo.getMetrics()).toEqual(expect.objectContaining({ currentSlot: metrics.currentSlot, currentBlockHash: metrics.currentBlockHash }));
+            expect(evalScript(scripts.readerGate, ['open', ...owners])).toBe(1);
+        } finally {
+            store.redisClientCall('del', control);
+        }
+    });
+
+    // The repository itself must move every owner of a shared output and its indexes.
+    // Removing index updates or leaving the old UTxO makes these observable checks fail.
+    // Captured batch keys identify the real mutation scope; they are not a recovery journal.
+    it('traces actual repository writes for a shared-output transfer', () => {
+        const a = buildMintedUTxO('trace-owner-a');
+        const b = buildMintedUTxO('trace-owner-b');
+        const old: UTxOWithTxInfo = {
+            ...a, id: 'trace-old#0', tx_id: 'trace-old',
+            handles: [[policy, [...a.handles[0][1], ...b.handles[0][1]]]],
+            mint: [[policy, [...a.mint![0][1], ...b.mint![0][1]]]],
+            metadata: { '721': { [policy]: { ...(a.metadata!['721'] as any)[policy], ...(b.metadata!['721'] as any)[policy] } } }
+        };
+        repo.addUTxOsWithMintDataAndUpdateIndexes([old]);
+        const oldHandle = repo.getHandle('trace-owner-a')!;
+        const address = 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746';
+        const moved: UTxOWithTxInfo = { ...old, id: 'trace-new#0', tx_id: 'trace-new', slot: 120, address, mint: [], metadata: undefined };
+        const calls = jest.spyOn(store, 'redisClientCall');
+        try {
+            repo.addUTxOsWithMintDataAndUpdateIndexes([moved]);
+            repo.removeUTxOs([old.id]);
+            const newHandle = repo.getHandle('trace-owner-a')!;
+            for (const name of ['trace-owner-a', 'trace-owner-b']) {
+                expect(repo.getHandle(name)).toEqual(expect.objectContaining({ utxo: moved.id, resolved_addresses: expect.objectContaining({ ada: address }) }));
+                expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, address)?.has(name)).toBe(true);
+                expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, old.address)?.has(name) ?? false).toBe(false);
+                expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, newHandle.holder)?.has(name)).toBe(true);
+                expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, oldHandle.holder)?.has(name) ?? false).toBe(false);
+                expect(store.getValuesFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(address)!)?.has(name)).toBe(true);
+                expect(store.getValuesFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(old.address)!)?.has(name) ?? false).toBe(false);
+            }
+            expect(repo.getUTxO(old.id) ?? null).toBeNull();
+            expect(repo.getUTxO(moved.id)?.handles).toEqual(moved.handles);
+            expect(store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, moved.slot)).toContain(moved.id);
+            expect(store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 0) ?? []).not.toContain(old.id);
+            const commands = calls.mock.calls.filter(([method]) => method === 'batch').flatMap(([, batch]) => batch as [string, any[]][]);
+            const serialized = JSON.stringify(commands);
+            for (const key of [getApiIndexKey(IndexNames.HANDLE, 'trace-owner-a'), getApiIndexKey(IndexNames.HANDLE, 'trace-owner-b'),
+                getApiIndexKey(IndexNames.UTXO, old.id), getApiIndexKey(IndexNames.UTXO, moved.id), getApiIndexRootKey(IndexNames.UTXO_SLOT),
+                getApiIndexKey(IndexNames.ADDRESS, address), getApiIndexKey(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(address)!)]) {
+                expect(serialized).toContain(key);
+            }
+        } finally { calls.mockRestore(); }
     });
 
     it('exits before the Fn cap without advancing an unprocessed block, then resumes it', async () => {
@@ -623,12 +756,14 @@ describe('Scanner lambda e2e', () => {
         // Invariant: the actual local executor locks status readers before its first write and
         // retains a durable recovery journal across failure, lease replacement, and chain movement.
         // Negative control: clearing the lock or journal before final verification fails these cases.
-        it.each(['success', 'failure', 'lease-lost', 'chain-moved', 'crash'] as const)('executes and recovers local repair: %s', async mode => {
+        it.each(['success', 'failure', 'full-undo', 'full-undo-mpt', 'full-undo-fork', 'full-undo-fork-conflict', 'full-undo-fork-set-conflict', 'full-undo-interrupted', 'partial-batch-start', 'partial-batch', 'partial-batch-end', 'partial-delete', 'partial-batch-cursor', 'lease-lost', 'chain-moved', 'crash', 'partial-crash', 'partial-crash-cursor'] as const)('executes and recovers local repair: %s', async mode => {
             repo.setMetrics({ currentSlot: 200 });
             const names = ['xn--8o8hx2f', 'xn--kong-tz14c'];
             const assets = names.map(name => Buffer.from(name).toString('hex'));
             for (let i = 0; i < names.length; i++) repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo(`old${i}#0`, names[i], 90, true), handles: [[policy, [assets[i]]]], mint: [[policy, [assets[i]]]] }]);
             const ownerAddress = 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746';
+            const originalHandles = names.map(name => repo.getHandle(name));
+            const originalUtxos = ['old0#0', 'old1#0'].map(id => ({ id, value: repo.getUTxO(id) }));
             const oldAddress = repo.getHandle(names[0])!.resolved_addresses.ada;
             const oldHolder = repo.getHandle(names[0])!.holder;
             const cursor = repo.getMetrics();
@@ -641,9 +776,9 @@ describe('Scanner lambda e2e', () => {
             const reader = new HandlesRepository(peer);
             const journalKey = getApiCacheKey('local-repair:journal');
             try {
-                if (mode === 'crash') {
+                if (mode === 'crash' || mode.startsWith('partial-crash')) {
                     const child = spawnSync(process.execPath, ['--import', 'tsx', 'tests/local-repair-crash-fixture.ts'], {
-                        env: { ...process.env, LOCAL_REPAIR_TEST_FIXTURE: JSON.stringify({ targets, outputs: [canonical] }) }, encoding: 'utf8', timeout: 30_000
+                        env: { ...process.env, LOCAL_REPAIR_TEST_FIXTURE: JSON.stringify({ targets, outputs: [canonical], partialBatch: mode.startsWith('partial-crash') }) }, encoding: 'utf8', timeout: 30_000
                     });
                     expect({ status: child.status, stderr: child.status === 87 ? '' : child.stderr }).toEqual({ status: 87, stderr: '' });
                     // The dead process did not release its locks. Shorten only these isolated-test TTLs.
@@ -651,21 +786,179 @@ describe('Scanner lambda e2e', () => {
                     peer.redisClientCall('customCommand', ['PEXPIRE', getApiCacheKey('local-repair:lease'), '1']);
                     await new Promise(resolve => setTimeout(resolve, 20));
                 } else {
+                    const originalCall = store.redisClientCall.bind(store);
+                    let injected = false;
+                    const interceptor = (mode.startsWith('partial-batch') || mode === 'partial-delete') ? jest.spyOn(store, 'redisClientCall').mockImplementation(((method: string, ...args: any[]) => {
+                        const interruptedKey = getApiIndexKey(IndexNames.UTXO, mode === 'partial-delete' ? 'old0#0' : 'cancel#0');
+                        if (!injected && method === 'batch' && JSON.stringify(args[0]).includes(interruptedKey)) {
+                            const batch = args[0] as any[];
+                            expect(batch.length).toBeGreaterThan(1);
+                            injected = true;
+                            const count = mode === 'partial-batch-start' || mode === 'partial-delete' ? 1 : mode === 'partial-batch-end' ? batch.length - 1 : Math.floor(batch.length / 2);
+                            originalCall('batch', batch.slice(0, count));
+                            throw new Error('injected partial repository batch');
+                        }
+                        return originalCall(method, ...args);
+                    }) as typeof store.redisClientCall) : undefined;
                     const operation = localRepair(store, lease, targets, readCanonical, () => {
                         expect(reader.currentHttpStatus()).toBe(503);
                         expect(peer.redisClientCall('get', journalKey)).toContain('old0#0');
-                        if (mode === 'failure') throw new Error('simulated process interruption');
+                        if (mode === 'failure' || mode === 'full-undo' || mode === 'full-undo-fork' || mode === 'full-undo-fork-conflict' || mode === 'full-undo-fork-set-conflict' || mode === 'full-undo-interrupted') throw new Error('simulated process interruption');
                         if (mode === 'lease-lost') peer.redisClientCall('set', getApiScannerLeaseKey(), 'successor');
-                        if (mode === 'chain-moved') canonical = { ...canonical, id: 'moved#0', tx_id: 'moved', slot: 160 };
+                        if (mode === 'chain-moved' || mode === 'full-undo-mpt') canonical = { ...canonical, id: 'moved#0', tx_id: 'moved', slot: 160 };
                     });
-                    if (mode === 'success') await operation;
-                    else await expect(operation).rejects.toThrow(mode === 'failure' ? 'simulated process interruption' : mode === 'chain-moved' ? 'Canonical state changed' : /fence lost|fence changed/);
+                    try {
+                        if (mode === 'success') await operation;
+                        else await expect(operation).rejects.toThrow(mode === 'failure' || mode === 'full-undo' || mode === 'full-undo-fork' || mode === 'full-undo-fork-conflict' || mode === 'full-undo-fork-set-conflict' || mode === 'full-undo-interrupted' ? 'simulated process interruption' : mode.startsWith('partial-batch') || mode === 'partial-delete' ? 'injected partial repository batch' : mode === 'chain-moved' || mode === 'full-undo-mpt' ? 'Canonical state changed' : /fence lost|fence changed/);
+                        if (mode.startsWith('partial-batch') || mode === 'partial-delete') expect(injected).toBe(true);
+                    } finally { interceptor?.mockRestore(); }
                 }
                 if (mode !== 'success') {
+                    expect(localRepairGate(peer, 'admit', 'interrupted-reader')).toBe(0);
                     expect(reader.currentHttpStatus()).toBe(503);
-                    expect(peer.redisClientCall('get', journalKey)).toContain('old0#0');
+                    const pendingJournal = JSON.parse(peer.redisClientCall('get', journalKey));
+                    const undoLog = getApiCacheKey('local-repair:experimental-undo-log');
+                    const sequence = Number(peer.redisClientCall('hget', undoLog, 'sequence'));
+                    expect(sequence).toBeGreaterThan(0);
+                    const capturedKeys: string[] = [];
+                    const capturedBatches: { id: string; keys: string[] }[] = [];
+                    for (let i = 1; i <= sequence; i++) {
+                        const id = peer.redisClientCall('hget', undoLog, `order:${i}`);
+                        expect(typeof id).toBe('string');
+                        expect(peer.redisClientCall('hget', undoLog, `${id}:before-ready`)).toBe('1');
+                        expect(peer.redisClientCall('hget', undoLog, `${id}:complete`)).toBe('1');
+                        const keys = JSON.parse(peer.redisClientCall('hget', undoLog, `${id}:keys`));
+                        expect(keys.length).toBeGreaterThan(0);
+                        capturedKeys.push(...keys);
+                        capturedBatches.push({ id, keys });
+                    }
+                    if (mode === 'chain-moved' || mode === 'full-undo-mpt') {
+                        expect(capturedKeys).toContain(getApiMptRootHashKey());
+                        const checked = new Set<string>();
+                        const compare = "local d=redis.call('DUMP',KEYS[2]); local e=redis.call('HGET',KEYS[1],ARGV[1]..':after-exists:'..ARGV[2]); local s=redis.call('HGET',KEYS[1],ARGV[1]..':after:'..ARGV[2]); if (not d and e=='0') or (d and e=='1' and d==s) then return 1 else return 0 end";
+                        for (const batch of capturedBatches.reverse()) for (let i = 0; i < batch.keys.length; i++) {
+                            const key = batch.keys[i];
+                            if (checked.has(key)) continue;
+                            checked.add(key);
+                            expect(peer.redisClientCall('customCommand', ['EVAL', compare, '2', undoLog, key, batch.id, String(i + 1)])).toBe(1);
+                        }
+                        expect(checked.has(getApiMptRootHashKey())).toBe(true);
+                        const handleKey = getApiIndexKey(IndexNames.HANDLE, names[0]);
+                        const last = capturedBatches.find(batch => batch.keys.includes(handleKey))!;
+                        const index = String(last.keys.indexOf(handleKey) + 1);
+                        peer.redisClientCall('hset', handleKey, { utxo: 'intrusion#0' });
+                        expect(peer.redisClientCall('customCommand', ['EVAL', compare, '2', undoLog, handleKey, last.id, index])).toBe(0);
+                        peer.redisClientCall('hset', handleKey, { utxo: 'cancel#0' });
+                        // This equality after an uncoordinated change-and-restore demonstrates
+                        // why postimage comparison alone is not a production writer fence.
+                        expect(peer.redisClientCall('customCommand', ['EVAL', compare, '2', undoLog, handleKey, last.id, index])).toBe(1);
+                    }
+                    expect(pendingJournal.undoImages.handles).toEqual(originalHandles);
+                    expect(pendingJournal.undoImages.mptRoot).toBe(root);
+                    expect(pendingJournal.undoImages.utxos).toEqual([...originalUtxos, { id: 'cancel#0', value: null }]);
+                    expect(pendingJournal.undoImages.utxoSlots).toEqual([{ id: 'old0#0', score: 90 }, { id: 'old1#0', score: 90 }, { id: 'cancel#0', score: null }]);
+                    expect(pendingJournal.undoImages.orderedMembers).toEqual(expect.arrayContaining([
+                        { index: IndexNames.HOLDER_COUNT, member: oldHolder, score: 2 },
+                        { index: IndexNames.HOLDER_COUNT, member: buildHolderInfo(ownerAddress).address, score: null }
+                    ]));
+                    for (const name of names) expect(pendingJournal.undoImages.memberships).toEqual(expect.arrayContaining([
+                        { index: IndexNames.RARITY, key: originalHandles[names.indexOf(name)]!.rarity, member: name, present: true },
+                        { index: IndexNames.HOLDER, key: oldHolder, member: name, present: true },
+                        { index: IndexNames.HOLDER, key: buildHolderInfo(ownerAddress).address, member: name, present: false },
+                        { index: IndexNames.DEFAULT_HANDLE, key: buildHolderInfo(ownerAddress).address, member: name, present: false },
+                        { index: IndexNames.ADDRESS, key: oldAddress, member: name, present: true },
+                        { index: IndexNames.ADDRESS, key: ownerAddress, member: name, present: false },
+                        { index: IndexNames.PAYMENT_KEY_HASH, key: getPaymentKeyHash(oldAddress), member: name, present: true },
+                        { index: IndexNames.PAYMENT_KEY_HASH, key: getPaymentKeyHash(ownerAddress), member: name, present: false }
+                    ]));
+                    if (mode === 'full-undo' || mode === 'full-undo-mpt' || mode === 'full-undo-fork' || mode === 'full-undo-fork-conflict' || mode === 'full-undo-fork-set-conflict' || mode === 'full-undo-interrupted') {
+                        const repairLease = getApiCacheKey('local-repair:lease');
+                        const gateKey = getApiCacheKey('local-repair:reader-gate');
+                        const readerKey = getApiCacheKey('local-repair:readers');
+                        expect(Internal.acquireScannerLease('undo-scanner')).toBe(true);
+                        peer.redisClientCall('customCommand', ['SET', repairLease, 'undo-owner', 'PX', '120000']);
+                        expect(localRepairGate(peer, 'close', 'undo-owner', 'undo-scanner')).toBe(1);
+                        const script = readFileSync('stores/redis/experimentalUndoKeyImages.lua', 'utf8');
+                        const undoKeys = [undoLog, gateKey, readerKey, repairLease, getApiScannerLeaseKey(), ...new Set(capturedKeys)];
+                        const runUndo = () => peer.redisClientCall('customCommand', ['EVAL', script, `${undoKeys.length}`, ...undoKeys, 'undo-owner', 'undo-owner', 'undo-scanner']);
+                        const handleKey = getApiIndexKey(IndexNames.HANDLE, names[0]);
+                        if (mode === 'full-undo-interrupted') {
+                            const marker = "else redis.call('RESTORE', key, 0, image.image, 'REPLACE') end";
+                            const injected = script.replace(marker, `${marker}; error('injected undo failure')`);
+                            expect(injected).not.toBe(script);
+                            expect(() => peer.redisClientCall('customCommand', ['EVAL', injected, `${undoKeys.length}`, ...undoKeys, 'undo-owner', 'undo-owner', 'undo-scanner'])).toThrow('injected undo failure');
+                            expect(() => runUndo()).toThrow('UNDO_CONFLICT');
+                            expect(peer.redisClientCall('get', journalKey)).not.toBeNull();
+                            expect(localRepairGate(peer, 'admit', 'undo-reader')).toBe(0);
+                            peer.redisClientCall('snapshotRelease', { key: repairLease, owner: 'undo-owner', scannerKey: getApiScannerLeaseKey(), scannerOwner: 'undo-scanner', ownsScannerLease: false });
+                            Internal.releaseScannerLease('undo-scanner');
+                            return;
+                        }
+                        if (mode === 'full-undo-fork' || mode === 'full-undo-fork-conflict' || mode === 'full-undo-fork-set-conflict') {
+                            peer.setMetrics({ currentSlot: 201, currentBlockHash: 'different-chain' });
+                            peer.redisClientCall('zadd', getApiIndexRootKey(IndexNames.UTXO_SLOT), [{ element: 'unrelated-chain#0', score: 201 }]);
+                            peer.redisClientCall('sadd', getApiIndexKey(IndexNames.HOLDER, oldHolder), ['unrelated-holder-handle']);
+                            peer.redisClientCall('sadd', getApiIndexKey(IndexNames.ADDRESS, ownerAddress), ['unrelated-address-handle']);
+                            if (mode === 'full-undo-fork-conflict' || mode === 'full-undo-fork-set-conflict') {
+                                if (mode === 'full-undo-fork-conflict') peer.redisClientCall('zadd', getApiIndexRootKey(IndexNames.UTXO_SLOT), [{ element: 'cancel#0', score: 202 }]);
+                                else peer.redisClientCall('sadd', getApiIndexKey(IndexNames.HOLDER, oldHolder), [names[0]]);
+                                expect(() => runUndo()).toThrow('UNDO_CONFLICT');
+                                expect(repo.getHandle(names[0])?.utxo).toBe('cancel#0');
+                                if (mode === 'full-undo-fork-conflict') expect(peer.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 202)).toContain('cancel#0');
+                                else expect(peer.getValuesFromIndexedSet(IndexNames.HOLDER, oldHolder)?.has(names[0])).toBe(true);
+                            } else {
+                                expect(runUndo()).toBe(1);
+                                expect(peer.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 90)).toEqual(expect.arrayContaining(['old0#0', 'old1#0']));
+                                expect(names.map(name => repo.getHandle(name))).toEqual(originalHandles);
+                                expect(repo.getUTxO('cancel#0') ?? null).toBeNull();
+                            }
+                            expect(peer.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 201)).toContain('unrelated-chain#0');
+                            expect(peer.getValuesFromIndexedSet(IndexNames.HOLDER, oldHolder)?.has('unrelated-holder-handle')).toBe(true);
+                            expect(peer.getValuesFromIndexedSet(IndexNames.ADDRESS, ownerAddress)?.has('unrelated-address-handle')).toBe(true);
+                            expect(repo.getMetrics()).toEqual(expect.objectContaining({ currentSlot: 201, currentBlockHash: 'different-chain' }));
+                            expect(localRepairGate(peer, 'admit', 'fork-reader')).toBe(0);
+                            peer.redisClientCall('snapshotRelease', { key: repairLease, owner: 'undo-owner', scannerKey: getApiScannerLeaseKey(), scannerOwner: 'undo-scanner', ownsScannerLease: false });
+                            Internal.releaseScannerLease('undo-scanner');
+                            return;
+                        }
+                        peer.redisClientCall('hset', handleKey, { utxo: 'unexpected#0' });
+                        expect(() => runUndo()).toThrow('UNDO_CONFLICT');
+                        expect(repo.getHandle(names[0])?.utxo).toBe('unexpected#0');
+                        expect(repo.getHandle(names[1])?.utxo).toBe('cancel#0');
+                        peer.redisClientCall('hset', handleKey, { utxo: 'cancel#0' });
+                        expect(runUndo()).toBe(1);
+                        expect(names.map(name => repo.getHandle(name))).toEqual(originalHandles);
+                        expect(originalUtxos.map(image => repo.getUTxO(image.id))).toEqual(originalUtxos.map(image => image.value));
+                        expect(repo.getUTxO('cancel#0') ?? null).toBeNull();
+                        for (const name of names) {
+                            expect(peer.getValuesFromIndexedSet(IndexNames.HOLDER, oldHolder)?.has(name)).toBe(true);
+                            expect(peer.getValuesFromIndexedSet(IndexNames.ADDRESS, oldAddress)?.has(name)).toBe(true);
+                            expect(peer.getValuesFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(oldAddress)!)?.has(name)).toBe(true);
+                            expect(peer.getValuesFromIndexedSet(IndexNames.ADDRESS, ownerAddress)?.has(name) ?? false).toBe(false);
+                        }
+                        expect(peer.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 90)).toEqual(expect.arrayContaining(['old0#0', 'old1#0']));
+                        expect(store.getMptRootHash()).toBe(root);
+                        expect(localRepairGate(peer, 'admit', 'undo-reader')).toBe(0);
+                        peer.redisClientCall('snapshotRelease', { key: repairLease, owner: 'undo-owner', scannerKey: getApiScannerLeaseKey(), scannerOwner: 'undo-scanner', ownsScannerLease: false });
+                        Internal.releaseScannerLease('undo-scanner');
+                        return;
+                    }
                     if (mode === 'lease-lost') Internal.releaseScannerLease('successor');
                     const partial = names.map(name => repo.getHandle(name));
+                    if (mode === 'partial-batch-cursor' || mode === 'partial-crash-cursor') {
+                        peer.setMetrics({ currentSlot: 201, currentBlockHash: 'different-chain' });
+                        const before = { handles: names.map(name => repo.getHandle(name)), utxo: repo.getUTxO(canonical.id), root: store.getMptRootHash(), metrics: repo.getMetrics(), journal: peer.redisClientCall('get', journalKey) };
+                        const ancestry = [
+                            { hash: 'provider_block', slot: 200, parentHash: 'common-block' },
+                            { hash: 'different-chain', slot: 201, parentHash: 'common-block' },
+                            { hash: 'common-block', slot: 190, parentHash: null }
+                        ];
+                        await expect(localRepair(store, lease, undefined, readCanonical, undefined, async hash => ancestry.find(block => block.hash === hash) ?? null))
+                            .rejects.toThrow('common ancestry candidate common-block at 190; canonicality and undo required');
+                        expect({ handles: names.map(name => repo.getHandle(name)), utxo: repo.getUTxO(canonical.id), root: store.getMptRootHash(), metrics: repo.getMetrics(), journal: peer.redisClientCall('get', journalKey) }).toEqual(before);
+                        expect(localRepairGate(peer, 'admit', 'fork-reader')).toBe(0);
+                        return;
+                    }
                     await lambdaHandler({} as any, { getRemainingTimeInMillis: () => 300_000 } as any);
                     await expect(require('./scanner.app').runSideload('auto')).rejects.toThrow('repair journal is pending');
                     expect(names.map(name => repo.getHandle(name))).toEqual(partial);
@@ -673,6 +966,8 @@ describe('Scanner lambda e2e', () => {
                     expect(reader.currentHttpStatus()).toBe(503);
                     await localRepair(store, lease, undefined, readCanonical);
                 }
+                expect(localRepairGate(peer, 'admit', 'recovered-reader')).toBe(1);
+                expect(localRepairGate(peer, 'release', 'recovered-reader')).toBe(1);
                 expect(reader.currentHttpStatus()).not.toBe(503);
                 expect(peer.redisClientCall('get', journalKey) ?? null).toBeNull();
                 expect(peer.redisClientCall('get', getApiMptRebuildPendingKey()) ?? null).toBeNull();
@@ -700,6 +995,254 @@ describe('Scanner lambda e2e', () => {
                 Internal.releaseScannerLease('successor');
                 store.redisClientCall('del', [journalKey, getApiMptRebuildPendingKey()]);
             }
+        });
+
+        // The maintenance ACL must exclude even direct default-user clients while a
+        // separately authenticated process runs the actual shared-output repair.
+        // Leaving default enabled makes the connection-denial assertion fail.
+        it('runs a shared-output repair while direct clients are excluded by isolated ACLs', async () => {
+            repo.setMetrics({ currentSlot: 200 });
+            const names = ['acl-owner-a', 'acl-owner-b'];
+            const assets = names.map(name => Buffer.from(name).toString('hex'));
+            for (let i = 0; i < names.length; i++) repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo(`acl-old-${i}#0`, names[i], 90, true), handles: [[policy, [assets[i]]]], mint: [[policy, [assets[i]]]] }]);
+            const destination = 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746';
+            repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo('acl-unrelated#0', 'acl-unrelated', 95, true), address: destination }]);
+            const output = { ...utxo('acl-shared#0', names[0], 150, false), address: destination, handles: [[policy, assets]] as [string, string[]][] };
+            const targets = names.map((name, i) => ({ name, policy, hex: assets[i] }));
+            const root = await buildAndStoreMptRootHash(store);
+            const opts = require('../tests/valkey-harness.cjs').connectionOptions({ addresses: [{ host: '127.0.0.1', port: 6381 }], useTLS: false });
+            const initial = await GlideClient.createClient(opts);
+            const username = `repair-${randomUUID()}`;
+            const password = randomBytes(32).toString('hex');
+            let admin: GlideClient | undefined;
+            try {
+                await initial.customCommand(['ACL', 'SETUSER', username, 'reset', 'on', `>${password}`, '~*', '+@all']);
+                admin = await GlideClient.createClient({ ...opts, credentials: { username, password } });
+                await admin.customCommand(['ACL', 'SETUSER', 'default', 'off']);
+                expect(Number(await admin.customCommand(['CLIENT', 'KILL', 'USER', 'default']))).toBeGreaterThan(0);
+                await expect(GlideClient.createClient(opts)).rejects.toThrow(/AUTH|auth|disabled|wrongpass|connection/i);
+                const child = spawnSync(process.execPath, ['--import', 'tsx', 'tests/local-repair-crash-fixture.ts'], {
+                    env: { ...process.env, API_TEST_VALKEY_REPAIR_USER: username, API_TEST_VALKEY_REPAIR_PASSWORD: password,
+                        LOCAL_REPAIR_TEST_FIXTURE: JSON.stringify({ targets, outputs: [output], complete: true }) }, encoding: 'utf8', timeout: 30_000
+                });
+                expect(child.status).toBe(0);
+                for (const name of names) {
+                    expect(await admin.hget(getApiIndexKey(IndexNames.HANDLE, name), 'utxo')).toBe(output.id);
+                    expect(await admin.customCommand(['SISMEMBER', getApiIndexKey(IndexNames.ADDRESS, output.address), name])).toBe(true);
+                    expect(await admin.customCommand(['SISMEMBER', getApiIndexKey(IndexNames.ADDRESS, knownAddress), name])).toBe(false);
+                    expect(await admin.customCommand(['SISMEMBER', getApiIndexKey(IndexNames.HOLDER, buildHolderInfo(destination).address), name])).toBe(true);
+                    expect(await admin.customCommand(['SISMEMBER', getApiIndexKey(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(destination)!), name])).toBe(true);
+                }
+                expect(await admin.hget(getApiIndexKey(IndexNames.HANDLE, 'acl-unrelated'), 'utxo')).toBe('acl-unrelated#0');
+                expect(await admin.customCommand(['SISMEMBER', getApiIndexKey(IndexNames.HOLDER, buildHolderInfo(destination).address), 'acl-unrelated'])).toBe(true);
+                expect(await admin.hget(getApiIndexKey(IndexNames.UTXO, 'acl-old-0#0'), 'id')).toBeNull();
+                expect(await admin.hget(getApiIndexKey(IndexNames.UTXO, 'acl-old-1#0'), 'id')).toBeNull();
+                expect(await admin.hget(getApiIndexKey(IndexNames.UTXO, output.id), 'id')).toBe(output.id);
+                expect(await admin.customCommand(['ZSCORE', getApiIndexRootKey(IndexNames.UTXO_SLOT), output.id])).toBe(150);
+                expect(await admin.get(getApiMptRootHashKey())).toBe(root);
+                await admin.customCommand(['ACL', 'SETUSER', 'default', 'on']);
+                const resumed = await GlideClient.createClient(opts);
+                try { expect(await resumed.hget(getApiIndexKey(IndexNames.HANDLE, names[0]), 'utxo')).toBe(output.id); }
+                finally { resumed.close(); }
+            } finally {
+                if (admin) {
+                    await admin.customCommand(['ACL', 'SETUSER', 'default', 'on']);
+                    await admin.customCommand(['ACL', 'DELUSER', username]);
+                    admin.close();
+                }
+                initial.close();
+            }
+        });
+
+        // A stale source can list a sibling whose Handle already points elsewhere.
+        // Omitting that sibling must be refused; including it preserves its live output.
+        it('repairs a stale shared source without disturbing its already-moved sibling', async () => {
+            repo.setMetrics({ currentSlot: 200 });
+            const a = utxo('shared-source#0', 'samanka', 90, true);
+            const b = utxo('shared-source#0', 'ventricle', 90, true);
+            const aHex = Buffer.from('samanka').toString('hex');
+            const bHex = Buffer.from('ventricle').toString('hex');
+            const shared: UTxOWithTxInfo = { ...a, handles: [[policy, [aHex, bHex]]], mint: [[policy, [aHex, bHex]]],
+                metadata: { '721': { [policy]: { ...(a.metadata!['721'] as any)[policy], ...(b.metadata!['721'] as any)[policy] } } } };
+            repo.addUTxOsWithMintDataAndUpdateIndexes([shared]);
+            const siblingOutput = { ...utxo('sibling-live#0', 'ventricle', 120, false), handles: [[policy, [bHex]]] as [string, string[]][] };
+            repo.addUTxOsWithMintDataAndUpdateIndexes([siblingOutput]);
+            const sibling = repo.getHandle('ventricle');
+            const targetAddress = 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746';
+            const targetOutput = { ...utxo('samanka-live#0', 'samanka', 150, false), address: targetAddress, handles: [[policy, [aHex]]] as [string, string[]][] };
+            const target = { name: 'samanka', policy, hex: aHex };
+            const siblingTarget = { name: 'ventricle', policy, hex: bHex };
+            const lease = { acquire: Internal.acquireScannerLease, renew: Internal.renewScannerLease, release: Internal.releaseScannerLease };
+            const root = await buildAndStoreMptRootHash(store);
+            await expect(localRepair(store, lease, [target], async () => [targetOutput])).rejects.toThrow('unplanned handle');
+            expect(repo.getUTxO(shared.id)?.handles).toEqual(shared.handles);
+            expect(repo.getHandle('ventricle')).toEqual(sibling);
+            await localRepair(store, lease, [target, siblingTarget], async () => [targetOutput, siblingOutput]);
+            expect(repo.getHandle('samanka')).toEqual(expect.objectContaining({ utxo: targetOutput.id, resolved_addresses: expect.objectContaining({ ada: targetAddress }) }));
+            const { default_in_wallet: _oldDefault, ...siblingFields } = sibling!;
+            expect(repo.getHandle('ventricle')).toEqual({ ...siblingFields, default_in_wallet: 'ventricle' });
+            expect(repo.getUTxO(siblingOutput.id)?.handles).toEqual(siblingOutput.handles);
+            expect(repo.getUTxO(shared.id) ?? null).toBeNull();
+            expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, knownAddress)?.has('ventricle')).toBe(true);
+            expect(store.getValuesFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(knownAddress)!)?.has('ventricle')).toBe(true);
+            expect(store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 120)).toContain(siblingOutput.id);
+            expect(store.getMptRootHash()).toBe(root);
+        });
+
+        // A shared output matching the largest current incident group must recover all
+        // owners without erasing an unrelated Handle already held at the destination.
+        // Dropping one target or replacing the holder set makes these assertions fail.
+        it('recovers twenty Handles sharing one destination without losing another holder member', async () => {
+            repo.setMetrics({ currentSlot: 200 });
+            const names = ['bot', 'charge', 'compare', 'cupid', 'export', 'israel', 'kyoto', 'lamineyamal', 'poop', 'thedonald',
+                'wolf', 'xn--019ha', 'xn--0z9ha', 'xn--1z9haaa', 'xn--2r-mbc', 'xn--ns8hty', 'xn--os9ha', 'xn--oup-dsbby1x', 'xn--p39hb', 'xn--zz9ha'];
+            const labelled = new Set(['bot', 'cupid', 'israel', 'kyoto', 'poop', 'thedonald']);
+            const assets = names.map(name => `${labelled.has(name) ? '000de140' : ''}${Buffer.from(name).toString('hex')}`);
+            for (let i = 0; i < names.length; i++) {
+                repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo(`batch-old-${i}#0`, names[i], 90, true),
+                    handles: [[policy, [assets[i]]]], mint: [[policy, [assets[i]]]] }]);
+            }
+            const address = 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746';
+            repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo('unrelated#0', 'unrelated-owner', 95, true), address }]);
+            const unrelated = repo.getHandle('unrelated-owner');
+            const oldHolder = repo.getHandle(names[0])!.holder;
+            const newHolder = unrelated!.holder;
+            const root = await buildAndStoreMptRootHash(store);
+            const cursor = repo.getMetrics();
+            const target = names.map((name, i) => ({ name, policy, hex: assets[i] }));
+            const output = { ...utxo('batch-shared#0', names[0], 150, false), address, handles: [[policy, assets]] as [string, string[]][] };
+            const lease = { acquire: Internal.acquireScannerLease, renew: Internal.renewScannerLease, release: Internal.releaseScannerLease };
+            await expect(localRepair(store, lease, target, async () => [output], () => { throw new Error('interrupted shared repair'); })).rejects.toThrow('interrupted shared repair');
+            expect(repo.currentHttpStatus()).toBe(503);
+            await localRepair(store, lease, undefined, async () => [output]);
+            expect(repo.getHandle('unrelated-owner')).toEqual(expect.objectContaining({
+                hex: unrelated!.hex, utxo: unrelated!.utxo, holder: unrelated!.holder,
+                resolved_addresses: unrelated!.resolved_addresses, default_in_wallet: 'bot'
+            }));
+            expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, newHolder)?.has('unrelated-owner')).toBe(true);
+            for (let i = 0; i < names.length; i++) {
+                expect(repo.getHandle(names[i])).toEqual(expect.objectContaining({ hex: assets[i], utxo: output.id, holder: newHolder, resolved_addresses: expect.objectContaining({ ada: address }) }));
+                expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, oldHolder)?.has(names[i]) ?? false).toBe(false);
+                expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, newHolder)?.has(names[i])).toBe(true);
+                expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, address)?.has(names[i])).toBe(true);
+                expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, knownAddress)?.has(names[i]) ?? false).toBe(false);
+                expect(store.getValuesFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(address)!)?.has(names[i])).toBe(true);
+                expect(store.getValuesFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(knownAddress)!)?.has(names[i]) ?? false).toBe(false);
+                expect(repo.getUTxO(`batch-old-${i}#0`) ?? null).toBeNull();
+            }
+            expect(repo.getUTxO(output.id)?.handles).toEqual(output.handles);
+            expect(store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, output.slot)).toContain(output.id);
+            for (let i = 0; i < names.length; i++) expect(store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 90) ?? []).not.toContain(`batch-old-${i}#0`);
+            expect(store.redisClientCall('zmscore', getApiIndexRootKey(IndexNames.HOLDER_COUNT), [newHolder])).toEqual([21]);
+            expect(store.getMptRootHash()).toBe(root);
+            expect(repo.getMetrics()).toEqual(expect.objectContaining({ currentSlot: cursor.currentSlot, currentBlockHash: cursor.currentBlockHash }));
+            expect(repo.currentHttpStatus()).not.toBe(503);
+        });
+
+        // An actual local repair must wait until an admitted HTTP stream finishes, then
+        // reject new readers until its indexes are stable. Removing admission leaks a write.
+        it('excludes HTTP streams from the actual local repair', async () => {
+            repo.setMetrics({ currentSlot: 200 });
+            const name = 'stream-repair';
+            const hex = Buffer.from(name).toString('hex');
+            repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo('stream-old#0', name, 90, true), handles: [[policy, [hex]]], mint: [[policy, [hex]]] }]);
+            const output = { ...utxo('stream-new#0', name, 150, false), handles: [[policy, [hex]]] as [string, string[]][] };
+            const lease = { acquire: Internal.acquireScannerLease, renew: Internal.renewScannerLease, release: Internal.releaseScannerLease };
+            const app = express();
+            app.use(localRepairReaderAdmission(() => store));
+            let stream!: express.Response;
+            app.get('/stream', (_req, res) => { stream = res; res.write('first'); });
+            app.get('/fresh', (_req, res) => res.json({ utxo: repo.getHandle(name)?.utxo }));
+            const server = await new Promise<ReturnType<typeof app.listen>>(resolve => {
+                const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
+            });
+            const previousWriterGuard = process.env.API_TEST_REPAIR_WRITER_GUARD;
+            process.env.API_TEST_REPAIR_WRITER_GUARD = '1';
+            try {
+                const port = (server.address() as { port: number }).port;
+                const response = await new Promise<http.IncomingMessage>((resolve, reject) => http.get({ host: '127.0.0.1', port, path: '/stream' }, resolve).on('error', reject));
+                await new Promise(resolve => response.once('data', resolve));
+                await expect(localRepair(store, lease, [{ name, policy, hex }], async () => [output])).rejects.toThrow('Active repair readers');
+                expect(repo.getHandle(name)?.utxo).toBe('stream-old#0');
+                stream.end('last');
+                response.resume();
+                await new Promise(resolve => response.once('end', resolve));
+                await localRepair(store, lease, [{ name, policy, hex }], async () => [output], async () => {
+                    expect((await request(app).get('/fresh')).status).toBe(503);
+                    const independentStore = new RedisHandlesStore();
+                    const slotBefore = independentStore.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, output.slot);
+                    expect(slotBefore).toContain(output.id);
+                    expect(() => independentStore.redisClientCall('hset', getApiIndexKey(IndexNames.HANDLE, name), { utxo: 'intrusion#0' })).toThrow('Repair writer gate closed');
+                    expect(() => independentStore.pipeline(() => independentStore.redisClientCall('hset', getApiIndexKey(IndexNames.HANDLE, name), { utxo: 'intrusion#0' }))).toThrow('Repair writer gate closed');
+                    expect(() => independentStore.redisClientCall('customCommand', ['HSET', getApiIndexKey(IndexNames.HANDLE, name), 'utxo', 'intrusion#0'])).toThrow('Repair writer gate closed');
+                    expect(() => independentStore.redisClientCall('customCommand', ['EVAL', "return redis.call('HSET', KEYS[1], 'utxo', 'intrusion#0')", '1', getApiIndexKey(IndexNames.HANDLE, name)])).toThrow('Repair writer gate closed');
+                    expect(() => independentStore.pipeline(() => independentStore.redisClientCall('customCommand', ['HSET', getApiIndexKey(IndexNames.HANDLE, name), 'utxo', 'intrusion#0']))).toThrow('Repair writer gate closed');
+                    expect(() => independentStore.redisClientCall('del', [getApiIndexKey(IndexNames.UTXO, output.id)])).toThrow('Repair writer gate closed');
+                    expect(() => independentStore.redisClientCall('zrem', getApiIndexRootKey(IndexNames.UTXO_SLOT), [output.id])).toThrow('Repair writer gate closed');
+                    expect(() => independentStore.redisClientCall('srem', getApiIndexKey(IndexNames.ADDRESS, output.address), [name])).toThrow('Repair writer gate closed');
+                    expect(() => independentStore.redisClientCall('hset', getApiMetricsKey(), { currentSlot: '201', currentBlockHash: 'intrusion' })).toThrow('Repair writer gate closed');
+                    expect(() => independentStore.redisClientCall('set', getApiScannerLeaseKey(), 'intrusion')).toThrow('Repair writer gate closed');
+                    expect(repo.getHandle(name)?.utxo).toBe('stream-new#0');
+                    expect(repo.getUTxO(output.id)?.handles).toEqual(output.handles);
+                    expect(independentStore.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, output.slot)).toEqual(slotBefore);
+                    expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, output.address)?.has(name)).toBe(true);
+                    expect(repo.getMetrics()).toEqual(expect.objectContaining({ currentSlot: 200, currentBlockHash: 'provider_block' }));
+                    // A direct Valkey client does not participate in the store guard.
+                    // This negative control prevents claiming universal exclusion.
+                    const options = require('../tests/valkey-harness.cjs').connectionOptions({ addresses: [{ host: '127.0.0.1', port: 6381 }], useTLS: false });
+                    const raw = await GlideClient.createClient(options);
+                    try {
+                        await raw.hset(getApiIndexKey(IndexNames.HANDLE, name), { utxo: 'raw-bypass#0' });
+                        expect(repo.getHandle(name)?.utxo).toBe('raw-bypass#0');
+                        await raw.hset(getApiIndexKey(IndexNames.HANDLE, name), { utxo: 'stream-new#0' });
+                        expect(repo.getHandle(name)?.utxo).toBe('stream-new#0');
+                    } finally { raw.close(); }
+                });
+                const fresh = await request(app).get('/fresh');
+                expect(fresh.status).toBe(200);
+                expect(fresh.body).toEqual({ utxo: 'stream-new#0' });
+                const independentStore = new RedisHandlesStore();
+                independentStore.redisClientCall('customCommand', ['HSET', getApiIndexKey(IndexNames.HANDLE, name), 'utxo', 'later#0']);
+                expect(repo.getHandle(name)?.utxo).toBe('later#0');
+            } finally {
+                if (previousWriterGuard === undefined) delete process.env.API_TEST_REPAIR_WRITER_GUARD;
+                else process.env.API_TEST_REPAIR_WRITER_GUARD = previousWriterGuard;
+                stream?.destroy();
+                await new Promise<void>(resolve => server.close(() => resolve()));
+            }
+        });
+
+        // A repair interrupted after replacing a burned legacy identity must resume using the
+        // journal and preserve the canonical output and lookups, not strand the reader lock.
+        // Removing journal-aware identity validation rejects recovery after the first write.
+        it('recovers an interrupted repair of a stale owner-token identity', async () => {
+            repo.setMetrics({ currentSlot: 200 });
+            const name = 'identity-repair';
+            const legacy = Buffer.from(name).toString('hex');
+            const owner = `000de140${legacy}`;
+            repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo('identity-legacy#0', name, 90, true), handles: [[policy, [legacy]]], mint: [[policy, [legacy]]] }]);
+            const output = { ...utxo('identity-owner#0', name, 150, false), handles: [[policy, [owner]]] as [string, string[]][], mint: [] };
+            repo.addUTxOsWithMintDataAndUpdateIndexes([output]);
+            const original = repo.getHandle(name)!;
+            store.setHashOnIndex(IndexNames.HANDLE, name, { ...original, hex: legacy });
+            const originalRoot = await buildAndStoreMptRootHash(store);
+            const originalMetrics = repo.getMetrics();
+            const target = { name, policy, hex: owner, storedHex: legacy };
+            const lease = { acquire: Internal.acquireScannerLease, renew: Internal.renewScannerLease, release: Internal.releaseScannerLease };
+            await expect(localRepair(store, lease, [target], async () => [output], () => { throw new Error('interrupted'); })).rejects.toThrow('interrupted');
+            expect(repo.getHandle(name)?.hex).toBe(owner);
+            expect(repo.currentHttpStatus()).toBe(503);
+            await localRepair(store, lease, undefined, async () => [output]);
+            expect(repo.getHandleByHex(legacy)).toBeNull();
+            expect(repo.getHandleByHex(owner)).toEqual(expect.objectContaining({ name, utxo: output.id }));
+            expect(repo.getUTxO(output.id)?.handles).toEqual(output.handles);
+            expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, original.holder)?.has(name)).toBe(true);
+            expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, output.address)?.has(name)).toBe(true);
+            expect(store.getValuesFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(output.address)!)?.has(name)).toBe(true);
+            expect(store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, output.slot)).toContain(output.id);
+            expect(store.getMptRootHash()).toBe(originalRoot);
+            expect(repo.getMetrics()).toEqual(expect.objectContaining({ currentSlot: originalMetrics.currentSlot, currentBlockHash: originalMetrics.currentBlockHash }));
+            expect(repo.currentHttpStatus()).not.toBe(503);
         });
 
         // Never replay mint/burn metadata or advance a repair beyond the scanner cursor.
@@ -763,6 +1306,7 @@ describe('Scanner lambda e2e', () => {
             const reader = new HandlesRepository(peer);
             const journalKey = getApiCacheKey('local-repair:journal');
             let realApp: any;
+            if (mode === 'rollback') await buildAndStoreMptRootHash(store);
             if (mode === 'rollback' || mode === 'spent-crash') {
                 const previousOgmios = process.env.ENABLE_OGMIOS_SCANNING;
                 const previousScanner = process.env.USE_LAMBDA_SCANNER;
@@ -816,7 +1360,24 @@ describe('Scanner lambda e2e', () => {
                         expect(blocked.body).toEqual({ error: 'Repair in progress' });
                     }
                     if (mode === 'rollback') {
+                        const address = repo.getHandle(names[0])!.resolved_addresses.ada;
+                        const holder = repo.getHandle(names[0])!.holder;
+                        const indexImage = () => ({
+                            handles: names.map(name => repo.getHandle(name)),
+                            sourceUtxos: [repo.getUTxO('koios-old0#0'), repo.getUTxO('koios-old1#0')],
+                            destination: repo.getUTxO('koios-new#0'),
+                            holder: [...(store.getValuesFromIndexedSet(IndexNames.HOLDER, holder) ?? [])].sort(),
+                            address: [...(store.getValuesFromIndexedSet(IndexNames.ADDRESS, address) ?? [])].sort(),
+                            payment: [...(store.getValuesFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(address)!) ?? [])].sort(),
+                            slots: store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 0),
+                            root: store.getMptRootHash(),
+                            metrics: repo.getMetrics(),
+                            journal: peer.redisClientCall('get', journalKey)
+                        });
+                        const beforeRefusal = indexImage();
+                        expect(beforeRefusal.root).toMatch(/^[0-9a-f]{64}$/);
                         await expect(localKoiosRepair(store, lease, undefined, { query })).rejects.toThrow('Koios tip does not descend from scanner cursor');
+                        expect(indexImage()).toEqual(beforeRefusal);
                         expect(reader.currentHttpStatus()).toBe(503);
                         const blocked = await request(realApp.getServer()).get(`/handles/${names[0]}`);
                         expect(blocked.status).toBe(503);

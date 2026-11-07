@@ -33,7 +33,7 @@ describe('marketplace listing API with Valkey indexes', () => {
     };
 
     beforeAll(async () => {
-        if (process.env.REDIS_PORT !== '6380') throw new Error('Marketplace integration tests require test Valkey port 6380');
+        if (process.env.REDIS_PORT !== '6381') throw new Error('Marketplace integration tests require test Valkey port 6381');
         await repo.initialize();
         app = new App({ disableOgmios: true });
         await app.initialize();

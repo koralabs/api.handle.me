@@ -13,7 +13,7 @@ const IMAGE = 'valkey/valkey:8-alpine';
 const SOCKET = 'unix:///var/run/docker.sock';
 const LABEL = 'io.handle.api-test-valkey';
 const HOST = '127.0.0.1';
-const PORT = 6380;
+const PORT = 6381;
 
 function docker(args) {
     // Ignore contexts, remote endpoints and inherited Docker CLI configuration.
@@ -80,7 +80,7 @@ function verify() { return inspectOwned(readReceipt()); }
 function assertPortFree() {
     return new Promise((resolve, reject) => {
         const server = net.createServer();
-        server.once('error', () => reject(new Error('127.0.0.1:6380 is occupied; refusing to adopt or stop its owner')));
+        server.once('error', () => reject(new Error('127.0.0.1:6381 is occupied; refusing to adopt or stop its owner')));
         server.listen({ host: HOST, port: PORT, exclusive: true }, () => server.close(resolve));
     });
 }
@@ -138,14 +138,16 @@ function connectionOptions(options) {
     if (!options || !Array.isArray(options.addresses) || options.addresses.length !== 1 ||
         options.addresses[0].host !== HOST || options.addresses[0].port !== PORT ||
         (options.useTLS !== undefined && options.useTLS !== false)) {
-        throw new Error('Integration Valkey requires exactly 127.0.0.1:6380 with no TLS');
+        throw new Error('Integration Valkey requires exactly 127.0.0.1:6381 with no TLS');
     }
     const r = verify();
     // Supply the fixture's authentication only when the caller did not choose credentials;
     // an explicit wrong password must still fail at the real server, not be papered over.
     // Native creation awaits before using options: never retain a caller-mutable target.
     return { ...options, addresses: [{ ...options.addresses[0], host: r.host, port: r.port }], useTLS: false,
-        credentials: options.credentials ?? { username: 'default', password: r.password } };
+        credentials: options.credentials ?? (process.env.API_TEST_VALKEY_REPAIR_USER && process.env.API_TEST_VALKEY_REPAIR_PASSWORD
+            ? { username: process.env.API_TEST_VALKEY_REPAIR_USER, password: process.env.API_TEST_VALKEY_REPAIR_PASSWORD }
+            : { username: 'default', password: r.password }) };
 }
 
 module.exports = { start, stop, verify, connectionOptions };

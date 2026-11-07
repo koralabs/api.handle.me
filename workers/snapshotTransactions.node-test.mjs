@@ -4,7 +4,7 @@ import { S3Client, ListBucketsCommand } from '@aws-sdk/client-s3';
 import { randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
 import { GlideClient } from '@valkey/valkey-glide';
-import { claimSnapshot, fencedSnapshotCall } from './redisSync.worker.js';
+import { claimSnapshot, fencedSnapshotCall, guardedRepositoryWrite } from './redisSync.worker.js';
 
 // Invariant: the native integration profile retains AWS denial while real Valkey works.
 // Removing transport fencing makes this fail instead of returning TEST_NETWORK_DENIED.
@@ -16,7 +16,7 @@ test('native integration still rejects an unfaked AWS client before networking',
 });
 
 // Isolated local test server only. Never connect to the default/live port.
-const port = Number(process.env.REDIS_PORT ?? 6380);
+const port = Number(process.env.REDIS_PORT ?? 6381);
 if (port === 6379 || !Number.isInteger(port)) throw new Error('Tests require a nondefault local Valkey port');
 let client;
 let peer;
@@ -40,6 +40,49 @@ before(async () => {
 after(async () => {
     if (client) { if (keys.size) await client.del([...keys]); client.close(); }
     peer?.close();
+});
+
+// A guarded repository write must abort even when the repair gate closes and
+// reopens between its check and transaction. Removing WATCH permits the write.
+test('guarded writer rejects a gate change across its transaction boundary', async () => {
+    const gate = key('writer-gate');
+    const journal = key('writer-journal');
+    const target = key('writer-target');
+    await client.hset(target, { utxo: 'old' });
+    const boundary = Object.create(client);
+    boundary.exec = async (...args) => {
+        await peer.set(gate, 'repair');
+        await peer.del([gate]);
+        return client.exec(...args);
+    };
+    await assert.rejects(guardedRepositoryWrite(boundary, [gate, journal], 'hset', [target, { utxo: 'wrong' }]), /gate changed/);
+    assert.equal(await client.hget(target, 'utxo'), 'old');
+    assert.equal(await guardedRepositoryWrite(client, [gate, journal], 'hset', [target, { utxo: 'new' }]), 0);
+    assert.equal(await client.hget(target, 'utxo'), 'new');
+});
+
+// Snapshot claims and writes must join repair exclusion, including a close/reopen
+// race after the check. Removing the gate watch permits the stale snapshot write.
+test('opted-in snapshot admission and writes respect the repair gate', async () => {
+    const args = await setup();
+    const gate = key('snapshot-repair-gate');
+    const journal = key('snapshot-repair-journal');
+    const guard = [gate, journal, args.fence.scannerKey, key('readers'), key('repair-fence')];
+    await peer.set(gate, 'repair');
+    assert.equal(await claimSnapshot(client, args, guard), false);
+    await peer.del([gate]);
+    assert.equal(await claimSnapshot(client, args, guard), true);
+    const boundary = Object.create(client);
+    boundary.exec = async (...values) => {
+        await peer.set(gate, 'repair');
+        await peer.del([gate]);
+        return client.exec(...values);
+    };
+    await assert.rejects(fencedSnapshotCall(boundary, args.fence, 'hset', [args.metricsKey, { currentSlot: 'bad' }], guard), /fence changed/);
+    assert.equal(await client.hget(args.metricsKey, 'currentSlot'), '10');
+    await peer.set(gate, 'repair');
+    await assert.rejects(fencedSnapshotCall(client, args.fence, 'hset', [args.metricsKey, { currentSlot: 'bad' }], guard), /gate closed/);
+    assert.equal(await client.hget(args.metricsKey, 'currentSlot'), '10');
 });
 
 // Invariant: original metrics/progress are compared before ownership is admitted.
@@ -146,6 +189,16 @@ test('shared-output candidate batch is fenced against lease loss during commit',
     assert.deepEqual([...await client.smembers(newHolder)].map(String).sort(), ['alpha', 'beta', 'other']);
     assert.deepEqual((await client.zrangeWithScores(slots, { start: 0, end: -1 })).map(x => [String(x.element), x.score]), [['alpha', 20], ['beta', 20], ['other', 20]]);
     assert.deepEqual(await image(args.metricsKey), before.metrics);
+});
+
+// Characterization: this fence protects participating calls, not arbitrary writers.
+// If the system later enforces exclusive writes, this direct write must be rejected and this test retargeted.
+test('snapshot lease does not itself block an unfenced writer', async () => {
+    const args = await setup();
+    assert.equal(await claimSnapshot(client, args), true);
+    await peer.hset(args.metricsKey, { currentSlot: '99' });
+    assert.deepEqual(await image(args.metricsKey), [['currentBlockHash', 'original'], ['currentSlot', '99']]);
+    assert.equal(await client.get(args.fence.key), args.fence.owner);
 });
 
 // Invariant: a legacy importer reserves the absent scanner lease atomically with admission.

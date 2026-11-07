@@ -11,7 +11,7 @@ import { getHandleNameFromAssetName } from '../../services/ogmios/utils';
 import { canonicalJsonStringify } from '../../utils/helpers';
 import { getSnapshotScannerOwner } from '../../utils/snapshotOwnership';
 import { validateSnapshot } from '../../utils/verifiedSnapshot';
-import { getApiCacheTag, getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiMetricsKey, getApiMptRootHashKey, getApiNamespaceScanPattern, getApiRegistryLabelsKey, getApiScannedBlocksKey } from './keys';
+import { getApiCacheKey, getApiCacheTag, getApiIndexKey, getApiIndexRootKey, getApiIndexScanPattern, getApiLocalRepairJournalKey, getApiMetricsKey, getApiMptRootHashKey, getApiNamespaceScanPattern, getApiRegistryLabelsKey, getApiScannedBlocksKey } from './keys';
 
 // const glideClient = await GlideClient.createClient({
 //       addresses: [{ host: 'https://localhost', port: 6379 }],
@@ -728,7 +728,9 @@ export class RedisHandlesStore implements IApiStore {
         const view = new Int32Array(sab);
 
         const { port1, port2 } = new MessageChannel();
-        RedisHandlesStore._worker.postMessage({ id, sab, payload: { id, cmd, args, fence: this.snapshotFence }, reply: port2 }, [port2]);
+        const isolatedWriterGuard = process.env.API_TEST_REPAIR_WRITER_GUARD === '1' && process.env.API_TEST_MODE === 'integration' && process.env.API_TEST_VALKEY_RECEIPT && process.env.REDIS_HOST === '127.0.0.1' && process.env.REDIS_PORT === '6381' && process.env.NETWORK === 'preview';
+        RedisHandlesStore._worker.postMessage({ id, sab, payload: { id, cmd, args, fence: this.snapshotFence,
+            writerGuard: isolatedWriterGuard ? [getApiCacheKey('local-repair:reader-gate'), getApiLocalRepairJournalKey(), getApiCacheKey('scanner:lease'), getApiCacheKey('local-repair:readers'), getApiCacheKey('local-repair:lease')] : undefined }, reply: port2 }, [port2]);
 
         // Block up to 30s so we don't hang forever
         const status = Atomics.wait(view, 0, 0, 20_000);

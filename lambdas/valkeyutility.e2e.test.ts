@@ -2,7 +2,7 @@ import { Trie } from '@aiken-lang/merkle-patricia-forestry';
 import Redis from 'ioredis';
 import { handler } from './valkeyutility';
 
-// Runs against the repo-owned test Valkey (tests/valkey-harness.cjs, 127.0.0.1:6380).
+// Runs against the repo-owned test Valkey (tests/valkey-harness.cjs, 127.0.0.1:6381).
 // Every case uses its own logical databases so it can never touch the keys other suites seed in db 0.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const harness = require('../tests/valkey-harness.cjs');
@@ -16,15 +16,15 @@ describe('valkeyutility operational lambda against real Valkey', () => {
     let source: Redis;
     let target: Redis;
     const conn = (db = SOURCE_DB) => ({
-        sourceHost: '127.0.0.1', sourcePort: 6380, sourcePassword: password, sourceTls: false, sourceDb: db,
-        targetHost: '127.0.0.1', targetPort: 6380, targetPassword: password, targetTls: false, targetDb: db
+        sourceHost: '127.0.0.1', sourcePort: 6381, sourcePassword: password, sourceTls: false, sourceDb: db,
+        targetHost: '127.0.0.1', targetPort: 6381, targetPassword: password, targetTls: false, targetDb: db
     });
 
     beforeAll(async () => {
-        if (process.env.REDIS_PORT !== '6380') throw new Error('valkeyutility integration tests require test Valkey port 6380');
+        if (process.env.REDIS_PORT !== '6381') throw new Error('valkeyutility integration tests require test Valkey port 6381');
         password = harness.verify().password;
-        source = new Redis({ host: '127.0.0.1', port: 6380, password, db: SOURCE_DB });
-        target = new Redis({ host: '127.0.0.1', port: 6380, password, db: TARGET_DB });
+        source = new Redis({ host: '127.0.0.1', port: 6381, password, db: SOURCE_DB });
+        target = new Redis({ host: '127.0.0.1', port: 6381, password, db: TARGET_DB });
     });
 
     beforeEach(async () => {

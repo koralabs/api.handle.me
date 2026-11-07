@@ -10,7 +10,7 @@ import { createRequire } from 'node:module';
 
 const harness = fileURLToPath(new URL('./valkey-harness.cjs', import.meta.url));
 
-// Run explicitly after the coordinator clears 6380:
+// Run explicitly after the coordinator clears 6381:
 // API_TEST_MODE=integration node --test tests/valkey-harness.node-test.mjs
 // Invariant: the actual native Glide client reads/writes the authenticated owned fixture.
 // Catches incompatible Docker configuration/authentication; breaking password injection or publication fails the round trip.
@@ -25,7 +25,7 @@ test('real owned fixture supports native Glide round trips', {
         const r = await h.start();
         const { GlideClient } = require('@valkey/valkey-glide');
         client = await GlideClient.createClient(h.connectionOptions({
-            addresses: [{ host: '127.0.0.1', port: 6380 }], useTLS: false,
+            addresses: [{ host: '127.0.0.1', port: 6381 }], useTLS: false,
             requestTimeout: 2000, advancedConfiguration: { connectionTimeout: 2000 }
         }));
         const key = `harness:${r.nonce}:native-round-trip`;
@@ -37,7 +37,7 @@ test('real owned fixture supports native Glide round trips', {
         // Invariant: the fixture does not replace explicit caller credentials with a good
         // password. Restoring unconditional injection makes this real rejection disappear.
         await assert.rejects(GlideClient.createClient(h.connectionOptions({
-            addresses: [{ host: '127.0.0.1', port: 6380 }], useTLS: false,
+            addresses: [{ host: '127.0.0.1', port: 6381 }], useTLS: false,
             credentials: { username: 'default', password: 'deliberately-wrong-test-password' }
         })).then(unexpected => { unexpected.close(); }), /WRONGPASS|authentication|invalid username-password/i);
     } finally {
@@ -74,7 +74,7 @@ else if (args[0] === 'create') {
     args.forEach((v, i) => { if (v === '--label') { const s = args[i+1].indexOf('='); labels[args[i+1].slice(0,s)] = args[i+1].slice(s+1); } });
     c = { Id: id, Image: image, Config: { Image: image, Labels: labels, Entrypoint: ['valkey-server'], Cmd: args.slice(imageIndex+1) },
         Path: 'valkey-server', Args: args.slice(imageIndex+1),
-        HostConfig: { PortBindings: { '6380/tcp': [{ HostIp: '127.0.0.1', HostPort: '6380' }] }, NetworkMode: 'bridge', Privileged: false,
+        HostConfig: { PortBindings: { '6381/tcp': [{ HostIp: '127.0.0.1', HostPort: '6381' }] }, NetworkMode: 'bridge', Privileged: false,
             ReadonlyRootfs: true, RestartPolicy: { Name: 'no' }, Tmpfs: { '/data': 'rw,noexec,nosuid,size=64m' }, Binds: [] },
         Mounts: [{ Type: 'tmpfs', Destination: '/data' }], State: { Running: false }, NetworkSettings: { Ports: {} } };
     save(); console.log(id);
@@ -102,7 +102,7 @@ else process.exit(99);
     fs.writeFileSync(preload, `const net = require('node:net');
 const { EventEmitter } = require('node:events');
 net.createServer = () => { const s = new EventEmitter();
-s.listen = (opts, cb) => { if (opts.host !== '127.0.0.1' || opts.port !== 6380 || !opts.exclusive) throw Error('unsafe bind');
+s.listen = (opts, cb) => { if (opts.host !== '127.0.0.1' || opts.port !== 6381 || !opts.exclusive) throw Error('unsafe bind');
 queueMicrotask(() => ${scenario.busy ? "s.emit('error', Error('EADDRINUSE'))" : 'cb()'}); };
 s.close = cb => cb(); return s; };
 `);
@@ -128,7 +128,7 @@ test('owned lifecycle creates a private receipt, supports process handoff, prese
 const r = await h.start();
 const receipt = process.env.API_TEST_VALKEY_RECEIPT;
 assert.equal(fs.statSync(receipt).mode & 0o777, 0o600);
-assert.equal(r.host, '127.0.0.1'); assert.equal(r.port, 6380);
+assert.equal(r.host, '127.0.0.1'); assert.equal(r.port, 6381);
 const opts = { addresses: [{ host: r.host, port: r.port }], useTLS: false, requestTimeout: 1234, credentials: { password: 'wrong' } };
 const got = h.connectionOptions(opts);
 assert.deepEqual(got, opts);
@@ -152,9 +152,9 @@ assert.equal(process.env.API_TEST_VALKEY_RECEIPT, undefined);
     const calls = f.calls();
     const create = calls.find(c => c.args[2] === 'create').args;
     assert.ok(create.includes('--pull=never'));
-    assert.ok(create.includes('127.0.0.1:6380:6380'));
+    assert.ok(create.includes('127.0.0.1:6381:6381'));
     assert.ok(create.includes('--read-only'));
-    assert.deepEqual(create.slice(-10), ['--port', '6380', '--save', '', '--appendonly', 'no', '--requirepass', create.at(-3), '--protected-mode', 'yes']);
+    assert.deepEqual(create.slice(-10), ['--port', '6381', '--save', '', '--appendonly', 'no', '--requirepass', create.at(-3), '--protected-mode', 'yes']);
     assert.equal(calls.filter(c => c.args[2] === 'create').length, 1);
     assert.equal(calls.filter(c => c.args[2] === 'rm').length, 1);
     for (const c of calls) {
@@ -195,10 +195,10 @@ test('rejects missing receipts, aliases, other ports, TLS and unsafe receipt fil
 assert.throws(() => h.verify(), /API_TEST_VALKEY_RECEIPT/);
 await h.start();
 for (const opts of [undefined, {}, { addresses: [] },
-{ addresses: [{ host: 'localhost', port: 6380 }] },
+{ addresses: [{ host: 'localhost', port: 6381 }] },
 { addresses: [{ host: '127.0.0.1', port: 6379 }] },
-{ addresses: [{ host: '127.0.0.1', port: 6380 }], useTLS: true },
-{ addresses: [{ host: '127.0.0.1', port: 6380 }, { host: 'external', port: 6380 }] }]) {
+{ addresses: [{ host: '127.0.0.1', port: 6381 }], useTLS: true },
+{ addresses: [{ host: '127.0.0.1', port: 6381 }, { host: 'external', port: 6381 }] }]) {
 assert.throws(() => h.connectionOptions(opts), /exactly/);
 }
 const receipt = process.env.API_TEST_VALKEY_RECEIPT;
@@ -221,11 +221,11 @@ h.stop();
 for (const tamper of [
     ['Config', 'Labels', {}], ['Config', 'Cmd', ['--requirepass', 'external']],
     ['Config', 'Entrypoint', ['sh']], ['HostConfig', 'NetworkMode', 'host'],
-    ['HostConfig', 'PortBindings', { '6380/tcp': [{ HostIp: '0.0.0.0', HostPort: '6380' }] }],
+    ['HostConfig', 'PortBindings', { '6381/tcp': [{ HostIp: '0.0.0.0', HostPort: '6381' }] }],
     ['HostConfig', 'Binds', ['/production:/data']], ['HostConfig', 'ReadonlyRootfs', false],
     ['HostConfig', 'Tmpfs', {}], ['HostConfig', 'Privileged', true],
     ['HostConfig', 'RestartPolicy', { Name: 'always' }],
-    ['NetworkSettings', 'Ports', { '6380/tcp': [{ HostIp: '127.0.0.1', HostPort: '6379' }] }]
+    ['NetworkSettings', 'Ports', { '6381/tcp': [{ HostIp: '127.0.0.1', HostPort: '6379' }] }]
 ]) {
     test(`rejects changed container ${tamper[0]}.${tamper[1]} without removing it`, t => {
         const f = fixture(t, { tamper });

@@ -38,7 +38,7 @@ if (!net[installed]) {
     const check = (host, port) => {
         const normalized = String(host || 'localhost').replace(/^\[|\]$/g, '');
         if (['localhost', '127.0.0.1', '::1'].includes(normalized) && ports.has(Number(port))) return;
-        if (normalized === '127.0.0.1' && Number(port) === 6380 && process.env.API_TEST_MODE === 'integration') {
+        if (normalized === '127.0.0.1' && Number(port) === 6381 && process.env.API_TEST_MODE === 'integration') {
             require('./valkey-harness.cjs').verify();
             return;
         }

@@ -9,8 +9,8 @@ import * as helpers from '../utils/helpers';
 
 // Local-only integration: real entrypoint, provider helpers, persisted cursor and
 // token lease. Only HTTP and clock boundaries are controlled. Never touch 6379.
-if (process.env.REDIS_HOST !== '127.0.0.1' || process.env.REDIS_PORT !== '6380') {
-    throw new Error('Scanner budget integration requires isolated loopback Valkey 6380');
+if (process.env.REDIS_HOST !== '127.0.0.1' || process.env.REDIS_PORT !== '6381') {
+    throw new Error('Scanner budget integration requires isolated loopback Valkey 6381');
 }
 const store = new RedisHandlesStore();
 const repo = new HandlesRepository(store);

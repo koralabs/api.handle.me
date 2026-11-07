@@ -14,8 +14,8 @@ This precedes everything else in this file. Skip it only if the user explicitly 
 - [REQUIREMENT] Read the AGENTS.md in this project's parent folder for complete instructions and inter-project (sibling) references
 
 ## Operational Safety Rules
-- Never write to Valkey/Redis on default port `6379`.
-- Reading from `6379` is allowed for troubleshooting.
+- Never write to Valkey/Redis on default port `6380`.
+- Reading from `6380` is allowed for troubleshooting.
 - If write testing is needed, use a different `REDIS_PORT`.
 - Temporary files must be created in `/tmp`.
 

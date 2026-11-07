@@ -22,7 +22,7 @@ async function run() {
     const fixture = process.env.API_TEST_MODE === 'integration' ? require('./valkey-harness.cjs') : undefined;
     try {
         if (fixture) {
-            Object.assign(process.env, { REDIS_HOST: '127.0.0.1', REDIS_PORT: '6380', REDIS_USE_TLS: 'false', NETWORK: 'preview' });
+            Object.assign(process.env, { REDIS_HOST: '127.0.0.1', REDIS_PORT: '6381', REDIS_USE_TLS: 'false', NETWORK: 'preview' });
             await fixture.start();
         }
         const result = spawnSync(process.execPath, args, { stdio: 'inherit', env: process.env });

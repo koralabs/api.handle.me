@@ -50,7 +50,7 @@ test('denies HTTP HTTPS fetch TCP TLS and unowned loopback/Unix sockets', async 
 // Invariant: Rust networking cannot bypass strict unit isolation via native Glide.
 // Removing the native factory check reaches the native driver rather than this denial.
 test('unfaked native client refuses both production and unowned local targets', async () => {
-    for (const address of [{ host: 'redis.production.invalid', port: 6379 }, { host: '127.0.0.1', port: 6380 }]) {
+    for (const address of [{ host: 'redis.production.invalid', port: 6379 }, { host: '127.0.0.1', port: 6380 }, { host: '127.0.0.1', port: 6381 }]) {
         await assert.rejects(GlideClient.createClient({ addresses: [address], useTLS: false }), /Test network denied/);
     }
 });

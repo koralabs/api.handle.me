@@ -22,4 +22,4 @@ This is bounded pre-admission/original-image preservation, **not generation publ
 
 ## Local verification
 
-Focused loader and lifecycle tests exercise complete-image preservation, malformed late DTOs, Glide array markers, cursor bounds, byte binding, real replay and control-key survival. `REDIS_PORT=6380 node --test workers/snapshotTransactions.node-test.mjs` additionally exercises the real Glide transaction boundary against the disposable local Valkey server, including competing owners and a change immediately before EXEC. The test refuses port 6379 and uses a unique namespace.
+Focused loader and lifecycle tests exercise complete-image preservation, malformed late DTOs, Glide array markers, cursor bounds, byte binding, real replay and control-key survival. `REDIS_PORT=6381 node --test workers/snapshotTransactions.node-test.mjs` additionally exercises the real Glide transaction boundary against the disposable local Valkey server, including competing owners and a change immediately before EXEC. The test refuses port 6379 and uses a unique namespace.
