@@ -1,5 +1,15 @@
 # Scanner Recovery Runbook
 
+## 2026-11-07 targeted mainnet ownership correction — completed
+
+At 06:38 UTC, the operator-authorized correction updated the remaining 65 stale ownership records on **both SFO and RDM**. Fresh Koios asset and transaction reads confirmed 31 canonical outputs, all behind the stored scanner cursor. The correction created those 31 UTxO records, removed 64 stale source records, updated ownership-related secondary indexes and holder counts, and preserved `$ventricle`, the already-correct sibling listed in one stale source. Earlier, three separate stale legacy identity hex fields were corrected on both boxes.
+
+The incident-specific script was tested against the captured 65-Handle data in isolated Valkey, then executed as one Lua operation per production box. It checked full Handle/UTxO preimages, affected key types and the stored MPT root before writing. Conflict and repeat-application negative controls rejected changes before mutation. No maintenance outage or deployment was used. This does not establish universal writer coordination or protect against future stale writes by other processes; the operator explicitly accepted the remaining risk.
+
+Immediate and subsequent read-back checks passed on both boxes for Handle ownership fields, canonical UTxOs, address/payment/holder memberships, slot indexes, holder counts, `$ventricle`, and the unchanged MPT root. Ownership-only updates leave the MPT's name/registry-label inputs unchanged. Repair scripts, captured inputs and per-box preimage backups are retained at `/home/jesse/kora-incident-evidence/20261107-handle-ownership/` on the operator machine. These are incident artifacts, not a supported general repair executor; do not restore whole index preimages over later writes.
+
+**Failure:** Handle ownership and associated UTxO/index records were stale. **Why:** stored ownership no longer matched the canonical token outputs. **Upstream cause:** the historical scanner/storage path that allowed this divergence is not proven. **Classification:** targeted data recovery, not a root-cause software fix.
+
 ## Symptoms and Recovery Procedures
 
 ### Symptom: API returns `status: storage_behind` and slot not advancing
