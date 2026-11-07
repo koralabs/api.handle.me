@@ -269,6 +269,29 @@ describe('HandlesRepository branch tests', () => {
         expect(store.removeKeyFromIndex).toHaveBeenCalledWith(IndexNames.HOLDER, '');
     });
 
+    // A newer 222 output updates the stored owner-token identity, not only its UTxO.
+    // Without the hex update, exact-hex lookups continue to resolve the burned legacy token.
+    // Negative control: removing the assignment to handle.hex fails the stored and lookup assertions.
+    it('stores the newer owner-token hex and rejects stale exact-hex lookups', () => {
+        const store = buildStoreMock();
+        const hashes = new Map<string, any>();
+        store.getHashFromIndex.mockImplementation((index: IndexNames, key: string) => hashes.get(`${index}:${key}`));
+        store.setHashOnIndex.mockImplementation((index: IndexNames, key: string, value: any) => hashes.set(`${index}:${key}`, structuredClone(value)));
+        const repo = new HandlesRepository(store);
+        const name = 'alpha';
+        const legacy = Buffer.from(name).toString('hex');
+        const owner222 = `${AssetNameLabel.LBL_222}${legacy}`;
+        const existing = repo.Internal.buildHandle({ name, hex: legacy, policy, utxo: 'old_tx#0', resolved_addresses: { ada: address }, updated_slot_number: 10 });
+        hashes.set(`${IndexNames.HANDLE}:${name}`, existing);
+        const mintingData = new Map<string, any[]>([[name, [{ created_slot: 1, metadata: {}, txHash: 'tx' }]]]);
+        repo.updateHandleIndexes({ ...buildUtxo(owner222, 20), mint: [] }, mintingData, new Map([[name, existing]]), new Map([[holder, new Set([name])]]));
+        expect(repo.getHandle(name)).toEqual(expect.objectContaining({ hex: owner222, utxo: 'tx_20#0' }));
+        expect(repo.getHandleByHex(legacy)).toBeNull();
+        expect(repo.getHandleByHex(owner222)).toEqual(expect.objectContaining({ name, utxo: 'tx_20#0' }));
+        repo.updateHandleIndexes({ ...buildUtxo(legacy, 15), mint: [] }, mintingData, new Map([[name, repo.getHandle(name)!]]), new Map([[holder, new Set([name])]]));
+        expect(repo.getHandle(name)).toEqual(expect.objectContaining({ hex: owner222, utxo: 'tx_20#0' }));
+    });
+
     it('logs unknown asset labels while still saving handle state', () => {
         const repo = new HandlesRepository(buildStoreMock());
         const saveSpy = jest.spyOn(repo, 'save').mockImplementation(jest.fn());

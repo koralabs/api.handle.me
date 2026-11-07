@@ -116,12 +116,12 @@ export async function run() {
                 continue;
             }
             response = result.response;
-            if (response.status !== 429) break;
+            if (![429, 502, 503, 504].includes(response.status)) break;
             if (result.headerWait === undefined || result.headerWait <= 0) {
-                backoff('api', '429 without a reset');
+                backoff('api', `HTTP ${response.status} without a reset`);
                 await waitForProvider('api');
             } else {
-                process.stderr.write(`API rate limited; waiting ${result.headerWait}ms before resuming\n`);
+                process.stderr.write(`API HTTP ${response.status}; waiting ${result.headerWait}ms before resuming\n`);
             }
         }
         if (!response.ok) throw new Error(`API page ${page}: HTTP ${response.status}`);
@@ -162,13 +162,13 @@ export async function run() {
                     await waitForProvider('koios');
                     continue;
                 }
-                if (error?.status !== 429) throw error;
+                if (![429, 502, 503, 504].includes(error?.status)) throw error;
                 if (!Number.isFinite(error.retryAfterMs) || error.retryAfterMs <= 0) {
-                    backoff('koios', '429 without a reset');
+                    backoff('koios', `HTTP ${error.status} without a reset`);
                     await waitForProvider('koios');
                 } else {
                     if (progress) save(progress, { checkpointId, checked, findings, notBefore: Date.now() + error.retryAfterMs });
-                    process.stderr.write(`rate limited; waiting ${error.retryAfterMs}ms before resuming\n`);
+                    process.stderr.write(`koios HTTP ${error.status}; waiting ${error.retryAfterMs}ms before resuming\n`);
                 }
             }
         }

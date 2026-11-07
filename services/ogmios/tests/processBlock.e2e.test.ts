@@ -1,5 +1,6 @@
 import { BlockPraos, Point, Script, Tip } from '@cardano-ogmios/schema';
-import { AssetNameLabel, HandleType, Logger, MintingData, StoredHandle, encodeJsonToDatum } from '@koralabs/kora-labs-common';
+import { AssetNameLabel, HandleType, IndexNames, Logger, MintingData, StoredHandle, encodeJsonToDatum } from '@koralabs/kora-labs-common';
+import { readFileSync } from 'node:fs';
 import WebSocket from 'ws';
 import { HandlesRepository } from '../../../repositories/handlesRepository';
 import { RedisHandlesStore } from '../../../stores/redis';
@@ -158,6 +159,35 @@ describe('processBlock Tests', () => {
                       ]
                   }
         ]
+    });
+
+    // Real Ogmios block processing must replace the legacy identity after a burn+mint.
+    // With an artificially inflated prior amount the burn retains the old record; deleting the
+    // owner-hex update then makes the amount=2 case fail. The real historical amount is unknown.
+    it.each([1, 2])('processes legacy-to-222 burn and mint with stored amount %i', priorAmount => {
+        const name = 'epickifer';
+        const legacy = Buffer.from(name).toString('hex');
+        const owner = `000de140${legacy}`;
+        const reference = `000643b0${legacy}`;
+        const initial = txBlock({ handleHexName: legacy, handleName: name, slot: 90 });
+        const legacyTx = initial.transactions![0] as any;
+        legacyTx.id = 'legacy';
+        legacyTx.inputs = [{ transaction: { id: 'funding' }, index: 0 }];
+        ogmios.Internal.processBlock(initial);
+        const before = storeInstance.getHashFromIndex(IndexNames.HANDLE, name) as StoredHandle;
+        storeInstance.setHashOnIndex(IndexNames.HANDLE, name, { ...before, amount: priorAmount });
+        const migration = txBlock({ handleHexName: owner, handleName: owner, isMint: false, slot: 150 });
+        const tx = migration.transactions![0] as any;
+        tx.id = 'migration';
+        tx.inputs = [{ transaction: { id: 'legacy' }, index: 0 }];
+        tx.mint = { [policyId]: { [legacy]: -1n, [owner]: 1n, [reference]: 1n } };
+        tx.outputs.push({ address: defaultAddress, datum: readFileSync('tests/fixtures/reference-datum.cbor.hex', 'utf8').trim(), value: { ada: { lovelace: 2_000_000n }, [policyId]: { [reference]: 1n } } });
+        ogmios.Internal.processBlock(migration);
+        expect(repo.getHandle(name)).toEqual(expect.objectContaining({ name, amount: 1, hex: owner, utxo: 'migration#0', reference_utxo: 'migration#1' }));
+        expect(repo.getHandleByHex(legacy)).toBeNull();
+        expect(repo.getHandleByHex(owner)?.name).toBe(name);
+        expect(repo.getUTxO('legacy#0') ?? null).toBeNull();
+        expect(repo.getUTxO('migration#0')?.handles).toEqual([[policyId, [owner]]]);
     });
 
     describe('It should handle strangely ordered blocks', () => {

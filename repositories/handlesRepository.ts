@@ -1087,6 +1087,7 @@ export class HandlesRepository {
                                     Logger.log({ message: `POSSIBLE DOUBLE MINT! Name: ${name} | Old UTxO ${existingHandle?.utxo} | Old Slot: ${existingHandle.created_slot_number} | New UTxO: ${utxo.id} | New Slot: ${utxo.slot}`, category: LogCategory.NOTIFY, event: 'saveHandleUpdate.utxoAlreadyExists'});
                             }
                             handle.updated_slot_number = utxo.slot;
+                            handle.hex = ownerTokenHex;
                             handle.script = utxo.script;
                             handle.datum = isDatumEndpointEnabled() && utxo.datum ? utxo.datum : undefined;
                             handle.has_datum = !!utxo.datum;

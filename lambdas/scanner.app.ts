@@ -8,7 +8,7 @@ import { getHandleNameFromAssetName } from '../services/ogmios/utils';
 import { registerSnapshotScannerOwner, unregisterSnapshotScannerOwner } from '../utils/snapshotOwnership';
 import { isRegistryLabel } from '../utils/assetLabelRegistry';
 import { getHandlesStore } from '../stores/redis';
-import { getApiMptRebuildPendingKey, getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
+import { getApiLocalRepairJournalKey, getApiMptRebuildPendingKey, getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
 import { DemeterDeadlineError, DemeterRollbackError, isDemeterScannerEnabled, scanDemeterBlocks } from '../services/demeter/utxorpc.service';
 import { blockfrostApiCall, buildUTxOsFromKoiosTxs, defaultKoiosSettings, fetchBlockfrostDatumCbor, fetchBlockfrostTxHashes, fetchBlockfrostTxInfo, fetchKoios, fetchPaginatedResults } from '../utils/helpers';
 import { isRequestDeadlineError, RequestDeadlineError } from '../utils/requestDeadline';
@@ -1571,6 +1571,12 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
             heartbeat.unref?.();
         }
 
+        // An interrupted local repair has partially applied UTxOs. Reindexing them or
+        // clearing a stale maintenance lock cannot recover it; the journal must be replayed.
+        if (store.redisClientCall('get', getApiLocalRepairJournalKey())) {
+            Logger.local('Local repair journal is pending; scanner is paused for recovery');
+            return;
+        }
         checkDeadline('ensure_initialized');
         logBreadcrumb('ensure_initialized_start');
         await ensureInitialized();
@@ -1740,6 +1746,7 @@ export const lambdaHandler = async (event: AWSLambda.ALBEvent | AWSLambda.APIGat
 export type SideloadMode = 'reimport' | 'reindex' | 'both' | 'auto' | 'detect';
 export const runSideload = async (mode: SideloadMode = 'auto') => {
     store.initialize();
+    if (store.redisClientCall('get', getApiLocalRepairJournalKey())) throw new Error('Local repair journal is pending; recover it before sideload');
     await ensureInitialized();
     const m = handlesRepo.getMetrics();
     const reimportNeeded = Number(store.getUTxOSchemaVersion()) > Number(m.utxoSchemaVersion ?? 0) || !m.currentBlockHash || !m.currentSlot;
@@ -1753,6 +1760,7 @@ export const runSideload = async (mode: SideloadMode = 'auto') => {
     let ranReimport = false;
     let ranReindex = false;
     try {
+        if (store.redisClientCall('get', getApiLocalRepairJournalKey())) throw new Error('Local repair journal is pending; recover it before sideload');
         if (mode === 'reimport' || mode === 'both' || (mode === 'auto' && reimportNeeded)) {
             Logger.log({ message: 'Sideload: running REIMPORT (ensureUTxOsReady)', category: LogCategory.NOTIFY, event: 'scannerSideload.reimport' });
             await ensureUTxOsReady();

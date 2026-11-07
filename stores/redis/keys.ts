@@ -26,6 +26,9 @@ export const getApiScannerLeaseKey = (network = NETWORK) => getApiCacheKey('scan
 
 export const getApiScannerRecoveryKey = (network = NETWORK) => getApiCacheKey('scanner:recovery', network);
 
+export const getApiLocalRepairJournalKey = (network = NETWORK) => getApiCacheKey('local-repair:journal', network);
+export const getApiLocalRepairEpochKey = (network = NETWORK) => getApiCacheKey('local-repair:epoch', network);
+
 export const getApiMptRootHashKey = (network = NETWORK) => getApiCacheKey('mpt_root_hash', network);
 
 // Set when the scan-finally MPT rebuild throws (Valkey blip, deadline overshoot, etc.). The

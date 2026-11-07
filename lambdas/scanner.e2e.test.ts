@@ -1,8 +1,17 @@
-import { IndexNames, LockedLambdaReason, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
+import { getPaymentKeyHash, IndexNames, LockedLambdaReason, UTxOWithTxInfo } from '@koralabs/kora-labs-common';
 import { HandlesRepository } from '../repositories/handlesRepository';
 import { RedisHandlesStore } from '../stores/redis';
-import { getApiScannerRecoveryKey } from '../stores/redis/keys';
+import { getApiCacheKey, getApiMetricsKey, getApiMptRebuildPendingKey, getApiScannerLeaseKey, getApiScannerRecoveryKey } from '../stores/redis/keys';
+import { buildAndStoreMptRootHash } from '../utils/snapshotVerification';
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import express from 'express';
+import request from 'supertest';
+import { localRepairGuard } from '../utils/localRepairGuard';
 import * as helpers from '../utils/helpers';
+import { repairPreflight } from '../utils/repairPreflight';
+import { localKoiosRepair, localRepair } from '../utils/localRepair';
 
 jest.mock('../utils/helpers');
 process.env.WHITELISTED_API_KEYS = 'scanner-e2e-key';
@@ -493,6 +502,520 @@ describe('Scanner lambda e2e', () => {
             expect(repo.getUTxO('old1#0') ?? null).toBeNull();
         });
 
+        // A normal upgrade burns the legacy token before minting the owner and reference tokens.
+        // The amount=2 case deliberately seeds an inconsistent pre-existing count: the burn then
+        // leaves the old record alive, so removing the hex assignment reproduces a stale identity.
+        // This is a hypothesis for the observed records, not evidence of their historical counts.
+        // Transaction IDs/output order are real; addresses and datum are safe local fixtures.
+        it.each([
+            ['epickifer', '0ba4a2d182104e91388b33338c0308531f2f554fa759bdf79967836f2d9420c1', 1],
+            ['seniorsolutions', 'd91b54ac42eb985ba8747798ca6ef4a831f58ef684053c591782f259e204feaa', 1],
+            ['shaynasmeltzer', '3c86178f3fb91ee07ba73cb6860a36ed4df2464f463d8b847b214892f894f6cc', 1],
+            ['epickifer', '0ba4a2d182104e91388b33338c0308531f2f554fa759bdf79967836f2d9420c1', 2]
+        ])('indexes burn-and-mint for $%s tx=%s with stored amount %i', (name, txHash, priorAmount) => {
+            const legacy = Buffer.from(name).toString('hex');
+            const owner222 = `000de140${legacy}`;
+            const reference100 = `000643b0${legacy}`;
+            const old = { ...utxo('legacy-migration#0', name, 90, true), handles: [[policy, [legacy]]] as [string, string[]][], mint: [[policy, [legacy]]] as [string, string[]][] };
+            repo.addUTxOsWithMintDataAndUpdateIndexes([old]);
+            const before = store.getHashFromIndex(IndexNames.HANDLE, name) as any;
+            store.setHashOnIndex(IndexNames.HANDLE, name, { ...before, amount: priorAmount, image: 'ipfs://legacy-record-only' });
+            const newAddress = 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746';
+            const datum = readFileSync('tests/fixtures/reference-datum.cbor.hex', 'utf8').trim();
+            const asset = (asset_name: string, quantity = '1') => ({ policy_id: policy, asset_name, quantity });
+            const output = (tx_index: number, asset_name: string, inline_datum: any) => ({ tx_hash: txHash, tx_index, value: '2000000', payment_addr: { bech32: newAddress }, asset_list: [asset(asset_name)], inline_datum, datum_hash: null, reference_script: null });
+            const txInfo = { tx_hash: txHash, block_hash: block.id, block_height: 123, absolute_slot: 150, inputs: [{ tx_hash: 'legacy-migration', tx_index: 0 }], assets_minted: [asset(legacy, '-1'), asset(owner222), asset(reference100)], outputs: [output(0, owner222, null), output(1, reference100, { bytes: datum })], metadata: { '721': { [policy]: { [owner222]: { name: `$${name}`, image: 'ipfs://new-owner-mint', version: 1 } } } } };
+            mockedHelpers.buildUTxOsFromKoiosTxs.mockImplementation(actualHelpers.buildUTxOsFromKoiosTxs);
+            Internal.processScannerBlock(block, [txInfo] as never, tip);
+            const result = repo.getHandle(name)!;
+            expect(result).toEqual(expect.objectContaining({ name, amount: 1, hex: owner222, utxo: `${txHash}#0`, reference_utxo: `${txHash}#1`, resolved_addresses: expect.objectContaining({ ada: newAddress }) }));
+            if (priorAmount === 1) expect(result.image).not.toBe('ipfs://legacy-record-only');
+            expect(repo.getHandleByHex(legacy)).toBeNull();
+            expect(repo.getHandleByHex(owner222)?.utxo).toBe(`${txHash}#0`);
+            expect(repo.getUTxO('legacy-migration#0') ?? null).toBeNull();
+            expect(repo.getUTxO(`${txHash}#0`)?.handles).toEqual([[policy, [owner222]]]);
+            expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, newAddress)?.has(name)).toBe(true);
+        });
+
+        // Given an already-stale unlabelled identity, a later shared 222 transfer must update
+        // both the actual owner UTxOs and exact asset-name lookups. Removing the hex assignment
+        // leaves the burned names searchable and the live 222 names missing.
+        it('corrects stale owner-token identities when scanning a later shared 222 transfer', () => {
+            const names = ['seniorsolutions', 'shaynasmeltzer'];
+            const oldHex = names.map(name => Buffer.from(name).toString('hex'));
+            const ownerHex = oldHex.map(hex => `000de140${hex}`);
+            names.forEach((name, i) => repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo(`stale-source${i}#0`, name, 90, true), handles: [[policy, [oldHex[i]]]], mint: [[policy, [oldHex[i]]]] }]));
+            const txHash = '888daf520116f17d351d2c84486f28249408d21a03f0c579243eb3f86ec762f2';
+            const newAddress = 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746';
+            const transfer = { tx_hash: txHash, block_hash: block.id, block_height: 123, absolute_slot: 150, inputs: [{ tx_hash: 'stale-source0', tx_index: 0 }, { tx_hash: 'stale-source1', tx_index: 0 }], assets_minted: [], metadata: {}, outputs: [{ tx_hash: txHash, tx_index: 5, value: '2000000', payment_addr: { bech32: newAddress }, asset_list: ownerHex.map(asset_name => ({ policy_id: policy, asset_name, quantity: '1' })), inline_datum: null, datum_hash: null, reference_script: null }] };
+            mockedHelpers.buildUTxOsFromKoiosTxs.mockImplementation(actualHelpers.buildUTxOsFromKoiosTxs);
+            Internal.processScannerBlock(block, [transfer] as never, tip);
+            names.forEach((name, i) => {
+                expect(repo.getHandle(name)).toEqual(expect.objectContaining({ hex: ownerHex[i], utxo: `${txHash}#5`, resolved_addresses: expect.objectContaining({ ada: newAddress }) }));
+                expect(repo.getHandleByHex(oldHex[i])).toBeNull();
+                expect(repo.getHandleByHex(ownerHex[i])?.name).toBe(name);
+                expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, newAddress)?.has(name)).toBe(true);
+            });
+            expect(repo.getUTxO(`${txHash}#5`)?.handles).toEqual([[policy, ownerHex]]);
+            expect(repo.getUTxO('stale-source0#0') ?? null).toBeNull();
+            expect(repo.getUTxO('stale-source1#0') ?? null).toBeNull();
+        });
+
+        // A newer 222 owner output must update the stored asset identity as well as its UTxO.
+        // Keeping legacy hex after migration makes hex lookup and ownership audits target the burned asset.
+        // Negative control: remove the owner-token hex update and this test fails on the stored hex.
+        it('tracks the current owner-token hex when a legacy handle becomes a 222 token', () => {
+            const name = 'migration-identity';
+            const legacy = Buffer.from(name).toString('hex');
+            const owner222 = `000de140${legacy}`;
+            repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo('legacy#0', name, 90, true), handles: [[policy, [legacy]]], mint: [[policy, [legacy]]] }]);
+            expect(repo.getHandle(name)).toEqual(expect.objectContaining({ hex: legacy, utxo: 'legacy#0' }));
+            repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo('migrated#0', name, 150, false), handles: [[policy, [owner222]]], mint: [] }]);
+            expect(repo.getHandle(name)).toEqual(expect.objectContaining({ hex: owner222, utxo: 'migrated#0' }));
+            expect(repo.getHandleByHex(legacy)).toBeNull();
+            expect(repo.getHandleByHex(owner222)).toEqual(expect.objectContaining({ name, utxo: 'migrated#0' }));
+            repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo('older#0', name, 140, false), handles: [[policy, [legacy]]], mint: [] }]);
+            expect(repo.getHandle(name)).toEqual(expect.objectContaining({ hex: owner222, utxo: 'migrated#0' }));
+            expect(repo.getHandleByHex('invalid')).toBeNull();
+        });
+
+        // Preflight must keep a real scanner lease while checking fresh chain state, require every
+        // owner in the shared output, and never mutate the old records or indexes. Removing a lease,
+        // state-comparison or sibling guard makes its corresponding negative case succeed.
+        it.each(['stable', 'lease-lost', 'chain-moved', 'missing-sibling'] as const)('validates shared-output repair preflight: %s', async (mode) => {
+            const names = ['xn--8o8hx2f', 'xn--kong-tz14c'];
+            const assets = names.map((name) => Buffer.from(name).toString('hex'));
+            for (let i = 0; i < names.length; i++) {
+                repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo(`old${i}#0`, names[i], 90, true), handles: [[policy, [assets[i]]]], mint: [[policy, [assets[i]]]] }]);
+            }
+            const before = names.map(name => repo.getHandle(name));
+            const cursor = repo.getMetrics();
+            const oldHolder = before[0]!.holder;
+            const targets = names.map((name, i) => ({ name, policy, hex: assets[i] }));
+            const canonical = [{ id: 'cancel#0', address: knownAddress, handles: [[policy, assets]] as [string, string[]][] }];
+            const lease = { acquire: Internal.acquireScannerLease, renew: Internal.renewScannerLease, release: Internal.releaseScannerLease };
+            let calls = 0;
+            const readCanonical = async () => {
+                calls++;
+                if (mode === 'lease-lost' && calls === 2) {
+                    const owner = store.redisClientCall('get', require('../stores/redis/keys').getApiScannerLeaseKey());
+                    Internal.releaseScannerLease(owner);
+                    expect(Internal.acquireScannerLease('successor')).toBe(true);
+                }
+                return mode === 'chain-moved' && calls === 2 ? [{ ...canonical[0], id: 'newer#0' }] : canonical;
+            };
+            try {
+                const pending = repairPreflight(mode === 'missing-sibling' ? targets.slice(0, 1) : targets, lease, name => repo.getHandle(name), id => repo.getUTxO(id) ?? null, readCanonical);
+                if (mode === 'stable') expect(await pending).toEqual({ stored: before, sources: [repo.getUTxO('old0#0'), repo.getUTxO('old1#0')], outputs: canonical });
+                else await expect(pending).rejects.toThrow(mode === 'lease-lost' ? 'Scanner lease lost' : mode === 'chain-moved' ? 'Canonical state changed' : 'unplanned handle');
+                expect(names.map(name => repo.getHandle(name))).toEqual(before);
+                expect(repo.getUTxO('old0#0')).toEqual(expect.objectContaining({ id: 'old0#0' }));
+                expect(repo.getUTxO('old1#0')).toEqual(expect.objectContaining({ id: 'old1#0' }));
+                expect(repo.getUTxO('cancel#0') ?? null).toBeNull();
+                for (const name of names) expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, oldHolder)?.has(name)).toBe(true);
+                expect(repo.getMetrics()).toEqual(expect.objectContaining({ currentSlot: cursor.currentSlot, currentBlockHash: cursor.currentBlockHash }));
+                if (mode === 'lease-lost') expect(Internal.renewScannerLease('successor')).toBe(true);
+            } finally {
+                if (mode === 'lease-lost') Internal.releaseScannerLease('successor');
+            }
+        });
+
+        // Invariant: the actual local executor locks status readers before its first write and
+        // retains a durable recovery journal across failure, lease replacement, and chain movement.
+        // Negative control: clearing the lock or journal before final verification fails these cases.
+        it.each(['success', 'failure', 'lease-lost', 'chain-moved', 'crash'] as const)('executes and recovers local repair: %s', async mode => {
+            repo.setMetrics({ currentSlot: 200 });
+            const names = ['xn--8o8hx2f', 'xn--kong-tz14c'];
+            const assets = names.map(name => Buffer.from(name).toString('hex'));
+            for (let i = 0; i < names.length; i++) repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo(`old${i}#0`, names[i], 90, true), handles: [[policy, [assets[i]]]], mint: [[policy, [assets[i]]]] }]);
+            const ownerAddress = 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746';
+            const oldAddress = repo.getHandle(names[0])!.resolved_addresses.ada;
+            const oldHolder = repo.getHandle(names[0])!.holder;
+            const cursor = repo.getMetrics();
+            const root = await buildAndStoreMptRootHash(store);
+            const targets = names.map((name, i) => ({ name, policy, hex: assets[i] }));
+            let canonical = { ...utxo('cancel#0', names[0], 150, false), address: ownerAddress, handles: [[policy, assets]] as [string, string[]][] };
+            const readCanonical = async () => [canonical];
+            const lease = { acquire: Internal.acquireScannerLease, renew: Internal.renewScannerLease, release: Internal.releaseScannerLease };
+            const peer = new RedisHandlesStore();
+            const reader = new HandlesRepository(peer);
+            const journalKey = getApiCacheKey('local-repair:journal');
+            try {
+                if (mode === 'crash') {
+                    const child = spawnSync(process.execPath, ['--import', 'tsx', 'tests/local-repair-crash-fixture.ts'], {
+                        env: { ...process.env, LOCAL_REPAIR_TEST_FIXTURE: JSON.stringify({ targets, outputs: [canonical] }) }, encoding: 'utf8', timeout: 30_000
+                    });
+                    expect({ status: child.status, stderr: child.status === 87 ? '' : child.stderr }).toEqual({ status: 87, stderr: '' });
+                    // The dead process did not release its locks. Shorten only these isolated-test TTLs.
+                    peer.redisClientCall('customCommand', ['PEXPIRE', getApiScannerLeaseKey(), '1']);
+                    peer.redisClientCall('customCommand', ['PEXPIRE', getApiCacheKey('local-repair:lease'), '1']);
+                    await new Promise(resolve => setTimeout(resolve, 20));
+                } else {
+                    const operation = localRepair(store, lease, targets, readCanonical, () => {
+                        expect(reader.currentHttpStatus()).toBe(503);
+                        expect(peer.redisClientCall('get', journalKey)).toContain('old0#0');
+                        if (mode === 'failure') throw new Error('simulated process interruption');
+                        if (mode === 'lease-lost') peer.redisClientCall('set', getApiScannerLeaseKey(), 'successor');
+                        if (mode === 'chain-moved') canonical = { ...canonical, id: 'moved#0', tx_id: 'moved', slot: 160 };
+                    });
+                    if (mode === 'success') await operation;
+                    else await expect(operation).rejects.toThrow(mode === 'failure' ? 'simulated process interruption' : mode === 'chain-moved' ? 'Canonical state changed' : /fence lost|fence changed/);
+                }
+                if (mode !== 'success') {
+                    expect(reader.currentHttpStatus()).toBe(503);
+                    expect(peer.redisClientCall('get', journalKey)).toContain('old0#0');
+                    if (mode === 'lease-lost') Internal.releaseScannerLease('successor');
+                    const partial = names.map(name => repo.getHandle(name));
+                    await lambdaHandler({} as any, { getRemainingTimeInMillis: () => 300_000 } as any);
+                    await expect(require('./scanner.app').runSideload('auto')).rejects.toThrow('repair journal is pending');
+                    expect(names.map(name => repo.getHandle(name))).toEqual(partial);
+                    expect(peer.redisClientCall('get', journalKey)).toContain('old0#0');
+                    expect(reader.currentHttpStatus()).toBe(503);
+                    await localRepair(store, lease, undefined, readCanonical);
+                }
+                expect(reader.currentHttpStatus()).not.toBe(503);
+                expect(peer.redisClientCall('get', journalKey) ?? null).toBeNull();
+                expect(peer.redisClientCall('get', getApiMptRebuildPendingKey()) ?? null).toBeNull();
+                const newHolder = repo.getHandle(names[0])!.holder;
+                expect(newHolder).not.toBe(oldHolder);
+                for (const name of names) {
+                    expect(repo.getHandle(name)).toEqual(expect.objectContaining({ utxo: canonical.id, holder: newHolder, resolved_addresses: expect.objectContaining({ ada: ownerAddress }) }));
+                    expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, ownerAddress)?.has(name)).toBe(true);
+                    expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, oldAddress)?.has(name) ?? false).toBe(false);
+                    expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, newHolder)?.has(name)).toBe(true);
+                    expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, oldHolder)?.has(name) ?? false).toBe(false);
+                    expect(store.getValuesFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(ownerAddress)!)?.has(name)).toBe(true);
+                    expect(store.getValuesFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(oldAddress)!)?.has(name) ?? false).toBe(false);
+                }
+                expect(store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, canonical.slot)).toContain(canonical.id);
+                expect(store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 90) ?? []).not.toContain('old0#0');
+                expect(store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 90) ?? []).not.toContain('old1#0');
+                expect(repo.getUTxO('old0#0') ?? null).toBeNull();
+                expect(repo.getUTxO('old1#0') ?? null).toBeNull();
+                if (mode === 'chain-moved') expect(repo.getUTxO('cancel#0') ?? null).toBeNull();
+                expect(repo.getUTxO(canonical.id)).toEqual(expect.objectContaining({ handles: canonical.handles }));
+                expect(store.getMptRootHash()).toBe(root);
+                expect(repo.getMetrics()).toEqual(expect.objectContaining({ currentSlot: cursor.currentSlot, currentBlockHash: cursor.currentBlockHash }));
+            } finally {
+                Internal.releaseScannerLease('successor');
+                store.redisClientCall('del', [journalKey, getApiMptRebuildPendingKey()]);
+            }
+        });
+
+        // Never replay mint/burn metadata or advance a repair beyond the scanner cursor.
+        // Negative control: removing the transfer/cursor guard lets either case mutate the store.
+        it.each(['ahead', 'mint'] as const)('refuses unsafe local repair output: %s', async mode => {
+            const name = 'unsafe-repair';
+            const asset = Buffer.from(name).toString('hex');
+            repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo('old-unsafe#0', name, 90, true), handles: [[policy, [asset]]], mint: [[policy, [asset]]] }]);
+            const before = repo.getHandle(name);
+            const output = { ...utxo('new-unsafe#0', name, mode === 'ahead' ? 150 : 120, mode === 'mint'), handles: [[policy, [asset]]] as [string, string[]][] };
+            const lease = { acquire: Internal.acquireScannerLease, renew: Internal.renewScannerLease, release: Internal.releaseScannerLease };
+            await expect(localRepair(store, lease, [{ name, policy, hex: asset }], async () => [output])).rejects.toThrow('Only transfer outputs');
+            expect(repo.getHandle(name)).toEqual(before);
+            expect(repo.getUTxO('old-unsafe#0')).toEqual(expect.objectContaining({ id: 'old-unsafe#0' }));
+            expect(repo.getUTxO('new-unsafe#0') ?? null).toBeNull();
+            expect(store.redisClientCall('get', getApiCacheKey('local-repair:journal')) ?? null).toBeNull();
+        });
+
+        // The real Koios adapter must prove cursor ancestry and bracket its reads with one tip.
+        // A fork past the cursor must leave the journal and reader lock in place.
+        // Negative control: removing the ancestry check permits an orphaned cursor to be committed.
+        it.each(['stable', 'advance', 'rollback', 'spent', 'spent-crash', 'missing', 'historical-sibling'] as const)('anchors the actual repair to Koios and recovers safely: %s', async mode => {
+            repo.setMetrics({ currentSlot: 200, currentBlockHash: 'anchor' });
+            const names = ['koios-repair-a', 'koios-repair-b'];
+            const assets = names.map(name => Buffer.from(name).toString('hex'));
+            for (let i = 0; i < names.length; i++) repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo(`koios-old${i}#0`, names[i], 90, true), handles: [[policy, [assets[i]]]], mint: [[policy, [assets[i]]]] }]);
+            const targets = names.map((name, i) => ({ name, policy, hex: assets[i] })).slice(0, mode === 'historical-sibling' ? 1 : 2);
+            const assetList = assets.map(asset_name => ({ policy_id: policy, asset_name, quantity: '1', decimals: 0, fingerprint: '' }));
+            const txOutput = { tx_hash: 'koios-new', tx_index: 0, datum_hash: null, stake_addr: null, value: '2000000', payment_addr: { bech32: knownAddress, cred: '' }, asset_list: assetList, inline_datum: null, reference_script: null };
+            const tx = { tx_hash: 'koios-new', block_hash: 'dest-block', block_height: 1, absolute_slot: 150, reference_inputs: [], inputs: [], outputs: [txOutput], assets_minted: [], metadata: {} };
+            let tip = mode === 'historical-sibling' ? { hash: 'later', abs_slot: 201 } : { hash: 'anchor', abs_slot: 200 };
+            let laterSpend = mode === 'historical-sibling';
+            const paths: string[] = [];
+            const query = async (path: string, _method?: string, body?: string) => {
+                paths.push(path);
+                if (path === 'tip') return [tip];
+                if (path === 'asset_utxos') {
+                    expect(JSON.parse(body!)._asset_list).toEqual(targets.map(t => [t.policy, t.hex]));
+                    return mode === 'missing' ? [] : [{ tx_hash: laterSpend ? 'koios-after' : 'koios-new', tx_index: 0, address: knownAddress, value: '2000000', asset_list: mode === 'historical-sibling' ? assetList.slice(0, 1) : assetList }];
+                }
+                if (path === 'tx_info') {
+                    const hashes = JSON.parse(body!)._tx_hashes;
+                    return hashes.map((hash: string) => {
+                        if (hash === 'koios-new') return tx;
+                        if (hash === 'koios-after' && laterSpend) return { ...tx, tx_hash: hash, absolute_slot: 201, inputs: [{ tx_hash: 'koios-new', tx_index: 0 }], outputs: [{ ...txOutput, tx_hash: hash, asset_list: mode === 'historical-sibling' ? assetList.slice(0, 1) : assetList }] };
+                        throw new Error(`Unexpected transaction ${hash}`);
+                    });
+                }
+                if (path === 'block_info') {
+                    const hash = JSON.parse(body!)._block_hashes[0];
+                    if (hash === 'later') return [{ hash, abs_slot: 201, parent_hash: 'anchor' }];
+                    if (hash === 'anchor') return [{ hash, abs_slot: 200, parent_hash: 'older' }];
+                    if (hash === 'fork') return [{ hash, abs_slot: 200, parent_hash: 'older' }];
+                    return [];
+                }
+                throw new Error(`Unexpected Koios endpoint: ${path}`);
+            };
+            mockedHelpers.buildUTxOsFromKoiosTxs.mockImplementation(actualHelpers.buildUTxOsFromKoiosTxs);
+            const lease = { acquire: Internal.acquireScannerLease, renew: Internal.renewScannerLease, release: Internal.releaseScannerLease };
+            const peer = new RedisHandlesStore();
+            const reader = new HandlesRepository(peer);
+            const journalKey = getApiCacheKey('local-repair:journal');
+            let realApp: any;
+            if (mode === 'rollback' || mode === 'spent-crash') {
+                const previousOgmios = process.env.ENABLE_OGMIOS_SCANNING;
+                const previousScanner = process.env.USE_LAMBDA_SCANNER;
+                process.env.USE_LAMBDA_SCANNER = 'false';
+                try {
+                    realApp = new (require('../app').default)({ disableOgmios: true });
+                    await realApp.lambda();
+                } finally {
+                    if (previousOgmios === undefined) delete process.env.ENABLE_OGMIOS_SCANNING;
+                    else process.env.ENABLE_OGMIOS_SCANNING = previousOgmios;
+                    if (previousScanner === undefined) delete process.env.USE_LAMBDA_SCANNER;
+                    else process.env.USE_LAMBDA_SCANNER = previousScanner;
+                }
+            }
+            try {
+                const operation = mode === 'spent-crash' ? (async () => {
+                    const child = spawnSync(process.execPath, ['--import', 'tsx', 'tests/local-repair-crash-fixture.ts'], {
+                        env: { ...process.env, LOCAL_REPAIR_TEST_FIXTURE: JSON.stringify({ targets, koios: { tip, row: { tx_hash: 'koios-new', tx_index: 0, address: knownAddress, value: '2000000', asset_list: assetList }, tx } }) }, encoding: 'utf8', timeout: 30_000
+                    });
+                    expect({ status: child.status, stderr: child.status === 87 ? '' : child.stderr }).toEqual({ status: 87, stderr: '' });
+                    peer.redisClientCall('customCommand', ['PEXPIRE', getApiScannerLeaseKey(), '1']);
+                    peer.redisClientCall('customCommand', ['PEXPIRE', getApiCacheKey('local-repair:lease'), '1']);
+                    await new Promise(resolve => setTimeout(resolve, 20));
+                    tip = { hash: 'later', abs_slot: 201 };
+                    laterSpend = true;
+                    throw new Error('child exited after first write');
+                })() : localKoiosRepair(store, lease, targets, { query, afterFirstWrite: async () => {
+                    expect(reader.currentHttpStatus()).toBe(503);
+                    if (realApp) {
+                        const response = await request(realApp.getServer()).get(`/handles/${names[0]}`);
+                        expect(response.status).toBe(503);
+                        expect(response.body).toEqual({ error: 'Repair in progress' });
+                    }
+                    if (mode === 'advance') { tip = { hash: 'later', abs_slot: 201 }; throw new Error('interrupted after chain advance'); }
+                    if (mode === 'spent') { tip = { hash: 'later', abs_slot: 201 }; laterSpend = true; throw new Error('interrupted after later spend'); }
+                    if (mode === 'rollback') tip = { hash: 'fork', abs_slot: 200 };
+                } });
+                if (mode === 'stable') await operation;
+                else if (mode === 'missing' || mode === 'historical-sibling') {
+                    await expect(operation).rejects.toThrow(mode === 'missing' ? 'Owner token is missing' : 'unplanned handle');
+                    expect(peer.redisClientCall('get', journalKey) ?? null).toBeNull();
+                    expect(names.map(name => repo.getHandle(name)?.utxo)).toEqual(['koios-old0#0', 'koios-old1#0']);
+                    return;
+                } else {
+                    await expect(operation).rejects.toThrow(mode === 'advance' ? 'interrupted after chain advance' : mode === 'spent' ? 'interrupted after later spend' : mode === 'spent-crash' ? 'child exited after first write' : 'Koios tip does not descend from scanner cursor');
+                    expect(reader.currentHttpStatus()).toBe(503);
+                    expect(peer.redisClientCall('get', journalKey)).toContain('koios-old0#0');
+                    if (mode === 'spent-crash') {
+                        const blocked = await request(realApp.getServer()).get(`/handles/${names[0]}`);
+                        expect(blocked.status).toBe(503);
+                        expect(blocked.body).toEqual({ error: 'Repair in progress' });
+                    }
+                    if (mode === 'rollback') {
+                        await expect(localKoiosRepair(store, lease, undefined, { query })).rejects.toThrow('Koios tip does not descend from scanner cursor');
+                        expect(reader.currentHttpStatus()).toBe(503);
+                        const blocked = await request(realApp.getServer()).get(`/handles/${names[0]}`);
+                        expect(blocked.status).toBe(503);
+                        expect(blocked.body).toEqual({ error: 'Repair in progress' });
+                        repo.setMetrics({ currentBlockHash: 'fork' });
+                        tip = { hash: 'fork', abs_slot: 200 };
+                        await expect(localKoiosRepair(store, lease, undefined, { query })).rejects.toThrow('Scanner cursor changed since repair began');
+                        expect(reader.currentHttpStatus()).toBe(503);
+                        repo.setMetrics({ currentBlockHash: 'anchor' });
+                        tip = { hash: 'anchor', abs_slot: 200 };
+                    }
+                    await localKoiosRepair(store, lease, undefined, { query });
+                }
+                expect(paths).toContain('asset_utxos');
+                expect(paths).toContain('tx_info');
+                expect(names.map(name => repo.getHandle(name)?.utxo)).toEqual(['koios-new#0', 'koios-new#0']);
+                expect(repo.getUTxO('koios-old0#0') ?? null).toBeNull();
+                expect(repo.getUTxO('koios-old1#0') ?? null).toBeNull();
+                expect(reader.currentHttpStatus()).not.toBe(503);
+                expect(peer.redisClientCall('get', journalKey) ?? null).toBeNull();
+                if (mode === 'spent' || mode === 'spent-crash') {
+                    const after = { ...tx, tx_hash: 'koios-after', block_hash: 'later', absolute_slot: 201, inputs: [{ tx_hash: 'koios-new', tx_index: 0 }], outputs: [{ ...txOutput, tx_hash: 'koios-after' }] };
+                    Internal.processScannerBlock({ id: 'later', slot: 201 }, [after], { hash: 'later', slot: 201 });
+                    expect(names.map(name => repo.getHandle(name)?.utxo)).toEqual(['koios-after#0', 'koios-after#0']);
+                    expect(repo.getUTxO('koios-new#0') ?? null).toBeNull();
+                }
+                if (realApp) {
+                    const response = await request(realApp.getServer()).get(`/handles/${names[0]}`);
+                    expect(response.status).toBe(200);
+                    expect(response.body.utxo).toBe(mode === 'spent-crash' ? 'koios-after#0' : 'koios-new#0');
+                }
+            } finally {
+                store.redisClientCall('del', [journalKey, getApiMptRebuildPendingKey()]);
+            }
+        });
+
+        // A response that began before maintenance must not escape after a complete repair.
+        // Negative control: removing the final epoch check returns the stale captured handle as 200.
+        it('blocks new HTTP readers and responses spanning the actual local repair', async () => {
+            repo.setMetrics({ currentSlot: 200 });
+            const name = 'http-repair';
+            const asset = Buffer.from(name).toString('hex');
+            repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo('old-http#0', name, 90, true), handles: [[policy, [asset]]], mint: [[policy, [asset]]] }]);
+            const canonical = { ...utxo('new-http#0', name, 150, false), handles: [[policy, [asset]]] as [string, string[]][] };
+            const target = { name, policy, hex: asset };
+            const lease = { acquire: Internal.acquireScannerLease, renew: Internal.renewScannerLease, release: Internal.releaseScannerLease };
+            const peer = new RedisHandlesStore();
+            const previousOgmios = process.env.ENABLE_OGMIOS_SCANNING;
+            const previousScanner = process.env.USE_LAMBDA_SCANNER;
+            process.env.USE_LAMBDA_SCANNER = 'false';
+            let realApp: any;
+            try {
+                realApp = new (require('../app').default)({ disableOgmios: true });
+                await realApp.lambda();
+            } finally {
+                if (previousOgmios === undefined) delete process.env.ENABLE_OGMIOS_SCANNING;
+                else process.env.ENABLE_OGMIOS_SCANNING = previousOgmios;
+                if (previousScanner === undefined) delete process.env.USE_LAMBDA_SCANNER;
+                else process.env.USE_LAMBDA_SCANNER = previousScanner;
+            }
+            const app = express();
+            app.use(localRepairGuard(() => peer));
+            let enter!: () => void;
+            let resume!: () => void;
+            const entered = new Promise<void>(resolve => { enter = resolve; });
+            const continued = new Promise<void>(resolve => { resume = resolve; });
+            app.get('/handle', (_req, res) => { res.json(repo.getHandle(name)); });
+            app.get('/slow', async (_req, res) => { const captured = repo.getHandle(name); enter(); await continued; res.json(captured); });
+            const inFlight = request(app).get('/slow').then(response => response);
+            await entered;
+            try {
+                await localRepair(store, lease, [target], async () => [canonical], async () => {
+                    const response = await request(app).get('/handle');
+                    expect(response.status).toBe(503);
+                    expect(response.body).toEqual({ error: 'Repair in progress' });
+                    const actualHandle = await request(realApp.getServer()).get(`/handles/${name}`);
+                    expect(actualHandle.status).toBe(503);
+                    expect(actualHandle.body).toEqual({ error: 'Repair in progress' });
+                    const actualProof = await request(realApp.getServer()).get('/mpt-root/proof?handle=http-repair&label=000643b0&amount=1');
+                    expect(actualProof.status).toBe(503);
+                    expect(actualProof.body).toEqual({ error: 'Repair in progress' });
+                });
+                resume();
+                const stale = await inFlight;
+                expect(stale.status).toBe(503);
+                expect(stale.body).toEqual({ error: 'Repair in progress' });
+                const fresh = await request(app).get('/handle');
+                expect(fresh.status).toBe(200);
+                expect(fresh.body.utxo).toBe('new-http#0');
+                const actualFresh = await request(realApp.getServer()).get(`/handles/${name}`);
+                expect(actualFresh.status).toBe(200);
+                expect(actualFresh.body.utxo).toBe('new-http#0');
+            } finally {
+                resume();
+                store.redisClientCall('del', [getApiCacheKey('local-repair:journal'), getApiMptRebuildPendingKey()]);
+            }
+        });
+
+        // Real preflight, lease, repository pipelines, indexes and MPT rebuild use isolated Valkey.
+        // Injecting lease loss after the first repository batch proves partial state needs the saved
+        // journal; replay without that journal cannot know which old UTxOs remain to be removed.
+        it.each(['success', 'lease-lost', 'crash'] as const)('reconciles a shared output under the real fence: %s', async (mode) => {
+            const names = ['xn--8o8hx2f', 'xn--kong-tz14c'];
+            const assets = names.map(name => Buffer.from(name).toString('hex'));
+            for (let i = 0; i < names.length; i++) {
+                repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo(`old${i}#0`, names[i], 90, true), handles: [[policy, [assets[i]]]], mint: [[policy, [assets[i]]]] }]);
+            }
+            const ownerAddress = 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746';
+            const oldAddress = repo.getHandle(names[0])!.resolved_addresses.ada;
+            const oldHolder = repo.getHandle(names[0])!.holder;
+            const beforeMetrics = repo.getMetrics();
+            const beforeRoot = await buildAndStoreMptRootHash(store);
+            const canonical = { ...utxo('cancel#0', names[0], 150, false), address: ownerAddress, handles: [[policy, assets]] as [string, string[]][] };
+            const targets = names.map((name, i) => ({ name, policy, hex: assets[i] }));
+            const journalKey = getApiCacheKey(`repair-local-test:${randomUUID()}`);
+            const snapshotKey = getApiCacheKey(`repair-local-owner:${randomUUID()}`);
+            const progressKey = getApiCacheKey(`repair-local-progress:${randomUUID()}`);
+            const pendingKey = getApiMptRebuildPendingKey();
+            const scannerKey = getApiScannerLeaseKey();
+            const peer = new RedisHandlesStore();
+            let scannerOwner = '';
+            let fence: any;
+            let oldIds = ['old0#0', 'old1#0'];
+            const acquireAndCheck = async (repairTargets = targets) => {
+                const lease = { acquire: (owner: string) => { scannerOwner = owner; return Internal.acquireScannerLease(owner); }, renew: Internal.renewScannerLease, release: () => {} };
+                return repairPreflight(repairTargets, lease, name => repo.getHandle(name), id => repo.getUTxO(id) ?? null, async () => [{ id: canonical.id, address: canonical.address, handles: canonical.handles }]);
+            };
+            const startFence = () => {
+                fence = { key: snapshotKey, owner: randomUUID(), scannerKey, scannerOwner, ownsScannerLease: false };
+                const raw = store.redisClientCall('hgetall', getApiMetricsKey());
+                const originalMetrics = Object.fromEntries(raw.map(({ field, value }: any) => [String(field), String(value)]));
+                expect(store.redisClientCall('snapshotClaim', { fence, scannerOriginal: scannerOwner, metricsKey: getApiMetricsKey(), progressKey,
+                    originalMetrics, originalProgress: {}, requireEmpty: false, pattern: '', dataRoots: [] })).toBe(true);
+                (store as any).snapshotFence = fence;
+            };
+            const endFence = () => {
+                (store as any).snapshotFence = undefined;
+                if (fence) store.redisClientCall('snapshotRelease', fence);
+                fence = undefined;
+            };
+            try {
+                await acquireAndCheck();
+                startFence();
+                store.redisClientCall('set', journalKey, JSON.stringify({ old: oldIds, targets, canonical: canonical.id }));
+                store.redisClientCall('set', pendingKey, '1');
+                repo.addUTxOsWithMintDataAndUpdateIndexes([canonical]);
+                if (mode === 'lease-lost') {
+                    peer.redisClientCall('set', scannerKey, 'successor');
+                    expect(() => repo.removeUTxOs(['old0#0', 'old1#0'])).toThrow(/fence lost|fence changed/);
+                    endFence();
+                    expect(peer.redisClientCall('get', scannerKey)).toBe('successor');
+                    Internal.releaseScannerLease('successor');
+                } else if (mode === 'crash') {
+                    // Simulate a dead process: do not release either lock; let their real Valkey TTLs expire.
+                    (store as any).snapshotFence = undefined;
+                    fence = undefined;
+                    peer.redisClientCall('customCommand', ['PEXPIRE', scannerKey, '1']);
+                    peer.redisClientCall('customCommand', ['PEXPIRE', snapshotKey, '1']);
+                    await new Promise(resolve => setTimeout(resolve, 20));
+                    expect(peer.redisClientCall('get', scannerKey) ?? null).toBeNull();
+                    expect(peer.redisClientCall('get', snapshotKey) ?? null).toBeNull();
+                }
+                if (mode !== 'success') {
+                    const saved = JSON.parse(peer.redisClientCall('get', journalKey));
+                    expect(saved).toEqual({ old: ['old0#0', 'old1#0'], targets, canonical: canonical.id });
+                    oldIds = saved.old;
+                    expect(peer.redisClientCall('get', pendingKey)).toBe('1');
+                    expect(repo.getUTxO('old0#0')).toEqual(expect.objectContaining({ id: 'old0#0' }));
+                    expect(repo.getUTxO('old1#0')).toEqual(expect.objectContaining({ id: 'old1#0' }));
+                    expect(names.map(name => repo.getHandle(name)?.utxo)).toEqual([canonical.id, canonical.id]);
+                    await acquireAndCheck(saved.targets);
+                    startFence();
+                    repo.addUTxOsWithMintDataAndUpdateIndexes([canonical]);
+                }
+                repo.removeUTxOs(oldIds);
+                expect(await buildAndStoreMptRootHash(store)).toBe(beforeRoot);
+                store.redisClientCall('del', [pendingKey, journalKey]);
+                endFence();
+                for (const name of names) {
+                    expect(repo.getHandle(name)).toEqual(expect.objectContaining({ utxo: canonical.id, resolved_addresses: expect.objectContaining({ ada: ownerAddress }) }));
+                    expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, ownerAddress)?.has(name)).toBe(true);
+                    expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, oldAddress)?.has(name) ?? false).toBe(false);
+                    expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, oldHolder)?.has(name) ?? false).toBe(false);
+                    expect(store.getValuesFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(ownerAddress)!)?.has(name)).toBe(true);
+                }
+                expect(repo.getUTxO(canonical.id)).toEqual(expect.objectContaining({ handles: canonical.handles }));
+                expect(repo.getUTxO('old0#0') ?? null).toBeNull(); expect(repo.getUTxO('old1#0') ?? null).toBeNull();
+                expect(store.getMptRootHash()).toBe(beforeRoot);
+                expect(repo.getMetrics()).toEqual(expect.objectContaining({ currentSlot: beforeMetrics.currentSlot, currentBlockHash: beforeMetrics.currentBlockHash }));
+                expect(store.redisClientCall('get', journalKey) ?? null).toBeNull();
+                expect(store.redisClientCall('get', pendingKey) ?? null).toBeNull();
+            } finally {
+                endFence();
+                if (scannerOwner) Internal.releaseScannerLease(scannerOwner);
+                Internal.releaseScannerLease('successor');
+                store.redisClientCall('del', [journalKey, pendingKey]);
+            }
+        });
+
         it('reapplies a verified shared output without moving the scanner cursor', () => {
             // Invariant: targeted recovery updates both holders and UTxOs without replaying the historical block.
             // Updating only the handle hash leaves the old holder index or UTxO behind.
@@ -502,6 +1025,7 @@ describe('Scanner lambda e2e', () => {
                 repo.addUTxOsWithMintDataAndUpdateIndexes([{ ...utxo(`old${i}#0`, names[i], 90, true), handles: [[policy, [assets[i]]]], mint: [[policy, [assets[i]]]] }]);
             }
             const oldHolder = repo.getHandle(names[0])!.holder;
+            const oldAddress = repo.getHandle(names[0])!.resolved_addresses.ada;
             const owner = 'addr_test1qz8zyhdetz270qzfvkym38wx4wsqzx0m49urfu3wjkqsuchs8t4235v9t0x5grxm2hel388ypz0q3fng8k6am5hqzacq0fc746';
             const before = repo.getMetrics();
             const canonical = { ...utxo('cancel#0', names[0], 150, false), address: owner, handles: [[policy, assets]] as [string, string[]][] };
@@ -513,7 +1037,14 @@ describe('Scanner lambda e2e', () => {
                 expect(repo.getHandle(name)).toEqual(expect.objectContaining({ utxo: 'cancel#0', holder: newHolder, resolved_addresses: expect.objectContaining({ ada: owner }) }));
                 expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, newHolder)?.has(name)).toBe(true);
                 expect(store.getValuesFromIndexedSet(IndexNames.HOLDER, oldHolder)?.has(name) ?? false).toBe(false);
+                expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, owner)?.has(name)).toBe(true);
+                expect(store.getValuesFromIndexedSet(IndexNames.ADDRESS, oldAddress)?.has(name) ?? false).toBe(false);
+                expect(store.getValuesFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(owner)!)?.has(name)).toBe(true);
+                expect(store.getValuesFromIndexedSet(IndexNames.PAYMENT_KEY_HASH, getPaymentKeyHash(oldAddress)!)?.has(name) ?? false).toBe(false);
             }
+            expect(store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 150)).toContain('cancel#0');
+            expect(store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 90) ?? []).not.toContain('old0#0');
+            expect(store.getValuesFromOrderedSet(IndexNames.UTXO_SLOT, 90) ?? []).not.toContain('old1#0');
             expect(repo.getUTxO('cancel#0')).toEqual(expect.objectContaining({ address: owner }));
             expect(repo.getUTxO('old0#0') ?? null).toBeNull();
             expect(repo.getUTxO('old1#0') ?? null).toBeNull();

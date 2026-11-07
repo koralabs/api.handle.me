@@ -99,6 +99,55 @@ test('fenced writes stop after ownership changes, including between read and tra
     assert.equal(await client.get(args.fence.key), 'new-owner-during-exec');
 });
 
+// A fenced transaction must move both handles and indexes together, or none of them if the
+// scanner lease changes at EXEC. The unrelated shared-output owner must remain untouched.
+// Removing WATCH on scannerKey makes the injected successor commit the stale batch.
+test('shared-output candidate batch is fenced against lease loss during commit', async () => {
+    const args = await setup();
+    assert.equal(await claimSnapshot(client, args), true);
+    const alpha = key('alpha'); const beta = key('beta'); const other = key('other');
+    const oldA = key('old-a'); const oldB = key('old-b'); const current = key('current');
+    const oldHolder = key('old-holder'); const newHolder = key('new-holder'); const slots = key('slots');
+    await client.hset(alpha, { utxo: 'old-a#0', holder: 'old', slot: '10' });
+    await client.hset(beta, { utxo: 'old-b#0', holder: 'old', slot: '10' });
+    await client.hset(other, { utxo: 'new#0', holder: 'new', slot: '20' });
+    await client.set(oldA, 'old-a'); await client.set(oldB, 'old-b');
+    await client.set(current, JSON.stringify(['alpha', 'beta', 'other']));
+    await client.sadd(oldHolder, ['alpha', 'beta']); await client.sadd(newHolder, ['other']);
+    await client.zadd(slots, [{ element: 'alpha', score: 10 }, { element: 'beta', score: 10 }, { element: 'other', score: 20 }]);
+    const snapshot = async () => ({ alpha: await image(alpha), beta: await image(beta), other: await image(other),
+        oldA: await client.get(oldA), oldB: await client.get(oldB), current: await client.get(current),
+        oldHolder: [...await client.smembers(oldHolder)].map(String).sort(), newHolder: [...await client.smembers(newHolder)].map(String).sort(),
+        slots: await client.zrangeWithScores(slots, { start: 0, end: -1 }), metrics: await image(args.metricsKey) });
+    const before = await snapshot();
+    const commands = [
+        ['hset', [alpha, { utxo: 'new#0', holder: 'new', slot: '20' }]],
+        ['hset', [beta, { utxo: 'new#0', holder: 'new', slot: '20' }]],
+        ['srem', [oldHolder, ['alpha', 'beta']]], ['sadd', [newHolder, ['alpha', 'beta']]],
+        ['zadd', [slots, [{ element: 'alpha', score: 20 }, { element: 'beta', score: 20 }]]],
+        ['del', [[oldA, oldB]]]
+    ];
+    const boundary = Object.create(client);
+    boundary.watch = (...v) => client.watch(...v);
+    boundary.get = (...v) => client.get(...v);
+    boundary.unwatch = () => client.unwatch();
+    boundary.exec = async (...v) => { await peer.set(args.fence.scannerKey, 'successor'); return client.exec(...v); };
+    await assert.rejects(fencedSnapshotCall(boundary, args.fence, 'batch', [commands]), /fence changed/);
+    assert.deepEqual(await snapshot(), before);
+    assert.equal(await client.get(args.fence.scannerKey), 'successor');
+    await peer.set(args.fence.scannerKey, args.fence.scannerOwner);
+    await fencedSnapshotCall(client, args.fence, 'batch', [commands]);
+    assert.deepEqual(await image(alpha), [['holder', 'new'], ['slot', '20'], ['utxo', 'new#0']]);
+    assert.deepEqual(await image(beta), [['holder', 'new'], ['slot', '20'], ['utxo', 'new#0']]);
+    assert.deepEqual(await image(other), before.other);
+    assert.equal(await client.get(oldA), null); assert.equal(await client.get(oldB), null);
+    assert.equal(await client.get(current), before.current);
+    assert.deepEqual([...await client.smembers(oldHolder)], []);
+    assert.deepEqual([...await client.smembers(newHolder)].map(String).sort(), ['alpha', 'beta', 'other']);
+    assert.deepEqual((await client.zrangeWithScores(slots, { start: 0, end: -1 })).map(x => [String(x.element), x.score]), [['alpha', 20], ['beta', 20], ['other', 20]]);
+    assert.deepEqual(await image(args.metricsKey), before.metrics);
+});
+
 // Invariant: a legacy importer reserves the absent scanner lease atomically with admission.
 // Removing the scanner SET admits a concurrent scanner and fails this exact token assertion.
 test('standalone import reserves an absent scanner lease rather than borrowing a later owner', async () => {

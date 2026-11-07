@@ -190,6 +190,7 @@ API transition rule:
 - Before any per-UTxO handle updates, scanners normalize and preload minting data for the full block/scan batch so Handle (`222`) and Virtual SubHandle (`000`) mint records are available regardless of tx/output ordering.
 - Minting data is persisted once per batch and then reused during per-UTxO updates to avoid duplicate mint writes while keeping the same ordering guarantees.
 - Missing minting data during handle index updates is treated as a hard failure (scanner invariant), not a soft fallback.
+- A current owner-token output updates the stored full asset hex together with its UTxO, including a legacy-to-222 migration; older outputs must not overwrite either field. Existing stale records require separate reconciliation.
 - Scanner lambda now also owns rollback/reconciliation and reindex checks.
 - Scanner lambda acquires an expiring Valkey lease lock (`SET NX PX`) per invocation and refreshes it with a heartbeat during execution; competing invocations skip work while a valid lease is held. Lease renew and release are compare-and-set via a Lua `EVAL` script (`customCommand`), so a stale owner cannot extend or delete a lease that has been reacquired by another invocation between the GET and the PEXPIRE/DEL.
 - Scanner lambda also uses a recovery flag for destructive phases (`reindex`). If a run terminates mid-reindex, the next cron tick detects the flag and runs index repair before normal scan/rollback flow. Stale `ROLLBACK` and `SCANNING` locks are cleared without setting a recovery flag.

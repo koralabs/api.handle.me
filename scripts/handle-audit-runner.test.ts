@@ -172,6 +172,32 @@ it('recovers from a timeout while honoring previously received headers', async (
     jest.restoreAllMocks();
 });
 
+// A temporary upstream failure must retry the same batch and preserve any announced wait.
+// Treating 504 as fatal loses the completed report; ignoring Retry-After starts the retry early.
+it.each([[504, false, 5000], [503, true, 10000]])('recovers from HTTP %i while respecting any deadline', async (status, withHeader, delay) => {
+    writeFileSync(output + '.checkpoint', JSON.stringify({ checkpointId: 'test', network: 'mainnet', api: 'https://audit.example', ended: true, handles: [handle(0)] }));
+    writeFileSync(output + '.progress', JSON.stringify({ checkpointId: 'test', checked: 0, findings: [] }));
+    process.argv.push('--resume');
+    jest.spyOn(Math, 'random').mockReturnValue(0);
+    const starts: number[] = [];
+    global.fetch = jest.fn(async () => {
+        starts.push(Date.now());
+        if (starts.length > 1) return new Response(JSON.stringify(rows(0, 1)));
+        return new Response(JSON.stringify({ code: 'PGRST003', message: 'Timed out acquiring connection from connection pool.' }), {
+            status, headers: withHeader ? { 'Retry-After': '10' } : {}
+        });
+    });
+    const { run } = await import('./handle-audit-runner');
+    const pending = run();
+    await jest.advanceTimersByTimeAsync(delay - 1);
+    expect(starts).toEqual([epoch]);
+    await jest.advanceTimersByTimeAsync(1);
+    await pending;
+    expect(starts).toEqual([epoch, epoch + delay]);
+    expect(saved('')).toMatchObject({ checked: 1, findings: [{ name: 'h0', status: 'mismatch' }] });
+    jest.restoreAllMocks();
+});
+
 // Headerless 429s back off progressively and preserve the next start across a process restart.
 // Removing the wait or resetting the attempt count dispatches the next request too early.
 it('backs off on headerless 429s and resumes the pending wait after restart', async () => {
